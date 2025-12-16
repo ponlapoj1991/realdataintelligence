@@ -2,7 +2,7 @@ import { DashboardWidget, RawRow } from '../types';
 import { ChartTheme, CLASSIC_ANALYTICS_THEME } from '../constants/chartTheme';
 import { buildDashboardChartPayload, DashboardChartInsertPayload } from './dashboardChartPayload';
 
-export type MagicChartType = 'bar' | 'column' | 'line' | 'pie' | 'ring' | 'area' | 'scatter' | 'combo';
+export type MagicChartType = 'bar' | 'column' | 'line' | 'pie' | 'ring' | 'area' | 'scatter' | 'combo' | 'kpi';
 
 export type MagicChartOptions = NonNullable<DashboardChartInsertPayload['options']>;
 

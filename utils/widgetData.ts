@@ -69,18 +69,114 @@ export const applyWidgetFilters = (rows: RawRow[], filters?: DashboardFilter[]) 
 
 const applySorting = (data: any[], order: string | undefined, valueKey: string) => {
   const sortBy = order || 'value-desc';
+  const compareName = (aName: any, bName: any) => {
+    const aStr = String(aName ?? '');
+    const bStr = String(bName ?? '');
+
+    const parseRangeStartNumber = (s: string) => {
+      const m = s.match(/^\s*(-?\d+(?:\.\d+)?)\s*-\s*/);
+      if (!m) return null;
+      const n = Number(m[1]);
+      return Number.isFinite(n) ? n : null;
+    };
+    const parseRangeStartDate = (s: string) => {
+      const start = s.split('-').length >= 3 ? s.split(' - ')[0] : null;
+      if (!start) return null;
+      const d = toDate(start.trim());
+      return d ? d.getTime() : null;
+    };
+
+    const aRangeNum = parseRangeStartNumber(aStr);
+    const bRangeNum = parseRangeStartNumber(bStr);
+    if (aRangeNum !== null && bRangeNum !== null) return aRangeNum - bRangeNum;
+
+    const aRangeDate = parseRangeStartDate(aStr);
+    const bRangeDate = parseRangeStartDate(bStr);
+    if (aRangeDate !== null && bRangeDate !== null) return aRangeDate - bRangeDate;
+
+    const aNum = Number(aStr);
+    const bNum = Number(bStr);
+    const aNumOk = Number.isFinite(aNum);
+    const bNumOk = Number.isFinite(bNum);
+    if (aNumOk && bNumOk) return aNum - bNum;
+
+    const aDate = toDate(aStr);
+    const bDate = toDate(bStr);
+    if (aDate && bDate) return aDate.getTime() - bDate.getTime();
+
+    return aStr.localeCompare(bStr);
+  };
   switch (sortBy) {
     case 'value-desc':
       return [...data].sort((a, b) => (b[valueKey] || 0) - (a[valueKey] || 0));
     case 'value-asc':
       return [...data].sort((a, b) => (a[valueKey] || 0) - (b[valueKey] || 0));
     case 'name-asc':
-      return [...data].sort((a, b) => String(a.name).localeCompare(String(b.name)));
+      return [...data].sort((a, b) => compareName(a.name, b.name));
     case 'name-desc':
-      return [...data].sort((a, b) => String(b.name).localeCompare(String(a.name)));
+      return [...data].sort((a, b) => compareName(b.name, a.name));
     default:
       return data;
   }
+};
+
+const inferTemporalOrSequential = (values: Array<any>) => {
+  const sample = values.filter(v => v !== null && v !== undefined && v !== '').slice(0, 50);
+  if (sample.length < 3) return null;
+  const dateCount = sample.filter(v => !!toDate(v)).length;
+  if (dateCount / sample.length >= 0.6) return 'date' as const;
+  const numCount = sample.filter(v => Number.isFinite(Number(String(v)))).length;
+  if (numCount / sample.length >= 0.6) return 'number' as const;
+  return null;
+};
+
+const toISODate = (d: Date) => {
+  const year = d.getFullYear();
+  const month = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+};
+
+const createMajorBucketMapper = (rows: RawRow[], column: string, major: number) => {
+  if (!Number.isFinite(major) || major <= 0) return null;
+  const values = rows.map(r => r[column]);
+  const kind = inferTemporalOrSequential(values);
+  if (!kind) return null;
+
+  if (kind === 'date') {
+    const dates = values.map(v => toDate(v)).filter((d): d is Date => !!d);
+    if (!dates.length) return null;
+    const min = new Date(Math.min(...dates.map(d => d.getTime())));
+    min.setHours(0, 0, 0, 0);
+    const msPerDay = 24 * 60 * 60 * 1000;
+    return (raw: any) => {
+      const d = toDate(raw);
+      if (!d) return '(Empty)';
+      const date = new Date(d);
+      date.setHours(0, 0, 0, 0);
+      const diffDays = Math.floor((date.getTime() - min.getTime()) / msPerDay);
+      const bucketIndex = Math.max(0, Math.floor(diffDays / major));
+      const start = new Date(min.getTime() + bucketIndex * major * msPerDay);
+      const end = new Date(start.getTime() + (major - 1) * msPerDay);
+      return `${toISODate(start)} - ${toISODate(end)}`;
+    };
+  }
+
+  const nums = values
+    .map(v => Number(String(v)))
+    .filter((n) => Number.isFinite(n));
+  if (!nums.length) return null;
+  const min = Math.min(...nums);
+  return (raw: any) => {
+    const n = Number(String(raw));
+    if (!Number.isFinite(n)) return '(Empty)';
+    const bucketIndex = Math.max(0, Math.floor((n - min) / major));
+    const start = min + bucketIndex * major;
+    const end = start + (major - 1);
+    const startText = Number.isInteger(start) ? String(start) : start.toFixed(2);
+    const endText = Number.isInteger(end) ? String(end) : end.toFixed(2);
+    return `${startText}-${endText}`;
+  };
 };
 
 const applyTopNLimiter = (
@@ -127,6 +223,18 @@ export const aggregateWidgetData = (
     }
     const limit = normalizeLimit(widget.limit) ?? 20;
     return { data: processed.slice(0, limit), isStack: false };
+  }
+
+  if (widget.type === 'kpi') {
+    const measure = widget.measure || 'count';
+    let value = 0;
+    if (measure === 'count') {
+      value = rows.length;
+    } else if ((measure === 'sum' || measure === 'avg') && widget.measureCol) {
+      const sum = rows.reduce((acc, row) => acc + (Number(row[widget.measureCol!]) || 0), 0);
+      value = measure === 'avg' ? (rows.length > 0 ? sum / rows.length : 0) : sum;
+    }
+    return { data: [{ name: 'Value', value }], isStack: false };
   }
 
   if (widget.type === 'scatter' || widget.type === 'bubble') {
@@ -208,6 +316,18 @@ export const aggregateWidgetData = (
     'stacked-area', '100-stacked-area'
   ].includes(widget.type);
 
+  const isLineFamily = ['line', 'smooth-line', 'area', 'stacked-area', '100-stacked-area'].includes(widget.type);
+  const major = widget.xAxis?.major ?? 0;
+  const majorBucket =
+    isLineFamily && widget.dimension
+      ? createMajorBucketMapper(rows, widget.dimension, major)
+      : null;
+  const getDimensionKey = (row: RawRow) => {
+    const raw = row[widget.dimension];
+    const base = majorBucket ? majorBucket(raw) : String(raw || '(Empty)');
+    return base || '(Empty)';
+  };
+
   const is100Stacked = [
     '100-stacked-column', '100-stacked-bar', '100-stacked-area'
   ].includes(widget.type);
@@ -217,7 +337,7 @@ export const aggregateWidgetData = (
     const groups: Record<string, Record<string, number>> = {};
 
     rows.forEach(row => {
-      const dimVal = String(row[widget.dimension] || '(Empty)');
+      const dimVal = getDimensionKey(row);
       const stackVal = String(row[widget.stackBy!] || '(Other)');
 
       if (widget.categoryFilter && widget.categoryFilter.length > 0 && widget.categoryFilter.includes(dimVal)) {
@@ -285,7 +405,7 @@ export const aggregateWidgetData = (
 
   const groups: Record<string, number> = {};
   rows.forEach(row => {
-    const key = String(row[widget.dimension] || '(Empty)');
+    const key = getDimensionKey(row);
     if (widget.categoryFilter && widget.categoryFilter.length > 0 && widget.categoryFilter.includes(key)) return;
     if (!groups[key]) groups[key] = 0;
     if (widget.measure === 'count') {
@@ -305,11 +425,19 @@ export const aggregateWidgetData = (
   if (widget.measure === 'avg' && widget.measureCol) {
     result = result.map(item => ({
       ...item,
-      value: item.value / (rows.filter(row => String(row[widget.dimension] || '(Empty)') === item.name).length || 1)
+      value: item.value / (rows.filter(row => getDimensionKey(row) === item.name).length || 1)
     }));
   }
 
-  result = applySorting(result, widget.sortBy, 'value');
+  const inferredForLine = isLineFamily && widget.dimension
+    ? inferTemporalOrSequential(rows.map(r => r[widget.dimension]))
+    : null;
+  const sortOverride =
+    inferredForLine && (!widget.sortBy || widget.sortBy === 'value-desc' || widget.sortBy === 'value-asc')
+      ? 'name-asc'
+      : widget.sortBy;
+
+  result = applySorting(result, sortOverride, 'value');
 
   result = applyTopNLimiter(result, widget, (overflow) => {
     const total = overflow.reduce((acc, curr) => acc + (curr.value || 0), 0);
@@ -317,11 +445,20 @@ export const aggregateWidgetData = (
   });
 
   if (!widget.topN) {
-    const limit = normalizeLimit(widget.limit) ?? 20;
-    if (!widget.categoryFilter && result.length > limit && widget.type !== 'wordcloud') {
-      const others = result.slice(limit).reduce((acc, curr) => acc + curr.value, 0);
-      result = result.slice(0, limit);
-      result.push({ name: 'Others', value: others });
+    const defaultLimit = inferredForLine ? MAX_TOP_N : 20;
+    const limit = normalizeLimit(widget.limit) ?? defaultLimit;
+
+    if (result.length > limit) {
+      if (inferredForLine) {
+        // For line/area (date/sequence), keep series (up to MAX_TOP_N) without grouping to "Others"
+        result = result.slice(0, limit);
+      } else if (!widget.categoryFilter && widget.type !== 'wordcloud') {
+        const others = result.slice(limit).reduce((acc, curr) => acc + curr.value, 0);
+        result = result.slice(0, limit);
+        result.push({ name: 'Others', value: others });
+      } else {
+        result = result.slice(0, limit);
+      }
     }
   }
 
@@ -330,6 +467,12 @@ export const aggregateWidgetData = (
 
 export const processMultiSeriesData = (widget: DashboardWidget, rows: RawRow[]) => {
   if (!widget.series || widget.series.length === 0 || !widget.dimension) return [];
+
+  const majorBucket = createMajorBucketMapper(rows, widget.dimension, widget.xAxis?.major ?? 0);
+  const getDimKey = (row: RawRow) => {
+    const raw = row[widget.dimension!];
+    return majorBucket ? majorBucket(raw) : String(raw || 'N/A');
+  };
 
   const result: Record<string, any> = {};
 
@@ -340,7 +483,7 @@ export const processMultiSeriesData = (widget: DashboardWidget, rows: RawRow[]) 
     }
 
     seriesRows.forEach(row => {
-      const dimValue = String(row[widget.dimension!] || 'N/A');
+      const dimValue = getDimKey(row);
       if (widget.categoryFilter && widget.categoryFilter.length > 0 && widget.categoryFilter.includes(dimValue)) {
         return;
       }

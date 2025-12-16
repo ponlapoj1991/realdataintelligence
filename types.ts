@@ -184,6 +184,7 @@ export interface DataLabelConfig {
   fontWeight: 'normal' | 'bold';
   fontFamily?: string;
   color: string;
+  valueFormat?: 'auto' | 'text' | 'number' | 'compact' | 'accounting';
   showPercent?: boolean;
   percentPlacement?: 'prefix' | 'suffix';
   percentDecimals?: number;
@@ -203,6 +204,7 @@ export interface SeriesConfig {
   // Line/Area specific
   smooth?: boolean;
   strokeWidth?: number;
+  strokeStyle?: 'solid' | 'dashed' | 'dotted';
 }
 
 // Axis Configuration
@@ -224,6 +226,9 @@ export interface AxisConfig {
   // Gridlines
   showGridlines?: boolean;
   gridColor?: string;
+
+  // Line chart grouping (Major interval). 0/undefined = no grouping
+  major?: number;
 }
 
 // Gridlines Configuration
@@ -292,6 +297,7 @@ export interface DashboardWidget {
   // Line Chart Specific
   curveType?: 'linear' | 'monotone' | 'step';
   strokeWidth?: number;
+  strokeStyle?: 'solid' | 'dashed' | 'dotted';
 
   limit?: number;         // Limit rows (Top 10, 20, etc)
   sortBy?: SortOrder;     // Sort order for data

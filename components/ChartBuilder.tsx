@@ -83,6 +83,7 @@ const createDefaultDataLabels = (): DataLabelConfig => ({
   fontWeight: 'normal',
   fontFamily: undefined,
   color: '#000000',
+  valueFormat: 'auto',
   showPercent: false,
   percentPlacement: 'suffix',
   percentDecimals: 1
@@ -425,6 +426,7 @@ const ChartBuilder: React.FC<ChartBuilderProps> = ({
   // Line
   const [curveType, setCurveType] = useState<'linear' | 'monotone' | 'step'>('linear');
   const [strokeWidth, setStrokeWidth] = useState(2);
+  const [strokeStyle, setStrokeStyle] = useState<'solid' | 'dashed' | 'dotted'>('solid');
   const [barSize, setBarSize] = useState(22);
   const [categoryGap, setCategoryGap] = useState(20);
 
@@ -447,6 +449,7 @@ const [sortSeriesId, setSortSeriesId] = useState('');
   const [measure, setMeasure] = useState<AggregateMethod>('count');
   const [measureCol, setMeasureCol] = useState('');
   const [categoryConfig, setCategoryConfig] = useState<Record<string, CategoryConfig>>({});
+  const [primaryColor, setPrimaryColor] = useState<string>(CLASSIC_ANALYTICS_THEME.palette[0] || '#3B82F6');
 
   // Style state
   const [chartTitle, setChartTitle] = useState('');
@@ -490,6 +493,8 @@ const [sortSeriesId, setSortSeriesId] = useState('');
     setStartAngle(0);
     setCurveType('linear');
     setStrokeWidth(2);
+    setStrokeStyle('solid');
+    setPrimaryColor(COLORS[0]);
     setBarSize(22);
     setCategoryGap(20);
     setSortBy('value-desc');
@@ -504,6 +509,7 @@ const [sortSeriesId, setSortSeriesId] = useState('');
     setMeasure('count');
     setMeasureCol('');
     setCategoryConfig({});
+    setPrimaryColor(CLASSIC_ANALYTICS_THEME.palette[0] || '#3B82F6');
     setChartTitle('');
     setSubtitle('');
     setLegend(createDefaultLegend());
@@ -554,6 +560,7 @@ const [sortSeriesId, setSortSeriesId] = useState('');
       }
 
       setCategoryConfig(initialWidget.categoryConfig || {});
+      setPrimaryColor(initialWidget.color || CLASSIC_ANALYTICS_THEME.palette[0] || '#3B82F6');
 
       // Scatter XY (dual aggregation)
       setXMeasure(initialWidget.xMeasure || 'count');
@@ -561,8 +568,20 @@ const [sortSeriesId, setSortSeriesId] = useState('');
       setYMeasure(initialWidget.yMeasure || 'sum');
       setYMeasureCol(initialWidget.yMeasureCol || '');
 
+      // Line/Area styling
+      setCurveType(initialWidget.curveType || (initialWidget.type === 'smooth-line' ? 'monotone' : 'linear'));
+      setStrokeWidth(typeof initialWidget.strokeWidth === 'number' ? initialWidget.strokeWidth : 2);
+      setStrokeStyle(initialWidget.strokeStyle || 'solid');
+      setPrimaryColor(initialWidget.color || COLORS[0]);
+
       setLegend(initialWidget.legend || createDefaultLegend());
-      setDataLabels(initialWidget.dataLabels || createDefaultDataLabels());
+      const nextLabels = initialWidget.dataLabels || createDefaultDataLabels();
+      if (initialWidget.type === 'kpi' && !initialWidget.dataLabels) {
+        nextLabels.enabled = true;
+        nextLabels.fontSize = 42;
+        nextLabels.fontWeight = 'bold';
+      }
+      setDataLabels(nextLabels);
       setXAxis(initialWidget.xAxis || createDefaultAxis({ min: undefined, max: undefined, format: undefined }));
       setLeftYAxis(initialWidget.leftYAxis || createDefaultAxis());
       setRightYAxis(initialWidget.rightYAxis || createDefaultAxis());
@@ -660,7 +679,8 @@ const [sortSeriesId, setSortSeriesId] = useState('');
       id: initialWidget?.id || generateId(),
       title,
       type: type!,
-      dimension,
+      color: primaryColor,
+      dimension: supports?.dimension ? dimension : '',
       width,
       sortBy,
       barOrientation,
@@ -706,7 +726,8 @@ const [sortSeriesId, setSortSeriesId] = useState('');
 
       // Line
       curveType: (type === 'line' || type === 'smooth-line' || type?.includes('area')) ? curveType : undefined,
-      strokeWidth: (type === 'line' || type === 'smooth-line' || type?.includes('area')) ? strokeWidth : undefined
+      strokeWidth: (type === 'line' || type === 'smooth-line' || type?.includes('area')) ? strokeWidth : undefined,
+      strokeStyle: (type === 'line' || type === 'smooth-line' || type?.includes('area')) ? strokeStyle : undefined
     };
 
     // Add series for multi-series charts
@@ -801,6 +822,7 @@ const [sortSeriesId, setSortSeriesId] = useState('');
     setMeasureCol('');
     setCategoryFilter([]);
     setCategoryConfig({});
+    setPrimaryColor(CLASSIC_ANALYTICS_THEME.palette[0] || '#3B82F6');
     setXDimension('');
     setYDimension('');
     setSizeDimension('');
@@ -809,10 +831,15 @@ const [sortSeriesId, setSortSeriesId] = useState('');
     setStartAngle(0);
     setCurveType(selectedType === 'smooth-line' ? 'monotone' : 'linear');
     setStrokeWidth(2);
+    setStrokeStyle('solid');
     setBarSize(22);
     setCategoryGap(20);
     setLegend(createDefaultLegend());
-    setDataLabels(createDefaultDataLabels());
+    if (selectedType === 'kpi') {
+      setDataLabels({ ...createDefaultDataLabels(), enabled: true, fontSize: 42, fontWeight: 'bold' });
+    } else {
+      setDataLabels(createDefaultDataLabels());
+    }
     setXAxis(createDefaultAxis({ min: undefined, max: undefined, format: undefined }));
 
     if (['100-stacked-column', '100-stacked-bar', '100-stacked-area'].includes(selectedType)) {
@@ -837,6 +864,19 @@ const [sortSeriesId, setSortSeriesId] = useState('');
 
   const supports = type ? getChartSupports(type) : null;
   const columnProfiles = useMemo(() => buildColumnProfiles(data), [data]);
+  const showMajorControl = useMemo(() => {
+    if (!type || !dimension) return false;
+    const eligibleType =
+      type === 'combo' ||
+      type === 'line' ||
+      type === 'smooth-line' ||
+      type === 'area' ||
+      type === 'stacked-area' ||
+      type === '100-stacked-area';
+    if (!eligibleType) return false;
+    const colType = columnProfiles[dimension]?.type;
+    return colType === 'date' || colType === 'number';
+  }, [type, dimension, columnProfiles]);
   const fieldConstraints = useMemo(() => getConstraintsForType(type ?? null), [type]);
   const fieldState = useMemo(
     () => ({
@@ -862,8 +902,9 @@ const [sortSeriesId, setSortSeriesId] = useState('');
       id: initialWidget?.id || 'preview',
       title: title || 'Untitled',
       type,
+      color: primaryColor,
       width,
-      dimension,
+      dimension: supports?.dimension ? dimension : '',
       stackBy: stackBy || undefined,
       measure,
       measureCol: measureCol || undefined,
@@ -885,6 +926,7 @@ const [sortSeriesId, setSortSeriesId] = useState('');
       startAngle: (type === 'pie' || type === 'donut') ? startAngle : undefined,
       curveType,
       strokeWidth,
+      strokeStyle,
       categoryFilter: categoryFilter.length > 0 ? categoryFilter : undefined,
       sortBy,
       barOrientation,
@@ -914,6 +956,7 @@ const [sortSeriesId, setSortSeriesId] = useState('');
     yDimension,
     sizeDimension,
     colorBy,
+    primaryColor,
     xMeasure,
     xMeasureCol,
     yMeasure,
@@ -926,6 +969,7 @@ const [sortSeriesId, setSortSeriesId] = useState('');
     startAngle,
     curveType,
     strokeWidth,
+    strokeStyle,
     categoryFilter,
     sortBy,
     barOrientation,
@@ -1105,7 +1149,9 @@ const [sortSeriesId, setSortSeriesId] = useState('');
                       <div>
                         <p className="text-xs text-gray-600">Chart Type</p>
                         <p className="text-base font-semibold text-gray-900 mt-1">
-                          {type && type.split('-').map(word => word.charAt(0).toUpperCase() + word.slice(1)).join(' ')}
+                          {type === 'kpi'
+                            ? 'Number'
+                            : type && type.split('-').map(word => word.charAt(0).toUpperCase() + word.slice(1)).join(' ')}
                         </p>
                       </div>
                       <button
@@ -1132,6 +1178,8 @@ const [sortSeriesId, setSortSeriesId] = useState('');
                     setMeasure={setMeasure}
                     measureCol={measureCol}
                     setMeasureCol={setMeasureCol}
+                    primaryColor={primaryColor}
+                    setPrimaryColor={setPrimaryColor}
                     series={series}
                     sortSeriesId={sortSeriesId}
                     setSortSeriesId={setSortSeriesId}
@@ -1162,6 +1210,8 @@ const [sortSeriesId, setSortSeriesId] = useState('');
                     setCurveType={setCurveType}
                     strokeWidth={strokeWidth}
                     setStrokeWidth={setStrokeWidth}
+                    strokeStyle={strokeStyle}
+                    setStrokeStyle={setStrokeStyle}
                     barSize={barSize}
                     setBarSize={setBarSize}
                     sortBy={sortBy}
@@ -1181,6 +1231,8 @@ const [sortSeriesId, setSortSeriesId] = useState('');
                     onSelectAllCategories={handleSelectAllCategories}
                     onClearAllCategories={handleClearAllCategories}
                     onSeriesChange={handleSeriesChange}
+                    xAxisMajor={typeof xAxis.major === 'number' ? xAxis.major : 0}
+                    setXAxisMajor={(val) => setXAxis({ ...xAxis, major: val > 0 ? val : undefined })}
                   />
                 </div>
               )}
@@ -1356,6 +1408,18 @@ const [sortSeriesId, setSortSeriesId] = useState('');
                                       className="w-full"
                                     />
                                   </div>
+                                  <div>
+                                    <label className="block text-xs font-medium text-gray-700 mb-1">Stroke Style</label>
+                                    <select
+                                      value={s.strokeStyle || 'solid'}
+                                      onChange={(e) => handleSeriesChange(s.id, { strokeStyle: e.target.value as any })}
+                                      className="w-full px-2 py-1.5 border border-gray-300 rounded text-sm"
+                                    >
+                                      <option value="solid">Solid</option>
+                                      <option value="dashed">Dashed</option>
+                                      <option value="dotted">Dotted</option>
+                                    </select>
+                                  </div>
                                 </div>
                               )}
 
@@ -1366,7 +1430,7 @@ const [sortSeriesId, setSortSeriesId] = useState('');
                                     type="checkbox"
                                     checked={s.dataLabels?.enabled ?? false}
                                     onChange={(e) => handleSeriesChange(s.id, {
-                                      dataLabels: { ...(s.dataLabels || {}), enabled: e.target.checked }
+                                      dataLabels: { ...(s.dataLabels ?? createDefaultDataLabels()), enabled: e.target.checked }
                                     })}
                                     className="w-4 h-4 rounded border-gray-300 text-blue-600"
                                   />
@@ -1379,7 +1443,7 @@ const [sortSeriesId, setSortSeriesId] = useState('');
                                       <select
                                         value={s.dataLabels?.position || 'top'}
                                         onChange={(e) => handleSeriesChange(s.id, {
-                                          dataLabels: { ...(s.dataLabels || {}), position: e.target.value as any }
+                                          dataLabels: { ...(s.dataLabels ?? createDefaultDataLabels()), enabled: true, position: e.target.value as any }
                                         })}
                                         className="w-full px-2 py-1.5 border border-gray-300 rounded text-sm"
                                       >
@@ -1396,10 +1460,26 @@ const [sortSeriesId, setSortSeriesId] = useState('');
                                         max={20}
                                         value={s.dataLabels?.fontSize ?? 11}
                                         onChange={(e) => handleSeriesChange(s.id, {
-                                          dataLabels: { ...(s.dataLabels || {}), fontSize: parseInt(e.target.value) || 11 }
+                                          dataLabels: { ...(s.dataLabels ?? createDefaultDataLabels()), enabled: true, fontSize: parseInt(e.target.value) || 11 }
                                         })}
                                         className="w-full px-2 py-1.5 border border-gray-300 rounded text-sm"
                                       />
+                                    </div>
+                                    <div className="col-span-2">
+                                      <label className="block text-xs font-medium text-gray-700 mb-1">Value Format</label>
+                                      <select
+                                        value={s.dataLabels?.valueFormat || 'auto'}
+                                        onChange={(e) => handleSeriesChange(s.id, {
+                                          dataLabels: { ...(s.dataLabels ?? createDefaultDataLabels()), enabled: true, valueFormat: e.target.value as any }
+                                        })}
+                                        className="w-full px-2 py-1.5 border border-gray-300 rounded text-sm"
+                                      >
+                                        <option value="auto">Auto</option>
+                                        <option value="text">Text</option>
+                                        <option value="number">Number (1,000)</option>
+                                        <option value="compact">Compact (1.2k)</option>
+                                        <option value="accounting">Accounting (2 decimals)</option>
+                                      </select>
                                     </div>
                                   </div>
                                 )}
@@ -1585,7 +1665,7 @@ const [sortSeriesId, setSortSeriesId] = useState('');
                               <input
                                 type="range"
                                 min="8"
-                                max="24"
+                                max={type === 'kpi' ? 96 : 24}
                                 value={dataLabels.fontSize}
                                 onChange={(e) => setDataLabels({ ...dataLabels, fontSize: parseInt(e.target.value) })}
                                 className="w-full"
@@ -1624,6 +1704,22 @@ const [sortSeriesId, setSortSeriesId] = useState('');
                                   style={{ outline: 'none' }}
                                 />
                               </div>
+                            </div>
+
+                            <div className="col-span-2">
+                              <label className="block text-xs font-medium text-gray-700 mb-1">Value Format</label>
+                              <select
+                                value={dataLabels.valueFormat || 'auto'}
+                                onChange={(e) => setDataLabels({ ...dataLabels, valueFormat: e.target.value as any })}
+                                className="w-full px-2 py-1.5 border border-gray-300 rounded text-sm"
+                                style={{ outline: 'none' }}
+                              >
+                                <option value="auto">Auto</option>
+                                <option value="text">Text</option>
+                                <option value="number">Number (1,000)</option>
+                                <option value="compact">Compact (1.2k)</option>
+                                <option value="accounting">Accounting (2 decimals)</option>
+                              </select>
                             </div>
 
                             <div className="col-span-2">
@@ -1871,6 +1967,25 @@ const [sortSeriesId, setSortSeriesId] = useState('');
                               style={{ outline: 'none' }}
                             />
                           </div>
+
+                          {showMajorControl && (
+                            <div>
+                              <label className="block text-xs font-medium text-gray-700 mb-1">Major (แบ่งช่วงแกน X)</label>
+                              <input
+                                type="number"
+                                min={0}
+                                max={500}
+                                value={xAxis.major ?? 0}
+                                onChange={(e) => setXAxis({ ...xAxis, major: Math.max(0, parseInt(e.target.value || '0', 10) || 0) })}
+                                className="w-full px-2 py-1.5 border border-gray-300 rounded text-sm"
+                                placeholder="0"
+                                style={{ outline: 'none' }}
+                              />
+                              <p className="text-[11px] text-gray-500 mt-1">
+                                ใส่ 0 = แสดงทั้งหมด (ไม่แบ่งช่วง) เช่น 7 = แบ่งเป็น 1-7, 8-14...
+                              </p>
+                            </div>
+                          )}
 
                           <div className="grid grid-cols-2 gap-3">
                             <div>
@@ -2365,4 +2480,3 @@ const [sortSeriesId, setSortSeriesId] = useState('');
 };
 
 export default ChartBuilder;
-

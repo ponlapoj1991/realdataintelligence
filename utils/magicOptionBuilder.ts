@@ -10,8 +10,8 @@ export const buildMagicEchartsOption = (payload: MagicChartPayload | null, colSp
 
   // Animation settings - disabled during editing to prevent distracting re-renders
   const animationSettings = isEditing
-    ? { animation: false }
-    : { animation: true, animationDuration: 300, animationEasing: 'cubicOut' };
+    ? ({ animation: false } as const)
+    : ({ animation: true, animationDuration: 300, animationEasing: 'cubicOut' as const } as const);
 
   // Responsive Scale Factors
   const isCompact = colSpan <= 1;
@@ -93,6 +93,26 @@ export const buildMagicEchartsOption = (payload: MagicChartPayload | null, colSp
   const formatPercentText = (fraction: number, decimals: number) =>
     `${(fraction * 100).toFixed(decimals)}%`;
 
+  const formatNumericText = (
+    value: number,
+    mode?: 'auto' | 'text' | 'number' | 'compact' | 'accounting'
+  ) => {
+    if (!Number.isFinite(value)) return '0';
+    switch (mode) {
+      case 'text':
+        return String(value);
+      case 'number':
+        return new Intl.NumberFormat(undefined, { maximumFractionDigits: 0 }).format(value);
+      case 'compact':
+        return new Intl.NumberFormat(undefined, { notation: 'compact', compactDisplay: 'short', maximumFractionDigits: 1 }).format(value);
+      case 'accounting':
+        return new Intl.NumberFormat(undefined, { useGrouping: true, minimumFractionDigits: 0, maximumFractionDigits: 2 }).format(value);
+      case 'auto':
+      default:
+        return String(value);
+    }
+  };
+
   const formatValueWithPercent = (
     baseValue: string,
     fraction: number | null | undefined,
@@ -145,6 +165,39 @@ export const buildMagicEchartsOption = (payload: MagicChartPayload | null, colSp
           itemHeight: isCompact ? 10 : 14,
           padding: isCompact ? 2 : 5
         };
+
+  if (type === 'kpi') {
+    const raw = data.series?.[0]?.[0];
+    const n = getNumericValue(raw);
+    const text = formatNumericText(n, options?.dataLabelValueFormat);
+    const fontSize =
+      typeof options?.dataLabelFontSize === 'number'
+        ? options.dataLabelFontSize
+        : isCompact
+          ? 28
+          : 42;
+    const color = options?.dataLabelColor || textColor || '#111827';
+    const fontFamily = options?.dataLabelFontFamily;
+    const fontWeight = options?.dataLabelFontWeight || 'bold';
+
+    return {
+      ...animationSettings,
+      graphic: [
+        {
+          type: 'text',
+          left: 'center',
+          top: 'middle',
+          style: {
+            text,
+            fill: color,
+            fontSize,
+            ...(fontFamily ? { fontFamily } : {}),
+            fontWeight,
+          },
+        },
+      ],
+    };
+  }
 
   if (type === 'bar' || type === 'column') {
     const isVertical = (options?.orientation || (type === 'column' ? 'vertical' : 'horizontal')) === 'vertical';
@@ -204,6 +257,8 @@ export const buildMagicEchartsOption = (payload: MagicChartPayload | null, colSp
           ...(options?.dataLabelFontFamily ? { fontFamily: options.dataLabelFontFamily } : {}),
           ...(options?.dataLabelFontWeight ? { fontWeight: options.dataLabelFontWeight } : {}),
           ...(options?.dataLabelColor ? { color: options.dataLabelColor } : {}),
+          formatter: (params: any) =>
+            formatNumericText(getNumericValue(params?.value), options?.dataLabelValueFormat),
         }
       : undefined;
 
@@ -257,7 +312,7 @@ export const buildMagicEchartsOption = (payload: MagicChartPayload | null, colSp
                   }
 
                   return formatValueWithPercent(
-                    String(n),
+                    formatNumericText(n, options?.dataLabelValueFormat),
                     percent,
                     options?.dataLabelPercentPlacement,
                     options?.dataLabelPercentDecimals
@@ -297,6 +352,8 @@ export const buildMagicEchartsOption = (payload: MagicChartPayload | null, colSp
           ...(options?.dataLabelFontFamily ? { fontFamily: options.dataLabelFontFamily } : {}),
           ...(options?.dataLabelFontWeight ? { fontWeight: options.dataLabelFontWeight } : {}),
           ...(options?.dataLabelColor ? { color: options.dataLabelColor } : {}),
+          formatter: (params: any) =>
+            formatNumericText(getNumericValue(params?.value), options?.dataLabelValueFormat),
         }
       : undefined;
 
@@ -364,7 +421,7 @@ export const buildMagicEchartsOption = (payload: MagicChartPayload | null, colSp
                   }
 
                   return formatValueWithPercent(
-                    String(n),
+                    formatNumericText(n, options?.dataLabelValueFormat),
                     percent,
                     options?.dataLabelPercentPlacement,
                     options?.dataLabelPercentDecimals
@@ -386,6 +443,11 @@ export const buildMagicEchartsOption = (payload: MagicChartPayload | null, colSp
           name: data.legends[idx],
           data: seriesData,
           smooth: options?.lineSmooth,
+          lineStyle: {
+            width: options?.lineStrokeWidth ?? 2,
+            type: options?.lineStrokeStyle ?? 'solid',
+            ...(data.seriesColors?.[idx] ? { color: data.seriesColors[idx] } : {}),
+          },
           label,
         };
       }),
@@ -409,6 +471,8 @@ export const buildMagicEchartsOption = (payload: MagicChartPayload | null, colSp
           ...(options?.dataLabelFontFamily ? { fontFamily: options.dataLabelFontFamily } : {}),
           ...(options?.dataLabelFontWeight ? { fontWeight: options.dataLabelFontWeight } : {}),
           ...(options?.dataLabelColor ? { color: options.dataLabelColor } : {}),
+          formatter: (params: any) =>
+            formatNumericText(getNumericValue(params?.value), options?.dataLabelValueFormat),
         }
       : undefined;
 
@@ -476,7 +540,7 @@ export const buildMagicEchartsOption = (payload: MagicChartPayload | null, colSp
                   }
 
                   return formatValueWithPercent(
-                    String(n),
+                    formatNumericText(n, options?.dataLabelValueFormat),
                     percent,
                     options?.dataLabelPercentPlacement,
                     options?.dataLabelPercentDecimals
@@ -500,6 +564,11 @@ export const buildMagicEchartsOption = (payload: MagicChartPayload | null, colSp
           smooth: options?.lineSmooth,
           areaStyle: {},
           stack: options?.stack || options?.percentStack ? 'A' : undefined,
+          lineStyle: {
+            width: options?.lineStrokeWidth ?? 2,
+            type: options?.lineStrokeStyle ?? 'solid',
+            ...(data.seriesColors?.[idx] ? { color: data.seriesColors[idx] } : {}),
+          },
           label,
         };
       }),
@@ -528,19 +597,17 @@ export const buildMagicEchartsOption = (payload: MagicChartPayload | null, colSp
       return isRing ? 'center' : 'outside';
     };
 
-    const formatter =
-      options?.dataLabelShowPercent
-        ? (params: any) => {
-            const raw = typeof params.value === 'object' ? params.value?.value : params.value;
-            const val = typeof raw === 'number' ? raw : Number(raw) || 0;
-            const percent = typeof params.percent === 'number' ? params.percent : 0;
-            const percentText = `${percent.toFixed(options?.dataLabelPercentDecimals ?? 1)}%`;
-            const base = String(val);
-            return options?.dataLabelPercentPlacement === 'prefix'
-              ? `${percentText} ${base}`.trim()
-              : `${base} (${percentText})`;
-          }
-        : undefined;
+    const formatter = (params: any) => {
+      const raw = typeof params.value === 'object' ? params.value?.value : params.value;
+      const val = typeof raw === 'number' ? raw : Number(raw) || 0;
+      const base = formatNumericText(val, options?.dataLabelValueFormat);
+      if (!options?.dataLabelShowPercent) return base;
+      const percent = typeof params.percent === 'number' ? params.percent : 0;
+      const percentText = `${percent.toFixed(options?.dataLabelPercentDecimals ?? 1)}%`;
+      return options?.dataLabelPercentPlacement === 'prefix'
+        ? `${percentText} ${base}`.trim()
+        : `${base} (${percentText})`;
+    };
 
     const pieLabel = options?.showDataLabels
       ? {
@@ -550,7 +617,7 @@ export const buildMagicEchartsOption = (payload: MagicChartPayload | null, colSp
           ...(options?.dataLabelFontFamily ? { fontFamily: options.dataLabelFontFamily } : {}),
           ...(options?.dataLabelFontWeight ? { fontWeight: options.dataLabelFontWeight } : {}),
           ...(options?.dataLabelColor ? { color: options.dataLabelColor } : {}),
-          ...(formatter ? { formatter } : {}),
+          formatter,
         }
       : undefined;
 
@@ -674,6 +741,8 @@ export const buildMagicEchartsOption = (payload: MagicChartPayload | null, colSp
       options?.seriesTypes && options.seriesTypes.length === data.series.length
         ? options.seriesTypes
         : data.series.map(() => 'bar');
+    const usePointColorsForSingleBarSeries =
+      !!(data.dataColors?.length) && resolvedTypes.filter((t) => t === 'bar').length === 1;
 
     const seriesTotals = data.series.map((s) => s.reduce((sum, v) => sum + (Number(v) || 0), 0));
     const stackedIndexTotals =
@@ -691,6 +760,8 @@ export const buildMagicEchartsOption = (payload: MagicChartPayload | null, colSp
           ...(options?.dataLabelFontFamily ? { fontFamily: options.dataLabelFontFamily } : {}),
           ...(options?.dataLabelFontWeight ? { fontWeight: options.dataLabelFontWeight } : {}),
           ...(options?.dataLabelColor ? { color: options.dataLabelColor } : {}),
+          formatter: (params: any) =>
+            formatNumericText(getNumericValue(params?.value), options?.dataLabelValueFormat),
         }
       : undefined;
 
@@ -702,6 +773,8 @@ export const buildMagicEchartsOption = (payload: MagicChartPayload | null, colSp
           ...(options?.dataLabelFontFamily ? { fontFamily: options.dataLabelFontFamily } : {}),
           ...(options?.dataLabelFontWeight ? { fontWeight: options.dataLabelFontWeight } : {}),
           ...(options?.dataLabelColor ? { color: options.dataLabelColor } : {}),
+          formatter: (params: any) =>
+            formatNumericText(getNumericValue(params?.value), options?.dataLabelValueFormat),
         }
       : undefined;
 
@@ -791,7 +864,7 @@ export const buildMagicEchartsOption = (payload: MagicChartPayload | null, colSp
                   }
 
                   return formatValueWithPercent(
-                    String(n),
+                    formatNumericText(n, options?.dataLabelValueFormat),
                     percent,
                     options?.dataLabelPercentPlacement,
                     options?.dataLabelPercentDecimals
@@ -801,18 +874,50 @@ export const buildMagicEchartsOption = (payload: MagicChartPayload | null, colSp
             : baseLabel;
 
         const seriesColor = data.seriesColors?.[idx];
-        const itemStyle = seriesColor ? { color: seriesColor } : undefined;
+        const itemStyle =
+          t === 'bar' && usePointColorsForSingleBarSeries
+            ? undefined
+            : seriesColor
+              ? { color: seriesColor }
+              : undefined;
         // Per-series smooth and strokeWidth
         const seriesSmooth = options?.seriesSmoothList?.[idx] ?? options?.lineSmooth ?? false;
-        const seriesStrokeWidth = options?.seriesStrokeWidths?.[idx] ?? 2;
+        const seriesStrokeWidth = options?.seriesStrokeWidths?.[idx] ?? (options?.lineStrokeWidth ?? 2);
+        const seriesStrokeStyle = options?.seriesStrokeStyles?.[idx] ?? options?.lineStrokeStyle ?? 'solid';
         // Per-series data labels
         const perSeriesLabel = options?.seriesDataLabels?.[idx];
-        const finalLabel = perSeriesLabel?.enabled ? {
-          show: true,
-          position: perSeriesLabel.position || 'top',
-          fontSize: perSeriesLabel.fontSize || 11,
-          color: perSeriesLabel.color || textColor,
-        } : label;
+        const finalLabel = perSeriesLabel?.enabled
+          ? {
+              show: true,
+              position: perSeriesLabel.position || 'top',
+              fontSize: perSeriesLabel.fontSize || 11,
+              ...(perSeriesLabel.fontFamily ? { fontFamily: perSeriesLabel.fontFamily } : {}),
+              ...(perSeriesLabel.fontWeight ? { fontWeight: perSeriesLabel.fontWeight } : {}),
+              color: perSeriesLabel.color || textColor,
+              formatter: (params: any) => {
+                const n = getNumericValue(params?.value);
+                let percent: number | null = null;
+                if (perSeriesLabel.showPercent) {
+                  if (options?.percentStack) {
+                    percent = n;
+                  } else if (options?.stack) {
+                    const total = stackedIndexTotals[params?.dataIndex] || 0;
+                    percent = total > 0 ? n / total : null;
+                  } else {
+                    const total = seriesTotals[idx] || 0;
+                    percent = total > 0 ? n / total : null;
+                  }
+                }
+                const base = formatNumericText(n, perSeriesLabel.valueFormat ?? options?.dataLabelValueFormat);
+                return formatValueWithPercent(
+                  base,
+                  percent,
+                  perSeriesLabel.percentPlacement ?? options?.dataLabelPercentPlacement,
+                  perSeriesLabel.percentDecimals ?? options?.dataLabelPercentDecimals
+                );
+              },
+            }
+          : label;
 
         if (t === 'line') {
           return {
@@ -825,6 +930,7 @@ export const buildMagicEchartsOption = (payload: MagicChartPayload | null, colSp
             lineStyle: {
               ...(seriesColor ? { color: seriesColor } : {}),
               width: seriesStrokeWidth,
+              type: seriesStrokeStyle,
             },
             label: finalLabel,
           };
@@ -841,14 +947,22 @@ export const buildMagicEchartsOption = (payload: MagicChartPayload | null, colSp
             lineStyle: {
               ...(seriesColor ? { color: seriesColor } : {}),
               width: seriesStrokeWidth,
+              type: seriesStrokeStyle,
             },
             label: finalLabel,
           };
         }
+        const barData =
+          usePointColorsForSingleBarSeries && data.dataColors?.length
+            ? s.map((v, i) => ({
+                value: v,
+                itemStyle: data.dataColors?.[i] ? { color: data.dataColors[i] } : undefined,
+              }))
+            : s;
         return {
           type: 'bar',
           name: data.legends[idx],
-          data: s,
+          data: barData,
           stack: options?.stack || options?.percentStack ? 'A' : undefined,
           yAxisIndex: options?.yAxisIndexes?.[idx] ?? 0,
           itemStyle,

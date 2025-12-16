@@ -32,6 +32,8 @@ interface ChartConfigFormProps {
   setMeasure: (val: AggregateMethod) => void;
   measureCol: string;
   setMeasureCol: (val: string) => void;
+  primaryColor: string;
+  setPrimaryColor: (val: string) => void;
 
   // Multi-series
   series: SeriesConfig[];
@@ -72,6 +74,8 @@ interface ChartConfigFormProps {
   setCurveType: (val: 'linear' | 'monotone' | 'step') => void;
   strokeWidth: number;
   setStrokeWidth: (val: number) => void;
+  strokeStyle: 'solid' | 'dashed' | 'dotted';
+  setStrokeStyle: (val: 'solid' | 'dashed' | 'dotted') => void;
   barSize: number;
   setBarSize: (val: number) => void;
 
@@ -93,6 +97,10 @@ interface ChartConfigFormProps {
   onSelectAllCategories: () => void;
   onClearAllCategories: () => void;
   onSeriesChange: (id: string, changes: Partial<SeriesConfig>) => void;
+
+  // Line chart grouping (Major interval) - stored on X axis
+  xAxisMajor: number;
+  setXAxisMajor: (val: number) => void;
 }
 
 const ChartConfigForm: React.FC<ChartConfigFormProps> = ({
@@ -109,6 +117,8 @@ const ChartConfigForm: React.FC<ChartConfigFormProps> = ({
   setMeasure,
   measureCol,
   setMeasureCol,
+  primaryColor,
+  setPrimaryColor,
   series,
   sortSeriesId,
   setSortSeriesId,
@@ -139,6 +149,8 @@ const ChartConfigForm: React.FC<ChartConfigFormProps> = ({
   setCurveType,
   strokeWidth,
   setStrokeWidth,
+  strokeStyle,
+  setStrokeStyle,
   barSize,
   setBarSize,
   sortBy,
@@ -157,7 +169,9 @@ const ChartConfigForm: React.FC<ChartConfigFormProps> = ({
   onCategoryToggle,
   onSelectAllCategories,
   onClearAllCategories,
-  onSeriesChange
+  onSeriesChange,
+  xAxisMajor,
+  setXAxisMajor
 }) => {
   const supports = getChartSupports(chartType);
   const showStackBy = supports.stackBy;
@@ -243,6 +257,13 @@ const ChartConfigForm: React.FC<ChartConfigFormProps> = ({
       </div>
     );
   };
+
+  const showMajorControl = useMemo(() => {
+    if (!(showLine || showArea)) return false;
+    if (!dimension) return false;
+    const dtype = columnProfiles[dimension]?.type;
+    return dtype === 'date' || dtype === 'number';
+  }, [showLine, showArea, dimension, columnProfiles]);
 
   return (
     <div className="space-y-4">
@@ -596,6 +617,60 @@ const ChartConfigForm: React.FC<ChartConfigFormProps> = ({
               className="w-full"
             />
           </div>
+
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-2">Stroke Style</label>
+            <select
+              value={strokeStyle}
+              onChange={(e) => setStrokeStyle(e.target.value as any)}
+              className="w-full px-3 py-2 border border-gray-300 rounded text-sm"
+            >
+              <option value="solid">Solid</option>
+              <option value="dashed">Dashed</option>
+              <option value="dotted">Dotted</option>
+            </select>
+          </div>
+
+          {!supports.stackBy && !supports.multiSeries && (
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-2">Line Color</label>
+              <div className="flex items-center gap-3">
+                <input
+                  type="color"
+                  value={primaryColor || '#3B82F6'}
+                  onChange={(e) => setPrimaryColor(e.target.value)}
+                  className="h-10 w-12 rounded border border-gray-200 bg-white"
+                />
+                <input
+                  type="text"
+                  value={primaryColor || ''}
+                  onChange={(e) => setPrimaryColor(e.target.value)}
+                  className="flex-1 px-3 py-2 border border-gray-300 rounded text-sm font-mono"
+                />
+              </div>
+            </div>
+          )}
+
+          {showMajorControl && (
+            <div className="border border-gray-200 rounded-lg p-3 bg-gray-50">
+              <label className="block text-sm font-medium text-gray-700 mb-2">
+                Major (Group Interval)
+              </label>
+              <div className="flex items-center gap-3">
+                <input
+                  type="number"
+                  min={0}
+                  max={365}
+                  value={xAxisMajor}
+                  onChange={(e) => setXAxisMajor(parseInt(e.target.value || '0', 10) || 0)}
+                  className="w-28 px-3 py-2 border border-gray-300 rounded text-sm bg-white"
+                />
+                <p className="text-xs text-gray-500">
+                  ใส่ 0 เพื่อแสดงทุกค่า, ใส่ 7 เพื่อรวมเป็นช่วงละ 7 หน่วย
+                </p>
+              </div>
+            </div>
+          )}
         </>
       )}
 

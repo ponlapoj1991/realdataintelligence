@@ -105,8 +105,8 @@ const constraintsMap: Partial<Record<ChartType, FieldConstraint[]>> = {
 
 export const getFieldConstraints = (type: ChartType): FieldConstraint[] => {
   const defaults = constraintsMap[type] || [];
-  // Measure requirement for most chart types except KPI/table/wordcloud
-  const needsMeasure = !['kpi', 'table', 'wordcloud'].includes(type);
+  // Measure requirement for most chart types except table/wordcloud
+  const needsMeasure = !['table', 'wordcloud'].includes(type);
   const constraints = [...defaults];
   if (needsMeasure) {
     constraints.push(measureConstraint);

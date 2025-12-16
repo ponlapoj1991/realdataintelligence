@@ -146,7 +146,7 @@ const DashboardMagic: React.FC<DashboardMagicProps> = ({ project, onUpdateProjec
   // --- New States for Filters & Interaction ---
   const [filters, setFilters] = useState<DashboardFilter[]>([]);
   const [isPresentationMode, setIsPresentationMode] = useState(false);
-  const [interactionMode, setInteractionMode] = useState<'drill' | 'filter'>('filter');
+  const [interactionMode, setInteractionMode] = useState<'drill' | 'filter'>('drill');
   const [isExporting, setIsExporting] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [newFilterCol, setNewFilterCol] = useState('');
@@ -544,11 +544,6 @@ const DashboardMagic: React.FC<DashboardMagicProps> = ({ project, onUpdateProjec
     const filterColumn = widget.dimension;
     if (!filterColumn) return;
 
-    if (interactionMode === 'filter') {
-      addFilter(filterColumn, activeLabel);
-      return;
-    }
-
     const clickedData = filteredData.filter((row) => String(row[filterColumn] ?? '').includes(activeLabel));
 
     setDrillDown({
@@ -781,16 +776,8 @@ const DashboardMagic: React.FC<DashboardMagicProps> = ({ project, onUpdateProjec
               {/* Interaction Toggle */}
               <div className="bg-white border border-gray-300 rounded-lg flex p-0.5 shadow-sm">
                 <button
-                  onClick={() => setInteractionMode('filter')}
-                  className={`flex items-center px-3 py-1.5 rounded-md text-xs font-medium transition-all ${interactionMode === 'filter' ? 'bg-blue-100 text-blue-700' : 'text-gray-500 hover:text-gray-900'}`}
-                  title="Click charts to filter dashboard"
-                >
-                  <Filter className="w-3 h-3 mr-1.5" />
-                  Filter
-                </button>
-                <button
                   onClick={() => setInteractionMode('drill')}
-                  className={`flex items-center px-3 py-1.5 rounded-md text-xs font-medium transition-all ${interactionMode === 'drill' ? 'bg-blue-100 text-blue-700' : 'text-gray-500 hover:text-gray-900'}`}
+                  className="flex items-center px-3 py-1.5 rounded-md text-xs font-medium transition-all bg-blue-100 text-blue-700"
                   title="Click charts to see data rows"
                 >
                   <MousePointer2 className="w-3 h-3 mr-1.5" />
@@ -837,7 +824,7 @@ const DashboardMagic: React.FC<DashboardMagicProps> = ({ project, onUpdateProjec
             <div className={`bg-white border border-gray-200 rounded-xl p-4 mb-8 shadow-sm transition-all ${isPresentationMode ? 'opacity-80 hover:opacity-100' : ''}`}>
               <div className="flex items-center space-x-2 mb-3">
                 <Filter className="w-4 h-4 text-gray-500" />
-                <span className="text-sm font-bold text-gray-700">Global Filters</span>
+                <span className="text-sm font-bold text-gray-700">Magic Filters</span>
                 <span className="text-xs text-gray-400">(Applies to all charts)</span>
               </div>
 
@@ -1012,7 +999,6 @@ const DashboardMagic: React.FC<DashboardMagicProps> = ({ project, onUpdateProjec
                             data={filteredData}
                             filters={widget.filters}
                             theme={PPTIST_CHART_THEME}
-                            onValueClick={(value) => handleChartValueSelect(widget, value)}
                           />
                           
                           {/* Resize Handle */}

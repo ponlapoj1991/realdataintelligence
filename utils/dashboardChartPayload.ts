@@ -3,7 +3,7 @@ import { applyWidgetFilters, aggregateWidgetData, processMultiSeriesData } from 
 import { ChartTheme, CLASSIC_ANALYTICS_THEME } from '../constants/chartTheme';
 import { getCategoryColor, getPalette, getWidgetColor } from './chartStyling';
 
-type PptChartType = 'bar' | 'column' | 'line' | 'pie' | 'ring' | 'area' | 'radar' | 'scatter' | 'combo';
+type PptChartType = 'bar' | 'column' | 'line' | 'pie' | 'ring' | 'area' | 'radar' | 'scatter' | 'combo' | 'kpi';
 type SeriesVisualType = 'bar' | 'line' | 'area';
 type Orientation = 'vertical' | 'horizontal';
 
@@ -20,9 +20,14 @@ export interface DashboardChartInsertPayload {
     // Series/stack
     stack?: boolean;
     lineSmooth?: boolean;
+    lineStrokeWidth?: number;
+    lineStrokeStyle?: 'solid' | 'dashed' | 'dotted';
     seriesTypes?: SeriesVisualType[];
     yAxisIndexes?: number[];
     percentStack?: boolean;
+    seriesSmoothList?: boolean[];
+    seriesStrokeWidths?: number[];
+    seriesDataLabels?: any[];
 
     // Bar/column layout
     orientation?: Orientation;
@@ -39,6 +44,7 @@ export interface DashboardChartInsertPayload {
     dataLabelFontWeight?: 'normal' | 'bold';
     dataLabelFontFamily?: string;
     dataLabelColor?: string;
+    dataLabelValueFormat?: 'auto' | 'text' | 'number' | 'compact' | 'accounting';
     dataLabelShowPercent?: boolean;
     dataLabelPercentDecimals?: number;
     dataLabelPercentPlacement?: 'prefix' | 'suffix';
@@ -46,6 +52,7 @@ export interface DashboardChartInsertPayload {
     // Axis titles + ranges
     axisTitle?: { x?: string; yLeft?: string; yRight?: string };
     axisRange?: { xMin?: number; xMax?: number; yLeftMin?: number; yLeftMax?: number; yRightMin?: number; yRightMax?: number };
+    axisMajor?: number;
 
     // Legend
     legendEnabled?: boolean;
@@ -83,6 +90,9 @@ export interface DashboardChartInsertPayload {
     // Pie/Ring
     pieInnerRadius?: number; // 0-100 (%)
     pieStartAngle?: number; // degrees
+
+    // Combo per-series line styles
+    seriesStrokeStyles?: Array<'solid' | 'dashed' | 'dotted' | undefined>;
   };
   theme: {
     colors: string[];
@@ -134,6 +144,8 @@ const mapWidgetType = (widget: DashboardWidget): PptChartType | null => {
       return 'scatter';
     case 'combo':
       return 'combo';
+    case 'kpi':
+      return 'kpi';
     default:
       return null;
   }
@@ -197,9 +209,10 @@ const buildComboSeries = (widget: DashboardWidget, rows: any[], theme: ChartThem
   // Per-series line settings
   const seriesSmoothList = widget.series.map(series => series.smooth ?? false);
   const seriesStrokeWidths = widget.series.map(series => series.strokeWidth ?? 2);
+  const seriesStrokeStyles = widget.series.map(series => series.strokeStyle);
   // Per-series data labels
   const seriesDataLabels = widget.series.map(series => series.dataLabels);
-  return { labels, legends, series: seriesData, colors, seriesTypes, yAxisIndexes, seriesSmoothList, seriesStrokeWidths, seriesDataLabels };
+  return { labels, legends, series: seriesData, colors, seriesTypes, yAxisIndexes, seriesSmoothList, seriesStrokeWidths, seriesStrokeStyles, seriesDataLabels };
 };
 
 export const buildDashboardChartPayload = (
@@ -223,6 +236,11 @@ export const buildDashboardChartPayload = (
     if (!multiSeriesData.length) return null;
     const combo = buildComboSeries(widget, multiSeriesData, theme);
     if (!combo) return null;
+    const barSeriesCount = (widget.series || []).filter(s => s.type === 'bar').length;
+    const comboCategoryColors =
+      barSeriesCount === 1
+        ? combo.labels.map((label, idx) => getCategoryColor(widget, String(label ?? idx), idx, theme))
+        : undefined;
 
     const dataLabelPosition = normalizeDataLabelPosition(widget.dataLabels?.position as any);
     const percentStack = widget.barMode === 'percent';
@@ -249,10 +267,13 @@ export const buildDashboardChartPayload = (
         legends: combo.legends,
         series: combo.series,
         seriesColors: combo.colors,
+        dataColors: comboCategoryColors,
       },
       options: {
         seriesTypes: combo.seriesTypes,
         lineSmooth: widget.curveType === 'monotone' || widget.type === 'smooth-line',
+        lineStrokeWidth: widget.strokeWidth,
+        lineStrokeStyle: widget.strokeStyle,
         stack: widget.barMode === 'stacked' || widget.barMode === 'percent',
         percentStack,
         yAxisIndexes: combo.yAxisIndexes,
@@ -261,6 +282,7 @@ export const buildDashboardChartPayload = (
         // Per-series settings
         seriesSmoothList: combo.seriesSmoothList,
         seriesStrokeWidths: combo.seriesStrokeWidths,
+        seriesStrokeStyles: combo.seriesStrokeStyles,
         seriesDataLabels: combo.seriesDataLabels,
 
         showDataLabels: widget.dataLabels?.enabled,
@@ -269,12 +291,14 @@ export const buildDashboardChartPayload = (
         dataLabelFontWeight: widget.dataLabels?.fontWeight,
         dataLabelFontFamily: widget.dataLabels?.fontFamily,
         dataLabelColor: widget.dataLabels?.color,
+        dataLabelValueFormat: widget.dataLabels?.valueFormat,
         dataLabelShowPercent: widget.dataLabels?.showPercent,
         dataLabelPercentDecimals: widget.dataLabels?.percentDecimals,
         dataLabelPercentPlacement: widget.dataLabels?.percentPlacement,
 
         axisTitle,
         axisRange,
+        axisMajor: widget.xAxis?.major,
 
         legendEnabled: widget.legend?.enabled ?? widget.showLegend !== false,
         legendPosition: widget.legend?.position,
@@ -330,6 +354,8 @@ export const buildDashboardChartPayload = (
   let legends: string[] = [];
   let series: number[][] = [];
   let pointSizes: number[] | undefined;
+  let seriesColors: string[] | undefined;
+  let dataColors: string[] | undefined;
 
   if (chartType === 'scatter') {
     const scatter = buildScatterSeries(aggregated.data, widget, theme);
@@ -350,9 +376,6 @@ export const buildDashboardChartPayload = (
     series = single.series;
   }
 
-  let seriesColors: string[] | undefined;
-  let dataColors: string[] | undefined;
-
   if (aggregated.stackKeys && aggregated.stackKeys.length) {
     seriesColors = aggregated.stackKeys.map((key, idx) =>
       getWidgetColor(widget, key, idx, theme)
@@ -360,6 +383,8 @@ export const buildDashboardChartPayload = (
   } else if (widget.series && widget.series.length > 0) {
     const palette = getPalette(widget, theme);
     seriesColors = widget.series.map((seriesCfg, idx) => seriesCfg.color || palette[idx % palette.length]);
+  } else if ((chartType === 'line' || chartType === 'area') && widget.color) {
+    seriesColors = [widget.color];
   } else if (chartType !== 'pie' && chartType !== 'ring') {
     dataColors = aggregated.data.map((row: any, idx: number) =>
       getCategoryColor(widget, String(row.name ?? row.label ?? idx), idx, theme)
@@ -368,6 +393,10 @@ export const buildDashboardChartPayload = (
     dataColors = aggregated.data.map((row: any, idx: number) =>
       getCategoryColor(widget, String(row.name ?? row.label ?? idx), idx, theme)
     );
+  }
+
+  if ((chartType === 'line' || chartType === 'area') && !seriesColors && widget.color) {
+    seriesColors = [widget.color];
   }
 
   const orientation =
@@ -411,6 +440,7 @@ export const buildDashboardChartPayload = (
       dataLabelFontWeight: widget.dataLabels?.fontWeight,
       dataLabelFontFamily: widget.dataLabels?.fontFamily,
       dataLabelColor: widget.dataLabels?.color,
+      dataLabelValueFormat: widget.dataLabels?.valueFormat,
       dataLabelShowPercent: widget.dataLabels?.showPercent,
       dataLabelPercentDecimals: widget.dataLabels?.percentDecimals,
       dataLabelPercentPlacement: widget.dataLabels?.percentPlacement,
@@ -418,6 +448,9 @@ export const buildDashboardChartPayload = (
       percentStack,
       axisTitle,
       axisRange,
+      axisMajor: widget.xAxis?.major,
+      lineStrokeWidth: widget.strokeWidth,
+      lineStrokeStyle: widget.strokeStyle,
 
       legendEnabled: widget.legend?.enabled ?? widget.showLegend !== false,
       legendPosition: widget.legend?.position,

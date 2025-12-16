@@ -355,7 +355,7 @@ const MagicWidgetRenderer: React.FC<MagicWidgetRendererProps> = ({
     const chart = chartRef.current;
     const option = buildMagicEchartsOption(payload, widget.colSpan || 2, isEditing);
     if (option) {
-      chart.setOption(option, true);
+      chart.setOption(option as any, true);
     }
 
     const handleResize = () => {
