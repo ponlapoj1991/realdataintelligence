@@ -200,6 +200,9 @@ export interface SeriesConfig {
   yAxis: 'left' | 'right';
   color: string;
   dataLabels?: DataLabelConfig;
+  // Line/Area specific
+  smooth?: boolean;
+  strokeWidth?: number;
 }
 
 // Axis Configuration

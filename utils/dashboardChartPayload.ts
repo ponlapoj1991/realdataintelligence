@@ -170,13 +170,18 @@ const buildSingleSeries = (rows: any[], title?: string) => {
   return { labels, legends, series };
 };
 
-const buildScatterSeries = (rows: any[]) => {
+const buildScatterSeries = (rows: any[], widget: DashboardWidget, theme: ChartTheme) => {
   const labels = rows.map(row => row.name || '');
   const legends = ['X', 'Y'];
   const xSeries = rows.map(row => Number(row.x) || 0);
   const ySeries = rows.map(row => Number(row.y) || 0);
-  const pointSizes = rows.map(row => Number(row.size) || 6);
-  return { labels, legends, series: [xSeries, ySeries], pointSizes };
+  const pointSizes = rows.map(row => Number(row.size) || 10);
+  // Generate colors for each point based on categoryConfig or palette
+  const palette = getPalette(widget, theme);
+  const dataColors = rows.map((row, idx) =>
+    getCategoryColor(widget, String(row.name || idx), idx, theme)
+  );
+  return { labels, legends, series: [xSeries, ySeries], pointSizes, dataColors };
 };
 
 const buildComboSeries = (widget: DashboardWidget, rows: any[], theme: ChartTheme) => {
@@ -187,9 +192,14 @@ const buildComboSeries = (widget: DashboardWidget, rows: any[], theme: ChartThem
   const colors = widget.series.map((series, idx) => series.color || palette[idx % palette.length]);
   const seriesData = widget.series.map(series => rows.map(row => Number(row[series.id]) || 0));
   const seriesTypes = widget.series.map(series => series.type) as SeriesVisualType[];
-  // Phase 1: Build yAxisIndexes for dual axis support (0 = left, 1 = right)
+  // Build yAxisIndexes for dual axis support (0 = left, 1 = right)
   const yAxisIndexes = widget.series.map(series => series.yAxis === 'right' ? 1 : 0);
-  return { labels, legends, series: seriesData, colors, seriesTypes, yAxisIndexes };
+  // Per-series line settings
+  const seriesSmoothList = widget.series.map(series => series.smooth ?? false);
+  const seriesStrokeWidths = widget.series.map(series => series.strokeWidth ?? 2);
+  // Per-series data labels
+  const seriesDataLabels = widget.series.map(series => series.dataLabels);
+  return { labels, legends, series: seriesData, colors, seriesTypes, yAxisIndexes, seriesSmoothList, seriesStrokeWidths, seriesDataLabels };
 };
 
 export const buildDashboardChartPayload = (
@@ -246,6 +256,12 @@ export const buildDashboardChartPayload = (
         stack: widget.barMode === 'stacked' || widget.barMode === 'percent',
         percentStack,
         yAxisIndexes: combo.yAxisIndexes,
+        barWidth: clampBarSize(widget.barSize),
+        barCategoryGap: toCategoryGap(widget.categoryGap),
+        // Per-series settings
+        seriesSmoothList: combo.seriesSmoothList,
+        seriesStrokeWidths: combo.seriesStrokeWidths,
+        seriesDataLabels: combo.seriesDataLabels,
 
         showDataLabels: widget.dataLabels?.enabled,
         dataLabelPosition,
@@ -316,11 +332,12 @@ export const buildDashboardChartPayload = (
   let pointSizes: number[] | undefined;
 
   if (chartType === 'scatter') {
-    const scatter = buildScatterSeries(aggregated.data);
+    const scatter = buildScatterSeries(aggregated.data, widget, theme);
     labels = scatter.labels;
     legends = scatter.legends;
     series = scatter.series;
-    pointSizes = widget.type === 'bubble' ? scatter.pointSizes : undefined;
+    pointSizes = scatter.pointSizes;
+    dataColors = scatter.dataColors;
   } else if (aggregated.stackKeys && aggregated.stackKeys.length) {
     const result = buildStackedSeries(aggregated.data, aggregated.stackKeys);
     labels = result.labels;

@@ -665,20 +665,20 @@ const ChartConfigForm: React.FC<ChartConfigFormProps> = ({
         <div>
           <div className="flex items-center justify-between mb-2">
             <label className="block text-sm font-medium text-gray-700">
-              Categories ({categoryFilter.length > 0 ? categoryFilter.length : allCategories.length} of {allCategories.length})
+              Categories ({allCategories.length - categoryFilter.length} of {allCategories.length} visible)
             </label>
             <div className="flex gap-2">
               <button
-                onClick={onSelectAllCategories}
+                onClick={onClearAllCategories}
                 className="text-xs text-blue-600 hover:text-blue-800"
               >
-                Select All
+                Show All
               </button>
               <button
-                onClick={onClearAllCategories}
+                onClick={onSelectAllCategories}
                 className="text-xs text-gray-600 hover:text-gray-800"
               >
-                Clear
+                Hide All
               </button>
             </div>
           </div>
@@ -703,7 +703,7 @@ const ChartConfigForm: React.FC<ChartConfigFormProps> = ({
               >
                 <input
                   type="checkbox"
-                  checked={categoryFilter.length === 0 || categoryFilter.includes(cat)}
+                  checked={!categoryFilter.includes(cat)}
                   onChange={() => onCategoryToggle(cat)}
                   className="mr-2"
                 />
@@ -712,7 +712,7 @@ const ChartConfigForm: React.FC<ChartConfigFormProps> = ({
             ))}
           </div>
           <p className="text-xs text-gray-500 mt-1">
-            {categoryFilter.length === 0 ? 'All categories shown' : `${categoryFilter.length} selected`}
+            {categoryFilter.length === 0 ? 'All categories visible' : `${categoryFilter.length} hidden`}
           </p>
         </div>
       )}

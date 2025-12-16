@@ -594,10 +594,29 @@ export const buildMagicEchartsOption = (payload: MagicChartPayload | null, colSp
   }
 
   if (type === 'scatter') {
+    // Build scatter data with labels for tooltip
+    const scatterData = data.series[0].map((x, idx) => ({
+      value: [x, data.series[1]?.[idx] ?? x],
+      name: data.labels[idx] || `Point ${idx + 1}`,
+      symbolSize: (options?.pointSizes && options.pointSizes[idx]) || 12,
+      itemStyle: data.dataColors?.[idx] ? { color: data.dataColors[idx] } : undefined,
+    }));
+
     return {
       ...animationSettings,
       color: themeColors,
-      legend,
+      legend: data.labels.length > 1 ? {
+        ...legend,
+        data: data.labels,
+      } : undefined,
+      tooltip: {
+        trigger: 'item',
+        formatter: (params: any) => {
+          const name = params.name || '';
+          const [x, y] = params.value || [0, 0];
+          return `${name}<br/>X: ${x}<br/>Y: ${y}`;
+        },
+      },
       grid: { containLabel: gridContainLabel, ...gridPadding },
       xAxis: applyAxisVisibility(
         {
@@ -636,8 +655,15 @@ export const buildMagicEchartsOption = (payload: MagicChartPayload | null, colSp
       series: [
         {
           type: 'scatter',
-          data: data.series[0].map((x, idx) => [x, data.series[1]?.[idx] ?? x]),
-          symbolSize: (options?.pointSizes && options.pointSizes[0]) || 12,
+          data: scatterData,
+          symbolSize: (params: any) => params.symbolSize || 12,
+          label: options?.showDataLabels ? {
+            show: true,
+            position: 'top',
+            formatter: (params: any) => params.name,
+            fontSize: options?.dataLabelFontSize || 10,
+            color: options?.dataLabelColor || textColor,
+          } : undefined,
         },
       ],
     };
@@ -774,14 +800,33 @@ export const buildMagicEchartsOption = (payload: MagicChartPayload | null, colSp
               }
             : baseLabel;
 
+        const seriesColor = data.seriesColors?.[idx];
+        const itemStyle = seriesColor ? { color: seriesColor } : undefined;
+        // Per-series smooth and strokeWidth
+        const seriesSmooth = options?.seriesSmoothList?.[idx] ?? options?.lineSmooth ?? false;
+        const seriesStrokeWidth = options?.seriesStrokeWidths?.[idx] ?? 2;
+        // Per-series data labels
+        const perSeriesLabel = options?.seriesDataLabels?.[idx];
+        const finalLabel = perSeriesLabel?.enabled ? {
+          show: true,
+          position: perSeriesLabel.position || 'top',
+          fontSize: perSeriesLabel.fontSize || 11,
+          color: perSeriesLabel.color || textColor,
+        } : label;
+
         if (t === 'line') {
           return {
             type: 'line',
             name: data.legends[idx],
             data: s,
-            smooth: options?.lineSmooth,
+            smooth: seriesSmooth,
             yAxisIndex: options?.yAxisIndexes?.[idx] ?? 0,
-            label,
+            itemStyle,
+            lineStyle: {
+              ...(seriesColor ? { color: seriesColor } : {}),
+              width: seriesStrokeWidth,
+            },
+            label: finalLabel,
           };
         }
         if (t === 'area') {
@@ -789,10 +834,15 @@ export const buildMagicEchartsOption = (payload: MagicChartPayload | null, colSp
             type: 'line',
             name: data.legends[idx],
             data: s,
-            smooth: options?.lineSmooth,
-            areaStyle: {},
+            smooth: seriesSmooth,
+            areaStyle: seriesColor ? { color: seriesColor } : {},
             yAxisIndex: options?.yAxisIndexes?.[idx] ?? 0,
-            label,
+            itemStyle,
+            lineStyle: {
+              ...(seriesColor ? { color: seriesColor } : {}),
+              width: seriesStrokeWidth,
+            },
+            label: finalLabel,
           };
         }
         return {
@@ -801,7 +851,10 @@ export const buildMagicEchartsOption = (payload: MagicChartPayload | null, colSp
           data: s,
           stack: options?.stack || options?.percentStack ? 'A' : undefined,
           yAxisIndex: options?.yAxisIndexes?.[idx] ?? 0,
-          label,
+          itemStyle,
+          barWidth: options?.barWidth,
+          barCategoryGap: options?.barCategoryGap,
+          label: finalLabel,
         };
       }),
     };

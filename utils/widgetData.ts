@@ -130,6 +130,68 @@ export const aggregateWidgetData = (
   }
 
   if (widget.type === 'scatter' || widget.type === 'bubble') {
+    // Check if using dual aggregation mode (xMeasure/yMeasure with dimension)
+    if (widget.dimension && (widget.xMeasure || widget.yMeasure)) {
+      // Group by dimension and aggregate X/Y values
+      const groups: Record<string, { count: number; xSum: number; ySum: number; sizeSum: number }> = {};
+
+      rows.forEach(row => {
+        const dimVal = String(row[widget.dimension!] || '(Empty)');
+        if (!groups[dimVal]) {
+          groups[dimVal] = { count: 0, xSum: 0, ySum: 0, sizeSum: 0 };
+        }
+        groups[dimVal].count++;
+
+        // X value aggregation
+        if (widget.xMeasureCol) {
+          groups[dimVal].xSum += parseFloat(String(row[widget.xMeasureCol])) || 0;
+        }
+
+        // Y value aggregation
+        if (widget.yMeasureCol) {
+          groups[dimVal].ySum += parseFloat(String(row[widget.yMeasureCol])) || 0;
+        }
+
+        // Size (for bubble)
+        if (widget.sizeDimension) {
+          groups[dimVal].sizeSum += parseFloat(String(row[widget.sizeDimension])) || 0;
+        }
+      });
+
+      const result = Object.entries(groups).map(([name, data]) => {
+        // Calculate X based on xMeasure
+        let x = 0;
+        if (widget.xMeasure === 'count') {
+          x = data.count;
+        } else if (widget.xMeasure === 'sum') {
+          x = data.xSum;
+        } else if (widget.xMeasure === 'avg') {
+          x = data.count > 0 ? data.xSum / data.count : 0;
+        }
+
+        // Calculate Y based on yMeasure
+        let y = 0;
+        if (widget.yMeasure === 'count') {
+          y = data.count;
+        } else if (widget.yMeasure === 'sum') {
+          y = data.ySum;
+        } else if (widget.yMeasure === 'avg') {
+          y = data.count > 0 ? data.ySum / data.count : 0;
+        }
+
+        return {
+          name,
+          x,
+          y,
+          size: widget.type === 'bubble' ? (data.sizeSum / data.count || 10) : 10,
+          color: name
+        };
+      });
+
+      return { data: result, isStack: false };
+    }
+
+    // Legacy mode: direct X/Y from columns
     const result = rows.map((row, idx) => ({
       name: `Point ${idx + 1}`,
       x: parseFloat(String(row[widget.xDimension!])) || 0,
@@ -158,7 +220,7 @@ export const aggregateWidgetData = (
       const dimVal = String(row[widget.dimension] || '(Empty)');
       const stackVal = String(row[widget.stackBy!] || '(Other)');
 
-      if (widget.categoryFilter && widget.categoryFilter.length > 0 && !widget.categoryFilter.includes(dimVal)) {
+      if (widget.categoryFilter && widget.categoryFilter.length > 0 && widget.categoryFilter.includes(dimVal)) {
         return;
       }
 
@@ -224,7 +286,7 @@ export const aggregateWidgetData = (
   const groups: Record<string, number> = {};
   rows.forEach(row => {
     const key = String(row[widget.dimension] || '(Empty)');
-    if (widget.categoryFilter && widget.categoryFilter.length > 0 && !widget.categoryFilter.includes(key)) return;
+    if (widget.categoryFilter && widget.categoryFilter.length > 0 && widget.categoryFilter.includes(key)) return;
     if (!groups[key]) groups[key] = 0;
     if (widget.measure === 'count') {
       groups[key]++;
@@ -279,7 +341,7 @@ export const processMultiSeriesData = (widget: DashboardWidget, rows: RawRow[]) 
 
     seriesRows.forEach(row => {
       const dimValue = String(row[widget.dimension!] || 'N/A');
-      if (widget.categoryFilter && widget.categoryFilter.length > 0 && !widget.categoryFilter.includes(dimValue)) {
+      if (widget.categoryFilter && widget.categoryFilter.length > 0 && widget.categoryFilter.includes(dimValue)) {
         return;
       }
 

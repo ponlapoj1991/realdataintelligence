@@ -1330,6 +1330,80 @@ const [sortSeriesId, setSortSeriesId] = useState('');
                                   </div>
                                 )}
                               </div>
+
+                              {/* Line/Area Style */}
+                              {(s.type === 'line' || s.type === 'area') && (
+                                <div className="border-t border-gray-200 pt-3 space-y-3">
+                                  <label className="flex items-center gap-2 cursor-pointer">
+                                    <input
+                                      type="checkbox"
+                                      checked={s.smooth ?? false}
+                                      onChange={(e) => handleSeriesChange(s.id, { smooth: e.target.checked })}
+                                      className="w-4 h-4 rounded border-gray-300 text-blue-600"
+                                    />
+                                    <span className="text-xs font-medium text-gray-700">Smooth Line</span>
+                                  </label>
+                                  <div>
+                                    <label className="block text-xs font-medium text-gray-700 mb-1">
+                                      Stroke Width: {s.strokeWidth ?? 2}px
+                                    </label>
+                                    <input
+                                      type="range"
+                                      min="1"
+                                      max="5"
+                                      value={s.strokeWidth ?? 2}
+                                      onChange={(e) => handleSeriesChange(s.id, { strokeWidth: parseInt(e.target.value) })}
+                                      className="w-full"
+                                    />
+                                  </div>
+                                </div>
+                              )}
+
+                              {/* Data Labels per Series */}
+                              <div className="border-t border-gray-200 pt-3 space-y-3">
+                                <label className="flex items-center gap-2 cursor-pointer">
+                                  <input
+                                    type="checkbox"
+                                    checked={s.dataLabels?.enabled ?? false}
+                                    onChange={(e) => handleSeriesChange(s.id, {
+                                      dataLabels: { ...(s.dataLabels || {}), enabled: e.target.checked }
+                                    })}
+                                    className="w-4 h-4 rounded border-gray-300 text-blue-600"
+                                  />
+                                  <span className="text-xs font-medium text-gray-700">Show Data Labels</span>
+                                </label>
+                                {s.dataLabels?.enabled && (
+                                  <div className="grid grid-cols-2 gap-3">
+                                    <div>
+                                      <label className="block text-xs font-medium text-gray-700 mb-1">Position</label>
+                                      <select
+                                        value={s.dataLabels?.position || 'top'}
+                                        onChange={(e) => handleSeriesChange(s.id, {
+                                          dataLabels: { ...(s.dataLabels || {}), position: e.target.value as any }
+                                        })}
+                                        className="w-full px-2 py-1.5 border border-gray-300 rounded text-sm"
+                                      >
+                                        <option value="top">Top</option>
+                                        <option value="inside">Inside</option>
+                                        <option value="outside">Outside</option>
+                                      </select>
+                                    </div>
+                                    <div>
+                                      <label className="block text-xs font-medium text-gray-700 mb-1">Font Size</label>
+                                      <input
+                                        type="number"
+                                        min={8}
+                                        max={20}
+                                        value={s.dataLabels?.fontSize ?? 11}
+                                        onChange={(e) => handleSeriesChange(s.id, {
+                                          dataLabels: { ...(s.dataLabels || {}), fontSize: parseInt(e.target.value) || 11 }
+                                        })}
+                                        className="w-full px-2 py-1.5 border border-gray-300 rounded text-sm"
+                                      />
+                                    </div>
+                                  </div>
+                                )}
+                              </div>
                             </div>
                           );
                         })}
