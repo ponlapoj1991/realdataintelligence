@@ -14,7 +14,7 @@ interface BuildReportsProps {
 
 const BUILD_REPORTS_ENTRY = '/build-reports/index.html';
 
-const BuildReports: React.FC<BuildReportsProps> = ({ project, onMessage, onIframeLoad }) => {
+const BuildReports: React.FC<BuildReportsProps> = ({ project, globalSettings, chartTheme, onMessage, onIframeLoad }) => {
   const iframeRef = useRef<HTMLIFrameElement>(null);
   const [isAvailable, setIsAvailable] = useState<boolean | null>(null);
   const [isLoaded, setIsLoaded] = useState(false);
