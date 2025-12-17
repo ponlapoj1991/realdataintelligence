@@ -24,6 +24,16 @@ export const generatePowerPoint = async (
 
   const toHex = (color?: string) => (color ? color.replace('#', '') : undefined);
 
+  const toSafeNumber = (value: any) => {
+    const n = typeof value === 'number' ? value : Number(value);
+    return Number.isFinite(n) ? n : 0;
+  };
+
+  const normalizeLabels = (labels: any[]) => {
+    const src = Array.isArray(labels) ? labels : [];
+    return src.map((v) => (v === null || v === undefined ? '' : String(v)));
+  };
+
   const mapLegendPos = (pos?: 'top' | 'bottom' | 'left' | 'right') => {
     if (pos === 'top') return 't';
     if (pos === 'left') return 'l';
@@ -52,8 +62,8 @@ export const generatePowerPoint = async (
   const buildSeries = (payload: DashboardChartInsertPayload) => {
     return payload.data.series.map((values, idx) => ({
       name: payload.data.legends?.[idx] || `Series ${idx + 1}`,
-      labels: payload.data.labels,
-      values,
+      labels: normalizeLabels(payload.data.labels),
+      values: (Array.isArray(values) ? values : []).map(toSafeNumber),
     }));
   };
 

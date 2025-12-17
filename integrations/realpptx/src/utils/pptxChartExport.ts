@@ -15,6 +15,34 @@ export function addChartElementToSlide(params: {
 }) {
   const { pptx, pptxSlide, el, ratioPx2Inch, ratioPx2Pt, formatColor } = params
 
+  const asFiniteNumber = (value: any, fallback = 0) => {
+    const n = typeof value === 'number' ? value : Number(value)
+    return Number.isFinite(n) ? n : fallback
+  }
+
+  const clampNonNegative = (value: any, fallback = 0) => {
+    return Math.max(0, asFiniteNumber(value, fallback))
+  }
+
+  const normalizeLabels = (labels: any[]) => {
+    return (Array.isArray(labels) ? labels : []).map(v => (v === null || v === undefined) ? '' : String(v))
+  }
+
+  const normalizeSeries = (series: any[]) => {
+    const src = Array.isArray(series) ? series : []
+    return src.map(row => {
+      const arr = Array.isArray(row) ? row : []
+      return arr.map(v => (v === null || v === undefined || v === '') ? 0 : asFiniteNumber(v, 0))
+    })
+  }
+
+  // Normalize & validate chart payload first to avoid invalid OOXML (NaN/undefined/null)
+  const labels = normalizeLabels(el.data?.labels || [])
+  const series = normalizeSeries(el.data?.series || [])
+  const legends = Array.isArray(el.data?.legends) ? el.data.legends.map(v => (v === null || v === undefined) ? '' : String(v)) : []
+
+  if (!series.length) return
+
   const normalizeHexInput = (input: string) => {
     if (!input) return '#000000'
     const trimmed = input.trim()
@@ -42,7 +70,7 @@ export function addChartElementToSlide(params: {
     return palette.map(color => toPptxHex(color))
   }
 
-  const themePalette = buildThemePalette(el.themeColors)
+  const themePalette = buildThemePalette(el.themeColors || [])
 
   // On-screen palette logic: `seriesColors` (if provided) overrides theme palette
   const seriesPalette = (() => {
@@ -50,7 +78,7 @@ export function addChartElementToSlide(params: {
     return seriesColors.length ? seriesColors : themePalette.length ? themePalette : ['000000']
   })()
 
-  const dataColors = (el.data.dataColors || []).filter(Boolean).map(color => toPptxHex(color))
+  const dataColors = (el.data?.dataColors || []).filter(Boolean).map(color => toPptxHex(color))
   const fallbackPalette = seriesPalette.length ? seriesPalette : themePalette.length ? themePalette : ['000000']
 
   const resolveDataPointColor = (index: number) => {
@@ -60,7 +88,7 @@ export function addChartElementToSlide(params: {
     return dataColors[dataColors.length - 1] || '000000'
   }
 
-  const pointCount = Math.max(el.data.labels.length, el.data.series[0]?.length || 0)
+  const pointCount = Math.max(labels.length, series[0]?.length || 0)
 
   const isPieLike = el.chartType === 'pie' || el.chartType === 'ring'
   const isBarLike = el.chartType === 'bar' || el.chartType === 'column'
@@ -69,7 +97,7 @@ export function addChartElementToSlide(params: {
 
   // Font scaling (match on-screen shrink behavior: shrink only)
   const BASE_CHART_SIZE = 400
-  const minSide = Math.max(1, Math.min(el.width || BASE_CHART_SIZE, el.height || BASE_CHART_SIZE))
+  const minSide = Math.max(1, Math.min(asFiniteNumber(el.width, BASE_CHART_SIZE), asFiniteNumber(el.height, BASE_CHART_SIZE)))
   const rawScale = minSide / BASE_CHART_SIZE
   const fontScale = Math.round(Math.min(1, rawScale) * 100) / 100
   const scaleFontPx = (px: number) => Math.max(6, Math.round(px * fontScale))
@@ -123,11 +151,18 @@ export function addChartElementToSlide(params: {
 
   const axisFontSizePx = scaleFontPx(el.options?.axisLabelFontSize ?? 12)
 
+  const x = clampNonNegative(el.left) / ratioPx2Inch
+  const y = clampNonNegative(el.top) / ratioPx2Inch
+  const w = clampNonNegative(el.width) / ratioPx2Inch
+  const h = clampNonNegative(el.height) / ratioPx2Inch
+  if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(w) || !Number.isFinite(h)) return
+  if (w <= 0 || h <= 0) return
+
   const options: pptxgen.IChartOpts = {
-    x: el.left / ratioPx2Inch,
-    y: el.top / ratioPx2Inch,
-    w: el.width / ratioPx2Inch,
-    h: el.height / ratioPx2Inch,
+    x,
+    y,
+    w,
+    h,
     chartColors: ['000000'], // overwritten below
   }
 
@@ -227,23 +262,36 @@ export function addChartElementToSlide(params: {
   // Build data payloads
   const chartData: any[] = []
   if (isScatter) {
-    const xValues = el.data.series[0] || []
-    const ySeries = el.data.series.slice(1)
+    const xValues = (series[0] || []).map(v => asFiniteNumber(v, 0))
+    const ySeries = series.slice(1)
+    if (!xValues.length || !ySeries.length) return
 
     chartData.push({ name: 'X', values: xValues })
     for (let i = 0; i < ySeries.length; i++) {
       chartData.push({
-        name: el.data.legends?.[i] || `Series ${i + 1}`,
-        values: ySeries[i],
+        name: legends?.[i] || `Series ${i + 1}`,
+        values: (ySeries[i] || []).map(v => asFiniteNumber(v, 0)),
       })
     }
   }
   else {
-    for (let i = 0; i < el.data.series.length; i++) {
+    if (!labels.length) {
+      // PowerPoint needs category labels; synthesize stable labels if missing
+      const maxLen = Math.max(1, ...series.map(s => s.length))
+      for (let i = 0; i < maxLen; i++) labels.push(`${i + 1}`)
+    }
+
+    // Pad/truncate values to match label length for OOXML stability
+    const normalizedLabels = labels.slice()
+    const targetLen = normalizedLabels.length
+
+    for (let i = 0; i < series.length; i++) {
+      const values = (series[i] || []).slice(0, targetLen)
+      while (values.length < targetLen) values.push(0)
       chartData.push({
-        name: el.data.legends?.[i] || `Series ${i + 1}`,
-        labels: el.data.labels,
-        values: el.data.series[i],
+        name: legends?.[i] || `Series ${i + 1}`,
+        labels: normalizedLabels,
+        values,
       })
     }
   }

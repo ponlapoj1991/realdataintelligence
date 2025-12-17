@@ -421,7 +421,7 @@ export default () => {
     const c = formatColor(outline?.color || '#000000')
 
     return {
-      color: c.color,
+      color: c.color.replace('#', ''),
       transparency: (1 - c.alpha) * 100,
       width: (outline.width || 1) / ratioPx2Pt.value,
       dashType: outline.style ? dashTypeMap[outline.style] as 'solid' | 'dash' | 'sysDot' : 'solid',
@@ -453,8 +453,15 @@ export default () => {
     return isSVGBase64 || isSVGUrl
   }
 
+  const toPptxHex = (input: string) => input.replace('#', '').toUpperCase()
+
+  const svgElementToPngDataUrl = async (svgRef: HTMLElement) => {
+    // Rasterize SVG to PNG to avoid PowerPoint repair prompts caused by embedded SVG XML
+    return toPng(svgRef as any, { cacheBust: true })
+  }
+
   // 导出PPTX文件
-  const buildPPTX = (_slides: Slide[], masterOverwrite: boolean, ignoreMedia: boolean) => {
+  const buildPPTX = async (_slides: Slide[], masterOverwrite: boolean, ignoreMedia: boolean) => {
     const pptx = new pptxgen()
 
     if (viewportRatio.value === 0.625) pptx.layout = 'LAYOUT_16x10'
@@ -473,7 +480,7 @@ export default () => {
       const { color: bgColor, alpha: bgAlpha } = formatColor(theme.value.backgroundColor)
       pptx.defineSlideMaster({
         title: 'REALPPTX_MASTER',
-        background: { color: bgColor, transparency: (1 - bgAlpha) * 100 },
+        background: { color: toPptxHex(bgColor), transparency: (1 - bgAlpha) * 100 },
       })
     }
 
@@ -501,7 +508,7 @@ export default () => {
         }
         else if (background.type === 'solid' && background.color) {
           const c = formatColor(background.color)
-          pptxSlide.background = { color: c.color, transparency: (1 - c.alpha) * 100 }
+          pptxSlide.background = { color: toPptxHex(c.color), transparency: (1 - c.alpha) * 100 }
         }
         else if (background.type === 'gradient' && background.gradient) {
           const colors = background.gradient.colors
@@ -509,7 +516,7 @@ export default () => {
           const color2 = colors[colors.length - 1].color
           const color = tinycolor.mix(color1, color2).toHexString()
           const c = formatColor(color)
-          pptxSlide.background = { color: c.color, transparency: (1 - c.alpha) * 100 }
+          pptxSlide.background = { color: toPptxHex(c.color), transparency: (1 - c.alpha) * 100 }
         }
       }
       if (slide.remark) {
@@ -536,7 +543,7 @@ export default () => {
             h: el.height / ratioPx2Inch.value,
             fontSize: defaultFontSize / ratioPx2Pt.value,
             fontFace: 'Arial',
-            color: '#000000',
+            color: '000000',
             valign: 'top',
             margin: 10 / ratioPx2Pt.value,
             paraSpaceBefore: 5 / ratioPx2Pt.value,
@@ -549,9 +556,9 @@ export default () => {
           if (el.fill) {
             const c = formatColor(el.fill)
             const opacity = el.opacity === undefined ? 1 : el.opacity
-            options.fill = { color: c.color, transparency: (1 - c.alpha * opacity) * 100 }
+            options.fill = { color: toPptxHex(c.color), transparency: (1 - c.alpha * opacity) * 100 }
           }
-          if (el.defaultColor) options.color = formatColor(el.defaultColor).color
+          if (el.defaultColor) options.color = toPptxHex(formatColor(el.defaultColor).color)
           if (el.defaultFontName) options.fontFace = el.defaultFontName
           if (el.shadow) options.shadow = getShadowOption(el.shadow)
           if (el.outline?.width) options.line = getOutlineOption(el.outline)
@@ -609,10 +616,15 @@ export default () => {
           if (el.special) {
             const svgRef = document.querySelector(`.thumbnail-list .base-element-${el.id} svg`) as HTMLElement
             if (svgRef.clientWidth < 1 || svgRef.clientHeight < 1) continue // 临时处理（导入PPTX文件带来的异常数据）
-            const base64SVG = svg2Base64(svgRef)
+            let imgData: string | null = null
+            try {
+              imgData = await svgElementToPngDataUrl(svgRef)
+            } catch {
+              imgData = svg2Base64(svgRef)
+            }
 
             const options: pptxgen.ImageProps = {
-              data: base64SVG,
+              data: imgData,
               x: el.left / ratioPx2Inch.value,
               y: el.top / ratioPx2Inch.value,
               w: el.width / ratioPx2Inch.value,
@@ -651,7 +663,7 @@ export default () => {
               y: el.top / ratioPx2Inch.value,
               w: el.width / ratioPx2Inch.value,
               h: el.height / ratioPx2Inch.value,
-              fill: { color: fillColor.color, transparency: (1 - fillColor.alpha * opacity) * 100 },
+              fill: { color: toPptxHex(fillColor.color), transparency: (1 - fillColor.alpha * opacity) * 100 },
               points,
             }
             if (el.flipH) options.flipH = el.flipH
@@ -676,12 +688,12 @@ export default () => {
               h: el.height / ratioPx2Inch.value,
               fontSize: defaultFontSize / ratioPx2Pt.value,
               fontFace: 'Arial',
-              color: '#000000',
+              color: '000000',
               paraSpaceBefore: 5 / ratioPx2Pt.value,
               valign: el.text.align,
             }
             if (el.rotate) options.rotate = el.rotate
-            if (el.text.defaultColor) options.color = formatColor(el.text.defaultColor).color
+            if (el.text.defaultColor) options.color = toPptxHex(formatColor(el.text.defaultColor).color)
             if (el.text.defaultFontName) options.fontFace = el.text.defaultFontName
 
             pptxSlide.addText(textProps, options)
@@ -720,7 +732,7 @@ export default () => {
             w: (maxX - minX) / ratioPx2Inch.value,
             h: (maxY - minY) / ratioPx2Inch.value,
             line: {
-              color: c.color,
+              color: toPptxHex(c.color),
               transparency: (1 - c.alpha) * 100,
               width: el.width / ratioPx2Pt.value,
               dashType: dashTypeMap[el.style] as 'solid' | 'dash' | 'sysDot',
@@ -822,12 +834,12 @@ export default () => {
             h: el.height / ratioPx2Inch.value,
             colW: el.colWidths.map(item => el.width * item / ratioPx2Inch.value),
           }
-          if (el.theme) options.fill = { color: '#ffffff' }
+          if (el.theme) options.fill = { color: 'FFFFFF' }
           if (el.outline.width && el.outline.color) {
             options.border = {
               type: el.outline.style === 'solid' ? 'solid' : 'dash',
               pt: el.outline.width / ratioPx2Pt.value,
-              color: formatColor(el.outline.color).color,
+              color: toPptxHex(formatColor(el.outline.color).color),
             }
           }
 
@@ -836,10 +848,15 @@ export default () => {
 
         else if (el.type === 'latex') {
           const svgRef = document.querySelector(`.thumbnail-list .base-element-${el.id} svg`) as HTMLElement
-          const base64SVG = svg2Base64(svgRef)
+          let imgData: string | null = null
+          try {
+            imgData = await svgElementToPngDataUrl(svgRef)
+          } catch {
+            imgData = svg2Base64(svgRef)
+          }
 
           const options: pptxgen.ImageProps = {
-            data: base64SVG,
+            data: imgData,
             x: el.left / ratioPx2Inch.value,
             y: el.top / ratioPx2Inch.value,
             w: el.width / ratioPx2Inch.value,
@@ -885,7 +902,7 @@ export default () => {
 
     setTimeout(async () => {
       try {
-        const pptx = buildPPTX(_slides, masterOverwrite, ignoreMedia)
+        const pptx = await buildPPTX(_slides, masterOverwrite, ignoreMedia)
         const fileName = `${title.value}.pptx`
         const blob = await (pptx as any).write('blob')
         saveAs(blob as Blob, fileName)
