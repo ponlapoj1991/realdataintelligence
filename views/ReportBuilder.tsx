@@ -35,6 +35,15 @@ const hashJson = (value: unknown) => {
   }
 };
 
+const runWhenIdle = (fn: () => void, timeoutMs = 1200) => {
+  const w = window as any;
+  if (typeof w.requestIdleCallback === 'function') {
+    w.requestIdleCallback(() => fn(), { timeout: timeoutMs });
+    return;
+  }
+  window.setTimeout(fn, 0);
+};
+
 // Helper to strip functions from objects before postMessage (functions can't be cloned)
 const stripFunctions = (obj: any): any => {
   if (obj === null || obj === undefined) return obj;
@@ -136,13 +145,17 @@ const ReportBuilder: React.FC<ReportBuilderProps> = ({ project, onUpdateProject 
       autosaveTimerRef.current = window.setTimeout(() => {
         if (!editingPresentation) return;
         if (editingPresentation.id !== presentationId) return;
-        const updatedProject = updatePresentationSlides(normalizedProject, editingPresentation.id, slides);
-        if (name && name.trim() && name.trim() !== editingPresentation.name) {
-          const renamed = renamePresentation(updatedProject, editingPresentation.id, name.trim());
-          void persistProject(renamed);
-          return;
-        }
-        void persistProject(updatedProject);
+        runWhenIdle(() => {
+          if (!editingPresentation) return;
+          if (editingPresentation.id !== presentationId) return;
+          const updatedProject = updatePresentationSlides(normalizedProject, editingPresentation.id, slides);
+          if (name && name.trim() && name.trim() !== editingPresentation.name) {
+            const renamed = renamePresentation(updatedProject, editingPresentation.id, name.trim());
+            void persistProject(renamed);
+            return;
+          }
+          void persistProject(updatedProject);
+        }, 1500);
       }, 900);
     },
     [editingPresentation, normalizedProject, persistProject]

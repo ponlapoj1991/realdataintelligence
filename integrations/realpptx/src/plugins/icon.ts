@@ -245,15 +245,11 @@ const wrap = (component: Component) => {
     },
     setup(props: any, { attrs }: any) {
       return () => {
-        const sanitized: Record<string, any> = { ...(attrs as any) }
-        delete sanitized.theme
-        if (Array.isArray(sanitized.fill) || (sanitized.fill && typeof sanitized.fill === 'object')) {
-          delete sanitized.fill
+        const sanitized: Record<string, any> = {}
+        for (const key in (attrs as any)) {
+          if (key === 'theme' || key === 'color' || key === 'fill' || key === 'stroke') continue
+          sanitized[key] = (attrs as any)[key]
         }
-        if (Array.isArray(sanitized.stroke) || (sanitized.stroke && typeof sanitized.stroke === 'object')) {
-          delete sanitized.stroke
-        }
-        delete sanitized.color
 
         return h(component as any, {
           ...sanitized,

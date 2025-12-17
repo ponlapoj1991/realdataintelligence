@@ -1,8 +1,8 @@
-import { onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import type { ChartData, ChartOptions, ChartType } from '@/types/slides'
 import useCreateElement from './useCreateElement'
 import useSlideHandler from './useSlideHandler'
-import { useSlidesStore } from '@/store'
+import { useMainStore, useSlidesStore } from '@/store'
 
 interface DashboardChartMessage {
   chartType: ChartType
@@ -23,6 +23,7 @@ interface DashboardChartMessage {
 
 export default () => {
   const { createImageElement, createChartElement } = useCreateElement()
+  const mainStore = useMainStore()
   const slidesStore = useSlidesStore()
   const { resetSlides } = useSlideHandler()
   const HOST_SOURCE = 'realpptx'
@@ -34,6 +35,16 @@ export default () => {
   const lastSentAutosaveAt = ref<number>(0)
   const lastSlidesHash = ref<string>('')
   const lastStateHash = ref<string>('')
+  const autosaveDirty = ref(false)
+
+  const isInteracting = computed(() => {
+    return (
+      mainStore.canvasDragged ||
+      mainStore.isScaling ||
+      !!mainStore.creatingElement ||
+      mainStore.creatingCustomShape
+    )
+  })
 
   const hashString = (input: string) => {
     let hash = 5381
@@ -50,6 +61,15 @@ export default () => {
     catch {
       return ''
     }
+  }
+
+  const runWhenIdle = (fn: () => void, timeoutMs = 1200) => {
+    const w = window as any
+    if (typeof w.requestIdleCallback === 'function') {
+      w.requestIdleCallback(() => fn(), { timeout: timeoutMs })
+      return
+    }
+    window.setTimeout(fn, 0)
   }
 
   const applyHostSettings = (payload?: {
@@ -300,30 +320,46 @@ export default () => {
     window.removeEventListener('message', handleMessage)
   })
 
-  watch(
-    () => [slidesStore.slides, slidesStore.title, slidesStore.theme, presentationId.value],
-    () => {
+  const scheduleAutosave = (delayMs = 1200) => {
+    if (!presentationId.value) return
+    if (!autosaveDirty.value) return
+    if (autosaveTimer.value) window.clearTimeout(autosaveTimer.value)
+    autosaveTimer.value = window.setTimeout(() => {
       if (!presentationId.value) return
+      if (!autosaveDirty.value) return
       if (applyingHostUpdate.value) return
-      lastLocalMutationAt.value = Date.now()
-      if (autosaveTimer.value) window.clearTimeout(autosaveTimer.value)
-      autosaveTimer.value = window.setTimeout(() => {
+      if (isInteracting.value) {
+        scheduleAutosave(800)
+        return
+      }
+
+      runWhenIdle(() => {
         if (!presentationId.value) return
+        if (!autosaveDirty.value) return
         if (applyingHostUpdate.value) return
+        if (isInteracting.value) return
 
-        const slides = JSON.parse(JSON.stringify(slidesStore.slides || []))
-        const theme = JSON.parse(JSON.stringify(slidesStore.theme || {}))
-        const title = slidesStore.title
+        const payloadJson = JSON.stringify({
+          slides: slidesStore.slides || [],
+          title: slidesStore.title,
+          theme: slidesStore.theme || {},
+        })
 
-        const nextStateHash = hashSlides({ slides, title, theme })
-        if (nextStateHash && nextStateHash === lastStateHash.value) return
+        const nextStateHash = hashString(payloadJson)
+        if (nextStateHash && nextStateHash === lastStateHash.value) {
+          autosaveDirty.value = false
+          return
+        }
+
+        const payload = JSON.parse(payloadJson) as { slides: any[]; title: string; theme: any }
+
         lastStateHash.value = nextStateHash
-
-        const nextSlidesHash = hashSlides(slides)
+        const nextSlidesHash = hashSlides(payload.slides)
         if (nextSlidesHash) lastSlidesHash.value = nextSlidesHash
 
-        if (lastSentAutosaveAt.value > 0 && lastLocalMutationAt.value - lastSentAutosaveAt.value < 800) return
-        lastSentAutosaveAt.value = lastLocalMutationAt.value
+        const now = Date.now()
+        if (lastSentAutosaveAt.value > 0 && now - lastSentAutosaveAt.value < 800) return
+        lastSentAutosaveAt.value = now
 
         window.parent?.postMessage(
           {
@@ -331,15 +367,38 @@ export default () => {
             type: 'autosave-presentation',
             payload: {
               presentationId: presentationId.value,
-              slides,
-              title,
-              theme,
+              slides: payload.slides,
+              title: payload.title,
+              theme: payload.theme,
             },
           },
           '*'
         )
-      }, 1200)
+
+        autosaveDirty.value = false
+      }, 1500)
+    }, delayMs)
+  }
+
+  watch(
+    () => [slidesStore.slides, slidesStore.title, slidesStore.theme, presentationId.value],
+    () => {
+      if (!presentationId.value) return
+      if (applyingHostUpdate.value) return
+      autosaveDirty.value = true
+      lastLocalMutationAt.value = Date.now()
+      if (isInteracting.value) return
+      scheduleAutosave(1200)
     },
     { deep: true }
+  )
+
+  watch(
+    () => isInteracting.value,
+    (now, prev) => {
+      if (prev && !now && autosaveDirty.value) {
+        scheduleAutosave(500)
+      }
+    }
   )
 }
