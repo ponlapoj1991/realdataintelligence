@@ -2,7 +2,7 @@
 import { DashboardWidget, Project, RawRow, ReportElement, ReportSlide, TableCell } from '../types';
 import { buildDashboardChartPayload } from './dashboardChartPayload';
 import type { DashboardChartInsertPayload } from './dashboardChartPayload';
-import { PPTIST_CHART_THEME } from '../constants/chartTheme';
+import { REALPPTX_CHART_THEME } from '../constants/chartTheme';
 import type { ChartTheme } from '../constants/chartTheme';
 
 export const generatePowerPoint = async (
@@ -14,13 +14,13 @@ export const generatePowerPoint = async (
   theme?: ChartTheme
 ) => {
   if (!window.PptxGenJS) {
-    alert("Export libraries are not fully loaded. Please refresh the page.");
+    alert('Export unavailable: libraries are still loading.');
     return;
   }
 
   const canRasterize = !!window.html2canvas;
   const exportRows = rows || [];
-  const exportTheme = theme || PPTIST_CHART_THEME;
+  const exportTheme = theme || REALPPTX_CHART_THEME;
 
   const toHex = (color?: string) => (color ? color.replace('#', '') : undefined);
 

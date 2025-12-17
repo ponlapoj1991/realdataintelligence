@@ -27,6 +27,6 @@
     "noEmit": true
   },
   "exclude": [
-    "integrations/pptist/**"
+    "integrations/realpptx/**"
   ]
 }

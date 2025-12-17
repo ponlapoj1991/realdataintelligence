@@ -36,7 +36,7 @@ import {
 import { ensureDataSources } from '../utils/dataSources';
 import { resolveDashboardBaseData } from '../utils/dashboardData';
 import { saveProject } from '../utils/storage-compat';
-import { PPTIST_CHART_THEME } from '../constants/chartTheme';
+import { REALPPTX_CHART_THEME } from '../constants/chartTheme';
 import { buildMagicChartPayload } from '../utils/magicChartPayload';
 import { buildMagicEchartsOption } from '../utils/magicOptionBuilder';
 import { exportToExcel } from '../utils/excel';
@@ -382,7 +382,7 @@ const DashboardMagic: React.FC<DashboardMagicProps> = ({ project, onUpdateProjec
 
   const handleExportWidget = (widget: DashboardWidget) => {
     const payload = buildMagicChartPayload(widget, filteredData, {
-      theme: PPTIST_CHART_THEME,
+      theme: REALPPTX_CHART_THEME,
       sourceDashboardId: editingDashboard?.id,
     });
     if (!payload) {
@@ -417,7 +417,7 @@ const DashboardMagic: React.FC<DashboardMagicProps> = ({ project, onUpdateProjec
         filtersStr,
         widgets,
         filteredData,
-        PPTIST_CHART_THEME
+        REALPPTX_CHART_THEME
       );
     } catch (e) {
       console.error('PPT export failed:', e);
@@ -562,7 +562,7 @@ const DashboardMagic: React.FC<DashboardMagicProps> = ({ project, onUpdateProjec
           <div>
             <h1 className="text-2xl font-bold text-gray-900">Dashboard Magic</h1>
             <p className="text-sm text-gray-500 mt-1">
-              Create ECharts dashboards that stay compatible with PPTist.
+              Create ECharts dashboards that stay compatible with RealPPTX.
             </p>
           </div>
           <button
@@ -641,7 +641,7 @@ const DashboardMagic: React.FC<DashboardMagicProps> = ({ project, onUpdateProjec
           <div className="bg-white rounded-xl shadow-2xl w-full max-w-md p-6 space-y-4">
             <h3 className="text-lg font-bold text-gray-900">Create Magic Dashboard</h3>
             <p className="text-sm text-gray-500">
-              Organize charts for PPTist-compatible rendering.
+              Organize charts for RealPPTX-compatible rendering.
             </p>
             <div>
               <label className="text-xs font-semibold text-gray-600">Dashboard Name</label>
@@ -998,7 +998,7 @@ const DashboardMagic: React.FC<DashboardMagicProps> = ({ project, onUpdateProjec
                             widget={widget}
                             data={filteredData}
                             filters={widget.filters}
-                            theme={PPTIST_CHART_THEME}
+                            theme={REALPPTX_CHART_THEME}
                           />
                           
                           {/* Resize Handle */}
@@ -1046,7 +1046,7 @@ const DashboardMagic: React.FC<DashboardMagicProps> = ({ project, onUpdateProjec
         availableColumns={availableColumns}
         initialWidget={editingWidget}
         data={filteredData}
-        chartTheme={PPTIST_CHART_THEME}
+        chartTheme={REALPPTX_CHART_THEME}
       />
 
       {/* Drill Down Modal */}

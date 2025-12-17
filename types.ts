@@ -482,7 +482,7 @@ export interface Project {
   dashboards?: ProjectDashboard[];
   activeDashboardId?: string;
 
-  // Magic Dashboard (ECharts-based, PPTist-compatible)
+  // Magic Dashboard (ECharts-based, RealPPTX-compatible)
   magicDashboards?: ProjectDashboard[];
   activeMagicDashboardId?: string;
   

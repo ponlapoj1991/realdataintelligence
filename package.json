@@ -5,11 +5,11 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "postinstall": "npm --prefix integrations/pptist install --ignore-scripts",
-    "build:pptist": "npm --prefix integrations/pptist run build && node scripts/sync-pptist-assets.mjs",
-    "build": "npm run build:pptist && vite build",
+    "postinstall": "npm --prefix integrations/realpptx install --ignore-scripts",
+    "build:realpptx": "npm --prefix integrations/realpptx run build && node scripts/sync-realpptx-assets.mjs",
+    "build": "npm run build:realpptx && vite build",
     "preview": "vite preview",
-    "translate:pptist": "node scripts/generate-translations.mjs"
+    "translate:realpptx": "node scripts/generate-translations.mjs"
   },
   "dependencies": {
     "@google/genai": "^1.30.0",

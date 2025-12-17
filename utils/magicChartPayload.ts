@@ -19,7 +19,7 @@ export interface MagicChartPayload {
 
 /**
  * Build Magic (ECharts) payload by reusing existing DashboardChart payload logic.
- * This keeps data fidelity identical to PPTist expectations.
+ * This keeps data fidelity identical to RealPPTX expectations.
  */
 export const buildMagicChartPayload = (
   widget: DashboardWidget,

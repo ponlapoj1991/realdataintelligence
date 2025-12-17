@@ -69,4 +69,10 @@ export const PPTIST_CHART_THEME: ChartTheme = {
   },
 };
 
-export const CHART_THEMES: ChartTheme[] = [CLASSIC_ANALYTICS_THEME, PPTIST_CHART_THEME];
+export const REALPPTX_CHART_THEME: ChartTheme = {
+  ...PPTIST_CHART_THEME,
+  id: 'realpptx',
+  name: 'RealPPTX',
+};
+
+export const CHART_THEMES: ChartTheme[] = [CLASSIC_ANALYTICS_THEME, REALPPTX_CHART_THEME];
