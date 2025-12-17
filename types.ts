@@ -299,6 +299,9 @@ export interface DashboardWidget {
   strokeWidth?: number;
   strokeStyle?: 'solid' | 'dashed' | 'dotted';
 
+  // KPI (Number) Specific
+  kpiCountMode?: 'row' | 'group';
+
   limit?: number;         // Limit rows (Top 10, 20, etc)
   sortBy?: SortOrder;     // Sort order for data
   categoryFilter?: string[]; // Selected categories to show (empty = show all)

@@ -18,7 +18,7 @@
  * 5. Double-click colors
  */
 
-import React, { useState, useEffect, useMemo, useCallback } from 'react';
+import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { X, Save, ChevronDown, ChevronUp, Palette, Type as TypeIcon, Sliders as SlidersIcon, Plus, Trash2, Edit as EditIcon, Search } from 'lucide-react';
 import {
   ChartType,
@@ -448,6 +448,7 @@ const [sortSeriesId, setSortSeriesId] = useState('');
   // Legacy single-series (for backward compatibility)
   const [measure, setMeasure] = useState<AggregateMethod>('count');
   const [measureCol, setMeasureCol] = useState('');
+  const [kpiCountMode, setKpiCountMode] = useState<'row' | 'group'>('row');
   const [categoryConfig, setCategoryConfig] = useState<Record<string, CategoryConfig>>({});
   const [primaryColor, setPrimaryColor] = useState<string>(CLASSIC_ANALYTICS_THEME.palette[0] || '#3B82F6');
 
@@ -508,6 +509,7 @@ const [sortSeriesId, setSortSeriesId] = useState('');
     setSortSeriesId('');
     setMeasure('count');
     setMeasureCol('');
+    setKpiCountMode('row');
     setCategoryConfig({});
     setPrimaryColor(CLASSIC_ANALYTICS_THEME.palette[0] || '#3B82F6');
     setChartTitle('');
@@ -549,6 +551,7 @@ const [sortSeriesId, setSortSeriesId] = useState('');
       setCategoryFilter(initialWidget.categoryFilter || []);
       setChartTitle(initialWidget.chartTitle || initialWidget.title);
       setSubtitle(initialWidget.subtitle || '');
+      setKpiCountMode(initialWidget.kpiCountMode || 'row');
 
       if (initialWidget.series && initialWidget.series.length > 0) {
         setSeries(initialWidget.series);
@@ -640,6 +643,34 @@ const [sortSeriesId, setSortSeriesId] = useState('');
     return Array.from(unique).sort();
   }, [dimension, data]);
 
+  const kpiCategories = useMemo(() => {
+    if (type !== 'kpi') return [];
+    if (measure !== 'count') return [];
+    if (!measureCol) return [];
+    const unique = new Set<string>();
+    data.forEach((row) => {
+      const raw = row[measureCol];
+      if (raw === null || raw === undefined) return;
+      const s = String(raw).trim();
+      if (!s) return;
+      unique.add(s);
+    });
+    return Array.from(unique).sort();
+  }, [type, measure, measureCol, data]);
+
+  const prevKpiColRef = useRef<string>('');
+  useEffect(() => {
+    if (type !== 'kpi') return;
+    if (measure !== 'count') return;
+    if (kpiCountMode !== 'group') return;
+    const prev = prevKpiColRef.current;
+    if (prev && prev !== measureCol) {
+      setCategoryFilter([]);
+      setCategorySearch('');
+    }
+    prevKpiColRef.current = measureCol;
+  }, [type, measure, kpiCountMode, measureCol]);
+
   const toggleSection = (section: string) => {
     const newSections = new Set(openSections);
     if (newSections.has(section)) {
@@ -666,7 +697,11 @@ const [sortSeriesId, setSortSeriesId] = useState('');
       series,
       xDimension,
       yDimension,
-      sizeDimension
+      sizeDimension,
+      xMeasure,
+      xMeasureCol,
+      yMeasure,
+      yMeasureCol
     });
 
     if (errors.length > 0) {
@@ -715,10 +750,10 @@ const [sortSeriesId, setSortSeriesId] = useState('');
       colorBy: colorBy || undefined,
 
       // Scatter XY (dual aggregation)
-      xMeasure: type === 'scatter' ? xMeasure : undefined,
-      xMeasureCol: type === 'scatter' && (xMeasure === 'sum' || xMeasure === 'avg') ? xMeasureCol : undefined,
-      yMeasure: type === 'scatter' ? yMeasure : undefined,
-      yMeasureCol: type === 'scatter' && (yMeasure === 'sum' || yMeasure === 'avg') ? yMeasureCol : undefined,
+      xMeasure: (type === 'scatter' || type === 'bubble') ? xMeasure : undefined,
+      xMeasureCol: (type === 'scatter' || type === 'bubble') && (xMeasure === 'sum' || xMeasure === 'avg') ? xMeasureCol : undefined,
+      yMeasure: (type === 'scatter' || type === 'bubble') ? yMeasure : undefined,
+      yMeasureCol: (type === 'scatter' || type === 'bubble') && (yMeasure === 'sum' || yMeasure === 'avg') ? yMeasureCol : undefined,
 
       // Pie/Donut
       innerRadius: type === 'donut' ? innerRadius : undefined,
@@ -727,7 +762,10 @@ const [sortSeriesId, setSortSeriesId] = useState('');
       // Line
       curveType: (type === 'line' || type === 'smooth-line' || type?.includes('area')) ? curveType : undefined,
       strokeWidth: (type === 'line' || type === 'smooth-line' || type?.includes('area')) ? strokeWidth : undefined,
-      strokeStyle: (type === 'line' || type === 'smooth-line' || type?.includes('area')) ? strokeStyle : undefined
+      strokeStyle: (type === 'line' || type === 'smooth-line' || type?.includes('area')) ? strokeStyle : undefined,
+
+      // KPI
+      kpiCountMode: type === 'kpi' ? kpiCountMode : undefined
     };
 
     // Add series for multi-series charts
@@ -788,6 +826,10 @@ const [sortSeriesId, setSortSeriesId] = useState('');
   };
 
   const handleSelectAllCategories = () => {
+    if (type === 'kpi' && measure === 'count' && kpiCountMode === 'group') {
+      setCategoryFilter([...kpiCategories]);
+      return;
+    }
     setCategoryFilter([...allCategories]);
   };
 
@@ -820,6 +862,7 @@ const [sortSeriesId, setSortSeriesId] = useState('');
     setSortSeriesId('');
     setMeasure('count');
     setMeasureCol('');
+    setKpiCountMode('row');
     setCategoryFilter([]);
     setCategoryConfig({});
     setPrimaryColor(CLASSIC_ANALYTICS_THEME.palette[0] || '#3B82F6');
@@ -827,6 +870,10 @@ const [sortSeriesId, setSortSeriesId] = useState('');
     setYDimension('');
     setSizeDimension('');
     setColorBy('');
+    setXMeasure('count');
+    setXMeasureCol('');
+    setYMeasure('sum');
+    setYMeasureCol('');
     setInnerRadius(selectedType === 'donut' ? 50 : 0);
     setStartAngle(0);
     setCurveType(selectedType === 'smooth-line' ? 'monotone' : 'linear');
@@ -884,12 +931,29 @@ const [sortSeriesId, setSortSeriesId] = useState('');
       stackBy,
       measure,
       measureCol,
+      xMeasure,
+      xMeasureCol,
+      yMeasure,
+      yMeasureCol,
       xDimension,
       yDimension,
       sizeDimension,
       colorBy
     }),
-    [dimension, stackBy, measure, measureCol, xDimension, yDimension, sizeDimension, colorBy]
+    [
+      dimension,
+      stackBy,
+      measure,
+      measureCol,
+      xMeasure,
+      xMeasureCol,
+      yMeasure,
+      yMeasureCol,
+      xDimension,
+      yDimension,
+      sizeDimension,
+      colorBy
+    ]
   );
   const fieldErrors = useMemo(
     () => buildFieldErrors(type, fieldState, columnProfiles),
@@ -914,10 +978,10 @@ const [sortSeriesId, setSortSeriesId] = useState('');
       yDimension: yDimension || undefined,
       sizeDimension: sizeDimension || undefined,
       colorBy: colorBy || undefined,
-      xMeasure: type === 'scatter' ? xMeasure : undefined,
-      xMeasureCol: type === 'scatter' && (xMeasure === 'sum' || xMeasure === 'avg') ? xMeasureCol : undefined,
-      yMeasure: type === 'scatter' ? yMeasure : undefined,
-      yMeasureCol: type === 'scatter' && (yMeasure === 'sum' || yMeasure === 'avg') ? yMeasureCol : undefined,
+      xMeasure: (type === 'scatter' || type === 'bubble') ? xMeasure : undefined,
+      xMeasureCol: (type === 'scatter' || type === 'bubble') && (xMeasure === 'sum' || xMeasure === 'avg') ? xMeasureCol : undefined,
+      yMeasure: (type === 'scatter' || type === 'bubble') ? yMeasure : undefined,
+      yMeasureCol: (type === 'scatter' || type === 'bubble') && (yMeasure === 'sum' || yMeasure === 'avg') ? yMeasureCol : undefined,
       chartTitle: chartTitle || title,
       subtitle,
       legend,
@@ -940,7 +1004,8 @@ const [sortSeriesId, setSortSeriesId] = useState('');
       leftYAxis,
       rightYAxis,
       showGrid,
-      valueFormat
+      valueFormat,
+      kpiCountMode: type === 'kpi' ? kpiCountMode : undefined
     } as DashboardWidget;
   }, [
     type,
@@ -984,7 +1049,8 @@ const [sortSeriesId, setSortSeriesId] = useState('');
     rightYAxis,
     showGrid,
     valueFormat,
-    sortSeriesId
+    sortSeriesId,
+    kpiCountMode
   ]);
   const showAxes = Boolean(supports?.axes);
   const isComboChart = type === 'combo';
@@ -1233,6 +1299,9 @@ const [sortSeriesId, setSortSeriesId] = useState('');
                     onSeriesChange={handleSeriesChange}
                     xAxisMajor={typeof xAxis.major === 'number' ? xAxis.major : 0}
                     setXAxisMajor={(val) => setXAxis({ ...xAxis, major: val > 0 ? val : undefined })}
+                    kpiCountMode={kpiCountMode}
+                    setKpiCountMode={setKpiCountMode}
+                    kpiCategories={kpiCategories}
                   />
                 </div>
               )}

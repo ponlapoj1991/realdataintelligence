@@ -229,10 +229,45 @@ export const aggregateWidgetData = (
     const measure = widget.measure || 'count';
     let value = 0;
     if (measure === 'count') {
-      value = rows.length;
+      const col = widget.measureCol;
+      if (!col) {
+        // Backward compatibility: old KPI count = row count
+        value = rows.length;
+      } else if (widget.kpiCountMode === 'group') {
+        const excluded = new Set(widget.categoryFilter || []);
+        const counts: Record<string, number> = {};
+
+        rows.forEach((row) => {
+          const raw = row[col];
+          if (raw === null || raw === undefined) return;
+          const s = String(raw).trim();
+          if (!s) return;
+          counts[s] = (counts[s] || 0) + 1;
+        });
+
+        value = Object.entries(counts).reduce((sum, [cat, cnt]) => {
+          if (excluded.has(cat)) return sum;
+          return sum + cnt;
+        }, 0);
+      } else {
+        value = rows.reduce((acc, row) => {
+          const raw = row[col];
+          if (raw === null || raw === undefined) return acc;
+          if (typeof raw === 'string' && raw.trim() === '') return acc;
+          return acc + 1;
+        }, 0);
+      }
     } else if ((measure === 'sum' || measure === 'avg') && widget.measureCol) {
-      const sum = rows.reduce((acc, row) => acc + (Number(row[widget.measureCol!]) || 0), 0);
-      value = measure === 'avg' ? (rows.length > 0 ? sum / rows.length : 0) : sum;
+      let sum = 0;
+      let count = 0;
+      rows.forEach((row) => {
+        const raw = row[widget.measureCol!];
+        const n = Number(raw);
+        if (!Number.isFinite(n)) return;
+        sum += n;
+        count += 1;
+      });
+      value = measure === 'avg' ? (count > 0 ? sum / count : 0) : sum;
     }
     return { data: [{ name: 'Value', value }], isStack: false };
   }
@@ -433,7 +468,7 @@ export const aggregateWidgetData = (
     ? inferTemporalOrSequential(rows.map(r => r[widget.dimension]))
     : null;
   const sortOverride =
-    inferredForLine && (!widget.sortBy || widget.sortBy === 'value-desc' || widget.sortBy === 'value-asc')
+    inferredForLine && (!widget.sortBy || widget.sortBy === 'original')
       ? 'name-asc'
       : widget.sortBy;
 
