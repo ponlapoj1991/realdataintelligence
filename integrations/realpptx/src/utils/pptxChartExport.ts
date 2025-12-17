@@ -15,6 +15,11 @@ export function addChartElementToSlide(params: {
 }) {
   const { pptx, pptxSlide, el, ratioPx2Inch, ratioPx2Pt, formatColor } = params
 
+  const roundFixed = (value: number, decimals: number) => {
+    if (!Number.isFinite(value)) return 0
+    return Number(value.toFixed(decimals))
+  }
+
   const asFiniteNumber = (value: any, fallback = 0) => {
     const n = typeof value === 'number' ? value : Number(value)
     return Number.isFinite(n) ? n : fallback
@@ -24,22 +29,61 @@ export function addChartElementToSlide(params: {
     return Math.max(0, asFiniteNumber(value, fallback))
   }
 
+  const sanitizeXmlText = (value: any) => {
+    const raw = (value === null || value === undefined) ? '' : String(value)
+    // Remove characters that commonly break OOXML when not escaped correctly
+    const cleaned = raw
+      .replace(/[<>&]/g, '')
+      .replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F]/g, '')
+      .replace(/\s+/g, ' ')
+      .trim()
+    return cleaned
+  }
+
+  const makeUniqueNames = (items: string[], fallbackPrefix: string) => {
+    const bases = items.map((item, idx) => {
+      const cleaned = sanitizeXmlText(item)
+      return cleaned || `${fallbackPrefix} ${idx + 1}`
+    })
+
+    const counts = new Map<string, number>()
+    for (const b of bases) counts.set(b, (counts.get(b) || 0) + 1)
+
+    const seen = new Map<string, number>()
+    return bases.map((b) => {
+      const total = counts.get(b) || 0
+      if (total <= 1) return b
+      const next = (seen.get(b) || 0) + 1
+      seen.set(b, next)
+      return `${b} ${next}`
+    })
+  }
+
   const normalizeLabels = (labels: any[]) => {
-    return (Array.isArray(labels) ? labels : []).map(v => (v === null || v === undefined) ? '' : String(v))
+    const raw = (Array.isArray(labels) ? labels : []).map(v => (v === null || v === undefined) ? '' : String(v))
+    const safe = makeUniqueNames(raw, 'Label')
+    // Ensure no empty labels for OOXML stability
+    return safe.length ? safe : ['Label 1']
   }
 
   const normalizeSeries = (series: any[]) => {
     const src = Array.isArray(series) ? series : []
     return src.map(row => {
       const arr = Array.isArray(row) ? row : []
-      return arr.map(v => (v === null || v === undefined || v === '') ? 0 : asFiniteNumber(v, 0))
+      return arr.map(v => {
+        const n = (v === null || v === undefined || v === '') ? 0 : asFiniteNumber(v, 0)
+        return roundFixed(n, 2)
+      })
     })
   }
 
   // Normalize & validate chart payload first to avoid invalid OOXML (NaN/undefined/null)
   const labels = normalizeLabels(el.data?.labels || [])
   const series = normalizeSeries(el.data?.series || [])
-  const legends = Array.isArray(el.data?.legends) ? el.data.legends.map(v => (v === null || v === undefined) ? '' : String(v)) : []
+  const legendsRaw = Array.isArray(el.data?.legends)
+    ? el.data.legends.map(v => (v === null || v === undefined) ? '' : String(v))
+    : []
+  const legends = makeUniqueNames(legendsRaw.length ? legendsRaw : series.map((_, idx) => `Series ${idx + 1}`), 'Series')
 
   if (!series.length) return
 
@@ -74,7 +118,7 @@ export function addChartElementToSlide(params: {
 
   // On-screen palette logic: `seriesColors` (if provided) overrides theme palette
   const seriesPalette = (() => {
-    const seriesColors = (el.data.seriesColors || []).filter(Boolean).map(color => toPptxHex(color))
+    const seriesColors = (el.data?.seriesColors || []).filter(Boolean).map(color => toPptxHex(color))
     return seriesColors.length ? seriesColors : themePalette.length ? themePalette : ['000000']
   })()
 
@@ -151,10 +195,10 @@ export function addChartElementToSlide(params: {
 
   const axisFontSizePx = scaleFontPx(el.options?.axisLabelFontSize ?? 12)
 
-  const x = clampNonNegative(el.left) / ratioPx2Inch
-  const y = clampNonNegative(el.top) / ratioPx2Inch
-  const w = clampNonNegative(el.width) / ratioPx2Inch
-  const h = clampNonNegative(el.height) / ratioPx2Inch
+  const x = roundFixed(clampNonNegative(el.left) / ratioPx2Inch, 4)
+  const y = roundFixed(clampNonNegative(el.top) / ratioPx2Inch, 4)
+  const w = roundFixed(clampNonNegative(el.width) / ratioPx2Inch, 4)
+  const h = roundFixed(clampNonNegative(el.height) / ratioPx2Inch, 4)
   if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(w) || !Number.isFinite(h)) return
   if (w <= 0 || h <= 0) return
 
@@ -171,18 +215,18 @@ export function addChartElementToSlide(params: {
   if (isPieLike) {
     options.chartColors = Array.from({ length: pointCount }, (_, idx) => resolveDataPointColor(idx))
   }
-  else if (isBarLike && el.data.series.length === 1 && hasPerPointColors) {
+  else if (isBarLike && series.length === 1 && hasPerPointColors) {
     options.chartColors = Array.from({ length: pointCount }, (_, idx) => resolveDataPointColor(idx))
   }
   else if (isScatter) {
-    options.chartColors = fallbackPalette.slice(0, Math.max(1, el.data.series.length - 1))
+    options.chartColors = fallbackPalette.slice(0, Math.max(1, series.length - 1))
   }
   else if (isCombo) {
     // set later after multi chart build (order-sensitive)
     options.chartColors = fallbackPalette.slice()
   }
   else {
-    options.chartColors = fallbackPalette.slice(0, Math.max(1, el.data.series.length))
+    options.chartColors = fallbackPalette.slice(0, Math.max(1, series.length))
   }
 
   // Axis text
@@ -219,7 +263,7 @@ export function addChartElementToSlide(params: {
 
   // Legend
   const legendEnabled = el.options?.legendEnabled !== false
-  const shouldShowLegend = legendEnabled && el.data.series.length > 1 && !isScatter
+  const shouldShowLegend = legendEnabled && series.length > 1 && !isScatter
   if (shouldShowLegend) {
     options.showLegend = true
     options.legendPos = mapLegendPos(el.options?.legendPosition)
@@ -262,15 +306,20 @@ export function addChartElementToSlide(params: {
   // Build data payloads
   const chartData: any[] = []
   if (isScatter) {
-    const xValues = (series[0] || []).map(v => asFiniteNumber(v, 0))
+    const xValues = (series[0] || []).map(v => roundFixed(asFiniteNumber(v, 0), 2))
     const ySeries = series.slice(1)
     if (!xValues.length || !ySeries.length) return
 
-    chartData.push({ name: 'X', values: xValues })
+    let minLen = xValues.length
+    const yValuesList = ySeries.map((row) => (row || []).map(v => roundFixed(asFiniteNumber(v, 0), 2)))
+    for (const row of yValuesList) minLen = Math.min(minLen, row.length)
+    if (minLen <= 0) return
+
+    chartData.push({ name: 'X', values: xValues.slice(0, minLen) })
     for (let i = 0; i < ySeries.length; i++) {
       chartData.push({
         name: legends?.[i] || `Series ${i + 1}`,
-        values: (ySeries[i] || []).map(v => asFiniteNumber(v, 0)),
+        values: (yValuesList[i] || []).slice(0, minLen),
       })
     }
   }
@@ -286,7 +335,7 @@ export function addChartElementToSlide(params: {
     const targetLen = normalizedLabels.length
 
     for (let i = 0; i < series.length; i++) {
-      const values = (series[i] || []).slice(0, targetLen)
+      const values = (series[i] || []).slice(0, targetLen).map(v => roundFixed(asFiniteNumber(v, 0), 2))
       while (values.length < targetLen) values.push(0)
       chartData.push({
         name: legends?.[i] || `Series ${i + 1}`,
@@ -345,42 +394,44 @@ export function addChartElementToSlide(params: {
   if (el.chartType === 'combo') {
     // Build multi-type chart (bar/line/area) - still editable in PowerPoint
     const seriesTypes =
-      el.options?.seriesTypes && el.options.seriesTypes.length === el.data.series.length
+      el.options?.seriesTypes && el.options.seriesTypes.length === series.length
         ? el.options.seriesTypes
-        : el.data.series.map(() => 'bar')
+        : series.map(() => 'bar')
 
     const barData: any[] = []
     const lineData: any[] = []
     const areaData: any[] = []
-    const concatOrderColors: string[] = []
+    const barColorIndex: number[] = []
+    const lineColorIndex: number[] = []
+    const areaColorIndex: number[] = []
 
-    for (let i = 0; i < el.data.series.length; i++) {
+    for (let i = 0; i < series.length; i++) {
       const seriesType = seriesTypes[i] || 'bar'
       const obj = {
-        _srcIndex: i,
-        name: el.data.legends?.[i] || `Series ${i + 1}`,
-        labels: el.data.labels,
-        values: el.data.series[i],
+        name: legends[i] || `Series ${i + 1}`,
+        labels,
+        values: series[i],
       }
-      if (seriesType === 'line') lineData.push(obj)
-      else if (seriesType === 'area') areaData.push(obj)
-      else barData.push(obj)
+      if (seriesType === 'line') {
+        lineData.push(obj)
+        lineColorIndex.push(i)
+      }
+      else if (seriesType === 'area') {
+        areaData.push(obj)
+        areaColorIndex.push(i)
+      }
+      else {
+        barData.push(obj)
+        barColorIndex.push(i)
+      }
     }
 
     // Preserve colors in the same order as the library concatenates data: bar, then line, then area
-    for (const obj of barData) {
-      const idx = obj._srcIndex as number
-      concatOrderColors.push(fallbackPalette[idx % fallbackPalette.length] || fallbackPalette[0] || '000000')
-    }
-    for (const obj of lineData) {
-      const idx = obj._srcIndex as number
-      concatOrderColors.push(fallbackPalette[idx % fallbackPalette.length] || fallbackPalette[0] || '000000')
-    }
-    for (const obj of areaData) {
-      const idx = obj._srcIndex as number
-      concatOrderColors.push(fallbackPalette[idx % fallbackPalette.length] || fallbackPalette[0] || '000000')
-    }
-    options.chartColors = concatOrderColors.length ? concatOrderColors : fallbackPalette.slice(0, Math.max(1, el.data.series.length))
+    const concatOrderColors: string[] = []
+    for (const idx of barColorIndex) concatOrderColors.push(fallbackPalette[idx % fallbackPalette.length] || fallbackPalette[0] || '000000')
+    for (const idx of lineColorIndex) concatOrderColors.push(fallbackPalette[idx % fallbackPalette.length] || fallbackPalette[0] || '000000')
+    for (const idx of areaColorIndex) concatOrderColors.push(fallbackPalette[idx % fallbackPalette.length] || fallbackPalette[0] || '000000')
+    options.chartColors = concatOrderColors.length ? concatOrderColors : fallbackPalette.slice(0, Math.max(1, series.length))
 
     const multi: any[] = []
     if (barData.length) multi.push({ type: pptx.ChartType.bar, data: barData })
@@ -391,7 +442,7 @@ export function addChartElementToSlide(params: {
     if (el.options?.percentStack) options.barGrouping = 'percentStacked'
     else if (el.options?.stack) options.barGrouping = 'stacked'
 
-    pptxSlide.addChart(multi as any, undefined as any, options)
+    ;(pptxSlide as any).addChart(multi as any, options)
     return
   }
 
