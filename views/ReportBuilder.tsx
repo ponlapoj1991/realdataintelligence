@@ -107,6 +107,10 @@ const ReportBuilder: React.FC<ReportBuilderProps> = ({ project, onUpdateProject 
 
   const autosaveTimerRef = useRef<number | null>(null);
 
+  const editingPresentation =
+    presentations.find((p) => p.id === (selectedPresentationId || normalizedProject.activePresentationId)) ||
+    activePresentation;
+
   const queueAutosave = useCallback(
     (presentationId: string, slides: ReportSlide[], name?: string) => {
       if (autosaveTimerRef.current) {
@@ -127,9 +131,6 @@ const ReportBuilder: React.FC<ReportBuilderProps> = ({ project, onUpdateProject 
     [editingPresentation, normalizedProject, persistProject]
   );
 
-  const editingPresentation =
-    presentations.find((p) => p.id === (selectedPresentationId || normalizedProject.activePresentationId)) ||
-    activePresentation;
   const selectedDashboard =
     dashboardsForInsert.find((dash) => dash.id === selectedDashboardId) || dashboardsForInsert[0];
 
