@@ -13,7 +13,7 @@
     "prepare": "husky install"
   },
   "author": "pipipi_pikachu@163.com",
-  "homepage": "https://github.com/pipipi-pikachu/PPTist",
+  "homepage": "https://github.com/ponlapoj1991/realdataintelligence",
   "dependencies": {
     "animate.css": "^4.1.1",
     "axios": "^1.7.9",

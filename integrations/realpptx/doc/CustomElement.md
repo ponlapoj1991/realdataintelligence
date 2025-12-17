@@ -1,7 +1,7 @@
 ## 如何自定义一个元素
 
 我们以【网页元素】为例，来梳理下自定义一个元素的过程。
-> 完整代码在 https://github.com/pipipi-pikachu/PPTist/tree/document-demo
+> 参考代码（上游示例）：见上游文档分支（document demo）
 
 > 注意：由于版本更新，该文档和仓库中的代码并不是直接复制粘贴就可以使用，这里仅提供思路。
 

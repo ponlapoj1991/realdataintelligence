@@ -40,4 +40,4 @@
 - `viewportRatio` 幻灯片可视区域比例（宽:高），默认16:9
 - `templates` 幻灯片模板
 
-具体类型的定义可见：[完整数据类型定义](https://github.com/pipipi-pikachu/PPTist/blob/master/src/types/slides.ts)
+具体类型的定义可见：`src/types/slides.ts`

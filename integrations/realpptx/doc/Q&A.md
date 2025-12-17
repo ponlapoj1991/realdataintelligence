@@ -64,19 +64,19 @@ A. 本项目优先兼容Chrome、Firefox。在Safari下可能存在部分兼容�
 
 #### Q. 为什么不是NPM包？
 
-A. 大家都知道，对于一般的插件/库而言，一个封装好的npm包能够更方便的接入现有的项目中，但PPTist是特殊的，这是一个完整的程序，而不是作为程序的一部分存在。如果你需要使用PPTist，那么我认为你必然需要在此基础上做很多定制化的开发，包括但不限于：与后台的通信、各种模板和预置素材、新的元素类型、使用其他方案实现现有的某些元素、自己的主题、更换快捷键，等等……而不是仅仅安装一个和现有demo一样的东西就行了（这样虽然方便，但在实际的产品开发中没有任何意义）。正如前面所列举的，需要可配置的东西太多了，如果作为一个插件的存在，很难兼顾得了，或者说这样做的开发量是巨大的，目前个人还承担不起。
+A. 大家都知道，对于一般的插件/库而言，一个封装好的npm包能够更方便的接入现有的项目中，但 RealPPTX 是特殊的，这是一个完整的程序，而不是作为程序的一部分存在。如果你需要使用 RealPPTX，那么我认为你必然需要在此基础上做很多定制化的开发，包括但不限于：与后台的通信、各种模板和预置素材、新的元素类型、使用其他方案实现现有的某些元素、自己的主题、更换快捷键，等等……而不是仅仅安装一个和现有demo一样的东西就行了（这样虽然方便，但在实际的产品开发中没有任何意义）。正如前面所列举的，需要可配置的东西太多了，如果作为一个插件的存在，很难兼顾得了，或者说这样做的开发量是巨大的，目前个人还承担不起。
 
-因此，使用PPTist开发项目正确的做法是：拉取完整的代码、尝试理解它、基于它改造你自己的东西。社区中也不乏类似的项目，例如 [drawio](https://github.com/jgraph/drawio)
+因此，使用 RealPPTX 开发项目正确的做法是：拉取完整的代码、尝试理解它、基于它改造你自己的东西。社区中也不乏类似的项目，例如 [drawio](https://github.com/jgraph/drawio)
 
 #### Q. 关于 AI PPT
 
-A. 首先需要说明，AIPPT不是PPTist的重点，现在或以后都不是，它只是PPTist众多功能中非常小的一部分而已，并且是比较简单一部分，你可以理解为这只是一个跟风的小功能点，我不想蹭AI的热度，但无奈太多人将AI看得太重要太复杂了，于是我做了这个DEMO（它真的没那么复杂），目前此功能仅作参考，内部实现了最基础的AIPPT生成逻辑，即：模板定制 + AI生成数据与模板结合 + 配图替换。为控制成本暂时只能做到这里，但为了达到生产环节的效果，你还需要做更多，例如更多的模板、更细致的AI工作流程。
+A. 首先需要说明，AIPPT不是 RealPPTX 的重点，现在或以后都不是，它只是 RealPPTX 众多功能中非常小的一部分而已，并且是比较简单一部分，你可以理解为这只是一个跟风的小功能点，我不想蹭AI的热度，但无奈太多人将AI看得太重要太复杂了，于是我做了这个DEMO（它真的没那么复杂），目前此功能仅作参考，内部实现了最基础的AIPPT生成逻辑，即：模板定制 + AI生成数据与模板结合 + 配图替换。为控制成本暂时只能做到这里，但为了达到生产环节的效果，你还需要做更多，例如更多的模板、更细致的AI工作流程。
 
 注：配图替换仅提供方法，不提供实际演示功能，你需要自己提供图片源接入（如AI文生图、图库搜索匹配等方法）
 
 #### Q. 其他
 
-A. 另外需要强调，PPTist只是一个开源项目而非面向普通用户的产品，主要提供的是技术解决方案，一些产品化的需求/优化还需要开发者自己去实现和完善。
+A. 另外需要强调，RealPPTX 只是一个开源项目而非面向普通用户的产品，主要提供的是技术解决方案，一些产品化的需求/优化还需要开发者自己去实现和完善。
 
 ## FAQ
 #### Q. Why doesn’t the xxx shortcut work?
@@ -143,9 +143,9 @@ A. This project prioritizes compatibility with Chrome and Firefox. There may be 
 
 #### Q. Why isn’t it an NPM package?
 
-A. Everyone knows that for general plugins/libraries, a well-packaged NPM package can more easily integrate into existing projects. However, PPTist is special; it is a complete program, not a part of another program. If you need to use PPTist, I believe you will necessarily need to do a lot of custom development based on it, including but not limited to: communication with the backend, various templates and pre-installed materials, new element types, using other solutions to implement certain existing elements, your own themes, changing shortcuts, and so on… It’s not just about installing something that is the same as the existing demo (which may be convenient but has no practical significance in actual product development). As previously mentioned, there are many things that need to be configurable, and it would be difficult to cater to all these needs if it were an NPM plugin. The development effort would be enormous, and currently, I cannot afford it.
+A. Everyone knows that for general plugins/libraries, a well-packaged NPM package can more easily integrate into existing projects. However, RealPPTX is special; it is a complete program, not a part of another program. If you need to use RealPPTX, I believe you will necessarily need to do a lot of custom development based on it, including but not limited to: communication with the backend, various templates and pre-installed materials, new element types, using other solutions to implement certain existing elements, your own themes, changing shortcuts, and so on… It’s not just about installing something that is the same as the existing demo (which may be convenient but has no practical significance in actual product development). As previously mentioned, there are many things that need to be configurable, and it would be difficult to cater to all these needs if it were an NPM plugin. The development effort would be enormous, and currently, I cannot afford it.
 
-Therefore, the correct way to develop a project using PPTist is to pull the complete code, try to understand it, and modify it to suit your own needs. There are also similar projects in the community, such as [drawio](https://github.com/jgraph/drawio).
+Therefore, the correct way to develop a project using RealPPTX is to pull the complete code, try to understand it, and modify it to suit your own needs. There are also similar projects in the community, such as [drawio](https://github.com/jgraph/drawio).
 
 #### Q. About AI PPT
 A. I don't want to ride the wave of AI hype, but it's unavoidable as too many people place too much importance on AI. So, I created this DEMO (it's really not that complicated). Currently, this feature is for reference only, and internally, it implements the most basic AI PPT generation logic, which is: template customization + AI-generated data combined with templates + image replacement. To control costs, we can only go this far for now. However, to achieve the effect of a production environment, you would need to do more, such as creating more templates and refining the AI workflow.
@@ -154,4 +154,4 @@ Note: Image replacement only provides the method and does not offer an actual de
 
 #### Q. Other
 
-A. Additionally, it is important to emphasize that PPTist is merely an open-source project, not a product tailored for the average user. It primarily offers technical solutions. Some product-oriented demands and optimizations require developers to implement and refine on their own.
+A. Additionally, it is important to emphasize that RealPPTX is merely an open-source project, not a product tailored for the average user. It primarily offers technical solutions. Some product-oriented demands and optimizations require developers to implement and refine on their own.
