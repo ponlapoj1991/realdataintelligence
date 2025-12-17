@@ -19,6 +19,22 @@ import { REALPPTX_CHART_THEME } from '../constants/chartTheme';
 import { buildDashboardChartPayload } from '../utils/dashboardChartPayload';
 import { buildMagicEchartsOption } from '../utils/magicOptionBuilder';
 
+const hashString = (input: string) => {
+  let hash = 5381;
+  for (let i = 0; i < input.length; i++) {
+    hash = ((hash << 5) + hash) ^ input.charCodeAt(i);
+  }
+  return (hash >>> 0).toString(16);
+};
+
+const hashJson = (value: unknown) => {
+  try {
+    return hashString(JSON.stringify(value ?? null));
+  } catch {
+    return '';
+  }
+};
+
 // Helper to strip functions from objects before postMessage (functions can't be cloned)
 const stripFunctions = (obj: any): any => {
   if (obj === null || obj === undefined) return obj;
@@ -106,6 +122,7 @@ const ReportBuilder: React.FC<ReportBuilderProps> = ({ project, onUpdateProject 
   };
 
   const autosaveTimerRef = useRef<number | null>(null);
+  const lastSentLoadRef = useRef<{ presentationId: string; slidesHash: string } | null>(null);
 
   const editingPresentation =
     presentations.find((p) => p.id === (selectedPresentationId || normalizedProject.activePresentationId)) ||
@@ -426,14 +443,29 @@ const ReportBuilder: React.FC<ReportBuilderProps> = ({ project, onUpdateProject 
 
   useEffect(() => {
     if (!iframeWindow || mode !== 'editor' || !editingPresentation || !isEditorReady) return;
+
+    const slides = editingPresentation.slides || [];
+    const slidesHash = hashJson(slides);
+    const updatedAt = typeof editingPresentation.updatedAt === 'number' ? editingPresentation.updatedAt : 0;
+
+    const lastSent = lastSentLoadRef.current;
+    const isSamePayload =
+      !!lastSent &&
+      lastSent.presentationId === editingPresentation.id &&
+      lastSent.slidesHash === slidesHash;
+
+    if (isSamePayload) return;
+    lastSentLoadRef.current = { presentationId: editingPresentation.id, slidesHash };
+
     iframeWindow.postMessage(
       {
         source: 'realdata-host',
         type: 'load-presentation',
         payload: {
           presentationId: editingPresentation.id,
-          slides: editingPresentation.slides || [],
+          slides,
           title: editingPresentation.name,
+          updatedAt,
           globalSettings,
           chartTheme: REALPPTX_CHART_THEME,
         },

@@ -28,6 +28,29 @@ export default () => {
   const HOST_SOURCE = 'realpptx'
   const presentationId = ref<string>('')
   const autosaveTimer = ref<number | null>(null)
+  const applyingHostUpdate = ref(false)
+  const lastAppliedHostUpdatedAt = ref<number>(0)
+  const lastLocalMutationAt = ref<number>(0)
+  const lastSentAutosaveAt = ref<number>(0)
+  const lastSlidesHash = ref<string>('')
+  const lastStateHash = ref<string>('')
+
+  const hashString = (input: string) => {
+    let hash = 5381
+    for (let i = 0; i < input.length; i++) {
+      hash = ((hash << 5) + hash) ^ input.charCodeAt(i)
+    }
+    return (hash >>> 0).toString(16)
+  }
+
+  const hashSlides = (slides: unknown) => {
+    try {
+      return hashString(JSON.stringify(slides ?? null))
+    }
+    catch {
+      return ''
+    }
+  }
 
   const applyHostSettings = (payload?: {
     globalSettings?: any
@@ -113,11 +136,19 @@ export default () => {
     if (event.data?.source !== 'realdata-host') return
 
     if (event.data?.type === 'host-settings') {
+      applyingHostUpdate.value = true
       applyHostSettings(event.data?.payload)
+      window.setTimeout(() => {
+        applyingHostUpdate.value = false
+      }, 0)
     }
 
     if (event.data?.type === 'project-context') {
+      applyingHostUpdate.value = true
       applyHostSettings(event.data)
+      window.setTimeout(() => {
+        applyingHostUpdate.value = false
+      }, 0)
     }
 
     if (event.data?.type === 'insert-dashboard-image') {
@@ -150,27 +181,77 @@ export default () => {
     }
 
     if (event.data?.type === 'load-presentation') {
-      const payload = event.data?.payload as { presentationId?: string; slides?: any[]; title?: string; theme?: any; globalSettings?: any; chartTheme?: any } | undefined
-      if (payload?.presentationId && typeof payload.presentationId === 'string') {
-        presentationId.value = payload.presentationId
+      const payload = event.data?.payload as {
+        presentationId?: string
+        slides?: any[]
+        title?: string
+        theme?: any
+        updatedAt?: number
+        globalSettings?: any
+        chartTheme?: any
+      } | undefined
+
+      const nextPresentationId = typeof payload?.presentationId === 'string' ? payload.presentationId : ''
+      if (!nextPresentationId) return
+
+      applyingHostUpdate.value = true
+      const isNewPresentation = presentationId.value !== nextPresentationId
+      if (isNewPresentation) {
+        presentationId.value = nextPresentationId
         migrateLegacyLocalStorage()
       }
-      if (payload?.slides && Array.isArray(payload.slides)) {
-        if (payload.slides.length === 0) {
-          resetSlides()
-        }
-        else {
-          slidesStore.setSlides(payload.slides)
-          slidesStore.updateSlideIndex(0)
+
+      const incomingUpdatedAt = typeof payload?.updatedAt === 'number' ? payload.updatedAt : 0
+      const incomingSlides = payload?.slides
+      const hasIncomingSlides = Array.isArray(incomingSlides)
+
+      if (hasIncomingSlides) {
+        const currentSlidesHash = lastSlidesHash.value || hashSlides(slidesStore.slides)
+        const incomingSlidesHash = hashSlides(incomingSlides)
+
+        const isDuplicate = incomingSlidesHash && incomingSlidesHash === currentSlidesHash
+        const isOlderThanAppliedHost =
+          incomingUpdatedAt > 0 && lastAppliedHostUpdatedAt.value > 0 && incomingUpdatedAt < lastAppliedHostUpdatedAt.value
+        const isLikelyStaleDuringEdit =
+          !isNewPresentation &&
+          lastLocalMutationAt.value > 0 &&
+          incomingUpdatedAt > 0 &&
+          lastLocalMutationAt.value > incomingUpdatedAt &&
+          (Array.isArray(slidesStore.slides) ? (incomingSlides.length <= slidesStore.slides.length) : true)
+
+        if (!isDuplicate && !isOlderThanAppliedHost && !isLikelyStaleDuringEdit) {
+          if (incomingSlides.length === 0) {
+            if (isNewPresentation) {
+              resetSlides()
+            }
+          }
+          else {
+            slidesStore.setSlides(incomingSlides)
+          }
+
+          if (incomingUpdatedAt > 0) lastAppliedHostUpdatedAt.value = incomingUpdatedAt
+          else lastAppliedHostUpdatedAt.value = Date.now()
+
+          lastSlidesHash.value = incomingSlidesHash || hashSlides(slidesStore.slides)
+
+          if (isNewPresentation) {
+            slidesStore.updateSlideIndex(0)
+          }
+
         }
       }
-      if (payload?.title) {
+
+      if (typeof payload?.title === 'string' && payload.title.trim() && payload.title.trim() !== slidesStore.title) {
         slidesStore.setTitle(payload.title)
       }
       if (payload?.theme) {
         slidesStore.setTheme(payload.theme)
       }
       applyHostSettings(payload as any)
+
+      window.setTimeout(() => {
+        applyingHostUpdate.value = false
+      }, 0)
     }
 
     // Automation Report: Handle updated chart data from Dashboard
@@ -223,10 +304,27 @@ export default () => {
     () => [slidesStore.slides, slidesStore.title, slidesStore.theme, presentationId.value],
     () => {
       if (!presentationId.value) return
+      if (applyingHostUpdate.value) return
+      lastLocalMutationAt.value = Date.now()
       if (autosaveTimer.value) window.clearTimeout(autosaveTimer.value)
       autosaveTimer.value = window.setTimeout(() => {
+        if (!presentationId.value) return
+        if (applyingHostUpdate.value) return
+
         const slides = JSON.parse(JSON.stringify(slidesStore.slides || []))
         const theme = JSON.parse(JSON.stringify(slidesStore.theme || {}))
+        const title = slidesStore.title
+
+        const nextStateHash = hashSlides({ slides, title, theme })
+        if (nextStateHash && nextStateHash === lastStateHash.value) return
+        lastStateHash.value = nextStateHash
+
+        const nextSlidesHash = hashSlides(slides)
+        if (nextSlidesHash) lastSlidesHash.value = nextSlidesHash
+
+        if (lastSentAutosaveAt.value > 0 && lastLocalMutationAt.value - lastSentAutosaveAt.value < 800) return
+        lastSentAutosaveAt.value = lastLocalMutationAt.value
+
         window.parent?.postMessage(
           {
             source: HOST_SOURCE,
@@ -234,7 +332,7 @@ export default () => {
             payload: {
               presentationId: presentationId.value,
               slides,
-              title: slidesStore.title,
+              title,
               theme,
             },
           },
