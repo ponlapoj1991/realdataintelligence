@@ -15,6 +15,17 @@ export function addChartElementToSlide(params: {
 }) {
   const { pptx, pptxSlide, el, ratioPx2Inch, ratioPx2Pt, formatColor } = params
 
+  const stripUndefinedDeep = (value: any): any => {
+    if (Array.isArray(value)) return value.map(stripUndefinedDeep)
+    if (!value || typeof value !== 'object') return value
+    const out: any = {}
+    for (const [k, v] of Object.entries(value)) {
+      if (v === undefined) continue
+      out[k] = stripUndefinedDeep(v)
+    }
+    return out
+  }
+
   const roundFixed = (value: number, decimals: number) => {
     if (!Number.isFinite(value)) return 0
     return Number(value.toFixed(decimals))
@@ -350,36 +361,36 @@ export function addChartElementToSlide(params: {
     options.barDir = resolvedBarDir
     if (el.options?.percentStack) options.barGrouping = 'percentStacked'
     else if (el.options?.stack) options.barGrouping = 'stacked'
-    pptxSlide.addChart(pptx.ChartType.bar, chartData, options)
+    pptxSlide.addChart(pptx.ChartType.bar, stripUndefinedDeep(chartData), stripUndefinedDeep(options))
     return
   }
 
   if (el.chartType === 'line') {
-    pptxSlide.addChart(pptx.ChartType.line, chartData, options)
+    pptxSlide.addChart(pptx.ChartType.line, stripUndefinedDeep(chartData), stripUndefinedDeep(options))
     return
   }
 
   if (el.chartType === 'area') {
     if (el.options?.percentStack) options.barGrouping = 'percentStacked'
     else if (el.options?.stack) options.barGrouping = 'stacked'
-    pptxSlide.addChart(pptx.ChartType.area, chartData, options)
+    pptxSlide.addChart(pptx.ChartType.area, stripUndefinedDeep(chartData), stripUndefinedDeep(options))
     return
   }
 
   if (el.chartType === 'radar') {
-    pptxSlide.addChart(pptx.ChartType.radar, chartData, options)
+    pptxSlide.addChart(pptx.ChartType.radar, stripUndefinedDeep(chartData), stripUndefinedDeep(options))
     return
   }
 
   if (el.chartType === 'scatter') {
     options.lineSize = 0
-    pptxSlide.addChart(pptx.ChartType.scatter, chartData, options)
+    pptxSlide.addChart(pptx.ChartType.scatter, stripUndefinedDeep(chartData), stripUndefinedDeep(options))
     return
   }
 
   if (el.chartType === 'pie') {
     if (typeof el.options?.pieStartAngle === 'number') options.firstSliceAng = el.options.pieStartAngle
-    pptxSlide.addChart(pptx.ChartType.pie, chartData, options)
+    pptxSlide.addChart(pptx.ChartType.pie, stripUndefinedDeep(chartData), stripUndefinedDeep(options))
     return
   }
 
@@ -387,7 +398,7 @@ export function addChartElementToSlide(params: {
     const holeSize = Math.max(0, Math.min(90, Math.round(el.options?.pieInnerRadius ?? 40)))
     options.holeSize = holeSize
     if (typeof el.options?.pieStartAngle === 'number') options.firstSliceAng = el.options.pieStartAngle
-    pptxSlide.addChart(pptx.ChartType.doughnut, chartData, options)
+    pptxSlide.addChart(pptx.ChartType.doughnut, stripUndefinedDeep(chartData), stripUndefinedDeep(options))
     return
   }
 
@@ -442,10 +453,10 @@ export function addChartElementToSlide(params: {
     if (el.options?.percentStack) options.barGrouping = 'percentStacked'
     else if (el.options?.stack) options.barGrouping = 'stacked'
 
-    ;(pptxSlide as any).addChart(multi as any, options)
+    ;(pptxSlide as any).addChart(stripUndefinedDeep(multi) as any, stripUndefinedDeep(options))
     return
   }
 
   // Fallback
-  pptxSlide.addChart(pptx.ChartType.bar, chartData, options)
+  pptxSlide.addChart(pptx.ChartType.bar, stripUndefinedDeep(chartData), stripUndefinedDeep(options))
 }

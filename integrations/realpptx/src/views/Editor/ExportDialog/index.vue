@@ -50,7 +50,6 @@ const currentDialogComponent = computed<unknown>(() => {
     'pdf': ExportPDF,
     'pptx': ExportPPTX,
     'realpptx': ExportSpecificFile,
-    'pptist': ExportSpecificFile,
   }
   if (dialogForExport.value) return dialogMap[dialogForExport.value] || null
   return null

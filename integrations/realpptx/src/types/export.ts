@@ -1,1 +1,1 @@
-export type DialogForExportTypes = 'image' | 'pdf' | 'json' | 'pptx' | 'realpptx' | 'pptist' | ''
+export type DialogForExportTypes = 'image' | 'pdf' | 'json' | 'pptx' | 'realpptx' | ''

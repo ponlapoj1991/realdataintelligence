@@ -41,6 +41,7 @@ import { buildMagicChartPayload } from '../utils/magicChartPayload';
 import { buildMagicEchartsOption } from '../utils/magicOptionBuilder';
 import { exportToExcel } from '../utils/excel';
 import { generatePowerPoint } from '../utils/report';
+import { useMagicAggregationWorker } from '../hooks/useMagicAggregationWorker';
 
 // --- Helper Functions (Ported from Analytics.tsx) ---
 const SAMPLE_SIZE = 50;
@@ -160,8 +161,8 @@ const DashboardMagic: React.FC<DashboardMagicProps> = ({ project, onUpdateProjec
   useEffect(() => {
     if (widgets.length > 0 && widgets.some((w) => w.sectionIndex === undefined || w.colSpan === undefined)) {
       const updated = widgets.map((w, idx) => {
-        // Default logic: 2 widgets per section, max 5 sections
-        const defaultSection = Math.min(Math.floor(idx / 2), 4);
+        // Default logic: 2 widgets per section (no hard limit)
+        const defaultSection = Math.floor(idx / 2);
         const defaultSpan = w.width === 'full' ? 4 : 2;
         return {
           ...w,
@@ -241,6 +242,8 @@ const DashboardMagic: React.FC<DashboardMagicProps> = ({ project, onUpdateProjec
     if (filters.length === 0) return baseData;
     return baseData.filter(row => filters.every(f => matchesFilterCondition(row, f)));
   }, [baseData, filters, matchesFilterCondition]);
+
+  const magicAggWorker = useMagicAggregationWorker(filteredData, REALPPTX_CHART_THEME);
 
   const persistProject = useCallback(
     async (updated: Project) => {
@@ -401,6 +404,131 @@ const DashboardMagic: React.FC<DashboardMagicProps> = ({ project, onUpdateProjec
   };
 
   const dashboardRef = useRef<HTMLDivElement>(null);
+  const editorScrollRef = useRef<HTMLDivElement>(null);
+
+  const SECTION_GAP_PX = 32; // space-y-8
+  const SECTION_BASE_PX = 150; // empty section dropzone height
+  const WIDGET_CARD_PX = 300; // minHeight in widget card
+  const WIDGET_HEADER_PX = 72; // title/meta + padding approximation
+  const GRID_GAP_PX = 24; // gap-6
+
+  const getSectionCount = useCallback((nextWidgets: DashboardWidget[]) => {
+    const maxIndex = nextWidgets.reduce((max, w) => Math.max(max, w.sectionIndex ?? 0), 0);
+    return Math.max(2, maxIndex + 2); // keep one empty tail section available
+  }, []);
+
+  const estimateSectionHeightPx = useCallback((sectionWidgets: DashboardWidget[]) => {
+    if (sectionWidgets.length === 0) return SECTION_BASE_PX;
+
+    // Estimate grid rows by packing widgets into 4 columns using colSpan
+    let rows = 1;
+    let filled = 0;
+    for (const w of sectionWidgets) {
+      const span = Math.max(1, Math.min(4, w.colSpan || (w.width === 'full' ? 4 : 2)));
+      if (filled + span > 4) {
+        rows += 1;
+        filled = 0;
+      }
+      filled += span;
+      if (filled >= 4) filled = 0;
+    }
+
+    const rowHeight = WIDGET_CARD_PX + WIDGET_HEADER_PX;
+    const total = rows * rowHeight + Math.max(0, rows - 1) * GRID_GAP_PX + 2 * 16; // section padding
+    return Math.max(SECTION_BASE_PX, total);
+  }, []);
+
+  const [scrollState, setScrollState] = useState({ top: 0, height: 0 });
+  useEffect(() => {
+    if (mode !== 'editor') return;
+    const el = editorScrollRef.current;
+    if (!el) return;
+
+    let raf = 0;
+    const update = () => {
+      raf = 0;
+      setScrollState({ top: el.scrollTop, height: el.clientHeight });
+    };
+
+    const onScroll = () => {
+      if (raf) return;
+      raf = window.requestAnimationFrame(update);
+    };
+
+    update();
+    el.addEventListener('scroll', onScroll, { passive: true });
+    window.addEventListener('resize', update);
+    return () => {
+      if (raf) window.cancelAnimationFrame(raf);
+      el.removeEventListener('scroll', onScroll);
+      window.removeEventListener('resize', update);
+    };
+  }, [mode]);
+
+  const sectionCount = useMemo(() => getSectionCount(widgets), [widgets, getSectionCount]);
+  const sections = useMemo(() => Array.from({ length: sectionCount }, (_, i) => i), [sectionCount]);
+
+  const sectionHeights = useMemo(() => {
+    const heights: number[] = [];
+    for (let i = 0; i < sectionCount; i++) {
+      const sectionWidgets = widgets.filter((w) => (w.sectionIndex ?? 0) === i);
+      heights.push(estimateSectionHeightPx(sectionWidgets));
+    }
+    return heights;
+  }, [widgets, sectionCount, estimateSectionHeightPx]);
+
+  const sectionTops = useMemo(() => {
+    const tops: number[] = [];
+    let acc = 0;
+    for (let i = 0; i < sectionCount; i++) {
+      tops.push(acc);
+      acc += sectionHeights[i] + SECTION_GAP_PX;
+    }
+    return tops;
+  }, [sectionCount, sectionHeights]);
+
+  const totalHeight = useMemo(() => {
+    const last = sectionCount - 1;
+    if (last < 0) return 0;
+    return sectionTops[last] + sectionHeights[last];
+  }, [sectionCount, sectionTops, sectionHeights]);
+
+  const windowedSectionRange = useMemo(() => {
+    const { top: scrollTop, height: viewportHeight } = scrollState;
+    const bufferPx = 800;
+    const fromPx = Math.max(0, scrollTop - bufferPx);
+    const toPx = scrollTop + viewportHeight + bufferPx;
+
+    let startIdx = 0;
+    for (let i = 0; i < sectionCount; i++) {
+      const bottom = sectionTops[i] + sectionHeights[i];
+      if (bottom >= fromPx) {
+        startIdx = i;
+        break;
+      }
+    }
+
+    let endIdx = sectionCount - 1;
+    for (let i = sectionCount - 1; i >= 0; i--) {
+      if (sectionTops[i] <= toPx) {
+        endIdx = i;
+        break;
+      }
+    }
+
+    if (draggedWidget) {
+      startIdx = Math.min(startIdx, Math.max(0, draggedWidget.sectionIndex - 1));
+      endIdx = Math.max(endIdx, Math.min(sectionCount - 1, draggedWidget.sectionIndex + 1));
+    }
+
+    return { startIdx, endIdx };
+  }, [scrollState, sectionCount, sectionTops, sectionHeights, draggedWidget]);
+
+  const topSpacer = sectionTops[windowedSectionRange.startIdx] || 0;
+  const bottomSpacer = Math.max(
+    0,
+    totalHeight - (sectionTops[windowedSectionRange.endIdx] + sectionHeights[windowedSectionRange.endIdx])
+  );
 
   const handleExportPPT = async () => {
     if (!dashboardRef.current || widgets.length === 0) {
@@ -744,7 +872,7 @@ const DashboardMagic: React.FC<DashboardMagicProps> = ({ project, onUpdateProjec
         </div>
 
         {/* Toolbar & Content */}
-        <div className="flex-1 overflow-auto p-8">
+        <div ref={editorScrollRef} className="flex-1 overflow-auto p-8">
           <div className="flex flex-col md:flex-row md:items-end justify-between gap-4 mb-6">
             <div>
               <h2 className="text-2xl font-bold text-gray-900 flex items-center">
@@ -912,7 +1040,9 @@ const DashboardMagic: React.FC<DashboardMagicProps> = ({ project, onUpdateProjec
             />
           ) : (
             <div ref={dashboardRef} className="space-y-8 pb-20">
-              {[0, 1, 2, 3, 4].map((sectionIndex) => {
+              {topSpacer > 0 && <div style={{ height: topSpacer }} />}
+
+              {sections.slice(windowedSectionRange.startIdx, windowedSectionRange.endIdx + 1).map((sectionIndex) => {
                 const sectionWidgets = widgets.filter((w) => (w.sectionIndex ?? 0) === sectionIndex);
                 // Only show section if it has widgets OR if it's the next available empty section (to allow dropping)
                 // Actually, show all 5 sections to allow dragging freely between them
@@ -927,10 +1057,7 @@ const DashboardMagic: React.FC<DashboardMagicProps> = ({ project, onUpdateProjec
                       draggedWidget && Math.abs(draggedWidget.sectionIndex - sectionIndex) <= 1
                         ? 'border-blue-300 bg-blue-50/30'
                         : 'border-transparent' // Invisible border when not dragging
-                    } ${sectionWidgets.length === 0 && !draggedWidget ? 'hidden' : ''} ${
-                      // Always show at least first 2 sections or if it has widgets
-                      sectionIndex < 2 ? 'block' : ''
-                    }`}
+                    } ${sectionWidgets.length === 0 && !draggedWidget && sectionIndex >= 2 ? 'hidden' : ''}`}
                   >
                     {/* Section Label (Optional, for debugging or clarity) */}
                     {isPresentationMode ? null : (
@@ -999,6 +1126,9 @@ const DashboardMagic: React.FC<DashboardMagicProps> = ({ project, onUpdateProjec
                             data={filteredData}
                             filters={widget.filters}
                             theme={REALPPTX_CHART_THEME}
+                            isEditing={!isPresentationMode}
+                            isInteracting={!!draggedWidget || !!resizing}
+                            workerClient={magicAggWorker}
                           />
                           
                           {/* Resize Handle */}
@@ -1028,6 +1158,8 @@ const DashboardMagic: React.FC<DashboardMagicProps> = ({ project, onUpdateProjec
                   </div>
                 );
               })}
+
+              {bottomSpacer > 0 && <div style={{ height: bottomSpacer }} />}
             </div>
           )}
         </div>

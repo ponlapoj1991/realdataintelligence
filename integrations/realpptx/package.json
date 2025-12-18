@@ -12,7 +12,7 @@
     "lint": "eslint . --ext .vue,.js,.jsx,.cjs,.mjs,.ts,.tsx,.cts,.mts --fix --ignore-path .gitignore",
     "prepare": "husky install"
   },
-  "author": "pipipi_pikachu@163.com",
+  "author": "Real Smart Co., Ltd.",
   "homepage": "https://github.com/ponlapoj1991/realdataintelligence",
   "dependencies": {
     "animate.css": "^4.1.1",

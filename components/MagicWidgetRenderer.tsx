@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef } from 'react';
+import React, { useEffect, useRef, useState, useCallback } from 'react';
 import * as echarts from 'echarts/core';
 import {
   BarChart,
@@ -18,6 +18,7 @@ import { ChartTheme, CLASSIC_ANALYTICS_THEME } from '../constants/chartTheme';
 import { buildMagicEchartsOption } from '../utils/magicOptionBuilder';
 import { applyWidgetFilters } from '../utils/widgetData';
 import { buildMagicChartPayload, MagicChartPayload } from '../utils/magicChartPayload';
+import type { MagicAggregationWorkerClient } from '../hooks/useMagicAggregationWorker';
 
 echarts.use([
   BarChart,
@@ -39,6 +40,9 @@ interface MagicWidgetRendererProps {
   onValueClick?: (value: string, widget: DashboardWidget) => void;
   /** Disable animation during editing to prevent distracting re-renders */
   isEditing?: boolean;
+  /** UI is being dragged/resized; defer heavy work until it stops */
+  isInteracting?: boolean;
+  workerClient?: MagicAggregationWorkerClient;
 }
 
 const buildOption = (payload: MagicChartPayload | null) => {
@@ -333,60 +337,175 @@ const MagicWidgetRenderer: React.FC<MagicWidgetRendererProps> = ({
   theme,
   onValueClick,
   isEditing = false,
+  isInteracting = false,
+  workerClient,
 }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<echarts.ECharts | null>(null);
+  const resizeObserverRef = useRef<ResizeObserver | null>(null);
+  const disposeTimerRef = useRef<number | null>(null);
   const activeTheme = theme ?? CLASSIC_ANALYTICS_THEME;
 
-  const filteredRows = useMemo(() => applyWidgetFilters(data, filters), [data, filters]);
+  const [isInView, setIsInView] = useState(false);
+  const [payload, setPayload] = useState<MagicChartPayload | null>(null);
+  const [didCompute, setDidCompute] = useState(false);
 
-  const payload = useMemo(
-    () => buildMagicChartPayload(widget, filteredRows, { theme: activeTheme }),
-    [widget, filteredRows, activeTheme]
-  );
+  const cancelDispose = useCallback(() => {
+    if (disposeTimerRef.current) {
+      window.clearTimeout(disposeTimerRef.current);
+      disposeTimerRef.current = null;
+    }
+  }, []);
 
+  const scheduleDispose = useCallback((ms: number) => {
+    cancelDispose();
+    disposeTimerRef.current = window.setTimeout(() => {
+      if (chartRef.current) {
+        chartRef.current.dispose();
+        chartRef.current = null;
+      }
+      disposeTimerRef.current = null;
+    }, ms);
+  }, [cancelDispose]);
+
+  // IntersectionObserver: lazy init + dispose when out-of-view
   useEffect(() => {
-    if (!containerRef.current) return;
+    const el = containerRef.current;
+    if (!el) return;
 
+    const observer = new IntersectionObserver(
+      (entries) => {
+        const entry = entries[0];
+        const next = !!entry?.isIntersecting;
+        setIsInView(next);
+      },
+      { root: null, rootMargin: '400px 0px', threshold: 0.01 }
+    );
+
+    observer.observe(el);
+    return () => {
+      observer.disconnect();
+    };
+  }, []);
+
+  // Build payload (heavy): run only when visible and not interacting
+  useEffect(() => {
+    if (!isInView) return;
+    if (isInteracting) return;
+
+    let cancelled = false;
+    const run = async () => {
+      if (cancelled) return;
+      try {
+        const next = workerClient?.isSupported
+          ? await workerClient.requestPayload({ widget, filters, theme: activeTheme })
+          : buildMagicChartPayload(widget, applyWidgetFilters(data, filters), { theme: activeTheme });
+        if (cancelled) return;
+        setPayload(next);
+        setDidCompute(true);
+      } catch (e) {
+        console.error('[MagicWidgetRenderer] payload build failed:', e);
+        setPayload(null);
+        setDidCompute(true);
+      }
+    };
+
+    // Defer aggregation to idle time to keep interactions smooth
+    const ric = (window as any).requestIdleCallback as undefined | ((cb: () => void, opts?: { timeout: number }) => number);
+    const cancelRic = (window as any).cancelIdleCallback as undefined | ((id: number) => void);
+    let idleId: number | null = null;
+
+    if (ric) idleId = ric(run, { timeout: 800 });
+    else idleId = window.setTimeout(run, 0);
+
+    return () => {
+      cancelled = true;
+      if (idleId !== null) {
+        if (ric && cancelRic) cancelRic(idleId);
+        else window.clearTimeout(idleId);
+      }
+    };
+  }, [isInView, isInteracting, widget, data, filters, activeTheme, workerClient]);
+
+  // Init chart only when visible
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el) return;
+
+    if (!isInView) {
+      // Allow small hysteresis to avoid thrashing during fast scroll
+      scheduleDispose(1500);
+      return;
+    }
+
+    cancelDispose();
     if (!chartRef.current) {
-      chartRef.current = echarts.init(containerRef.current, undefined, { renderer: 'svg' });
+      chartRef.current = echarts.init(el, undefined, { renderer: 'svg' });
     }
 
     const chart = chartRef.current;
-    const option = buildMagicEchartsOption(payload, widget.colSpan || 2, isEditing);
-    if (option) {
-      chart.setOption(option as any, true);
-    }
 
-    const handleResize = () => {
-      chart?.resize();
-    };
-
-    window.addEventListener('resize', handleResize);
-
-    if (onValueClick) {
-      chart.off('click');
-      chart.on('click', (params: any) => {
-        const rawLabel =
-          params.name ??
-          params.axisValue ??
-          (Array.isArray(params.value) ? params.value[0] : params.value);
-        if (rawLabel === undefined || rawLabel === null) return;
-        onValueClick(String(rawLabel), widget);
-      });
-    }
+    if (resizeObserverRef.current) resizeObserverRef.current.disconnect();
+    resizeObserverRef.current = new ResizeObserver(() => {
+      chart.resize();
+    });
+    resizeObserverRef.current.observe(el);
 
     return () => {
-      window.removeEventListener('resize', handleResize);
-      if (chart) {
-        chart.off('click');
-        chart.dispose();
+      if (resizeObserverRef.current) {
+        resizeObserverRef.current.disconnect();
+        resizeObserverRef.current = null;
       }
-      chartRef.current = null;
     };
-  }, [payload, onValueClick, widget]);
+  }, [isInView, scheduleDispose, cancelDispose]);
 
-  if (!payload) {
+  // Update option when payload ready and chart is alive
+  useEffect(() => {
+    const chart = chartRef.current;
+    if (!chart) return;
+    if (!isInView) return;
+    if (!payload) return;
+
+    const option = buildMagicEchartsOption(payload, widget.colSpan || 2, isEditing);
+    if (!option) return;
+    chart.setOption(option as any, { notMerge: true, lazyUpdate: true } as any);
+  }, [payload, isInView, widget.colSpan, isEditing]);
+
+  // Click binding (doesn't need to re-init chart)
+  useEffect(() => {
+    const chart = chartRef.current;
+    if (!chart) return;
+    if (!onValueClick) return;
+
+    const handler = (params: any) => {
+      const rawLabel =
+        params.name ??
+        params.axisValue ??
+        (Array.isArray(params.value) ? params.value[0] : params.value);
+      if (rawLabel === undefined || rawLabel === null) return;
+      onValueClick(String(rawLabel), widget);
+    };
+
+    chart.off('click');
+    chart.on('click', handler);
+    return () => {
+      chart.off('click');
+    };
+  }, [onValueClick, widget]);
+
+  // Final cleanup
+  useEffect(() => {
+    return () => {
+      cancelDispose();
+      if (resizeObserverRef.current) resizeObserverRef.current.disconnect();
+      if (chartRef.current) {
+        chartRef.current.dispose();
+        chartRef.current = null;
+      }
+    };
+  }, [cancelDispose]);
+
+  if (didCompute && !payload) {
     return (
       <div className="flex items-center justify-center h-full text-sm text-gray-500">
         No data
@@ -395,8 +514,12 @@ const MagicWidgetRenderer: React.FC<MagicWidgetRendererProps> = ({
   }
 
   return (
-    <div ref={containerRef} className="w-full h-full" />
+    <div
+      ref={containerRef}
+      className="w-full h-full"
+      aria-busy={!didCompute && isInView}
+    />
   );
 };
 
-export default MagicWidgetRenderer;
+export default React.memo(MagicWidgetRenderer);

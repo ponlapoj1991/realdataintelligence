@@ -10,7 +10,7 @@
     <a href="https://github.com/ponlapoj1991/realdataintelligence/issues" target="_black"><img src="https://img.shields.io/github/issues-closed/ponlapoj1991/realdataintelligence.svg" alt="issue"></a>
 </p>
 
-[简体中文](README_zh.md) | English
+English
 
 
 # RealPPTX
@@ -45,7 +45,7 @@ Browser access: http://127.0.0.1:5173/
 - Shortcuts
 - Right-click menu
 - Export local files (PPTX, JSON, images, PDF)
-- Import and export pptist files
+- Import and export legacy `.pptist` files
 - Print
 - AI PPT
 ### Slide Page Editing

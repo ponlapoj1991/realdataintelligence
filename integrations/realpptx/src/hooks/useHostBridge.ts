@@ -3,6 +3,9 @@ import type { ChartData, ChartOptions, ChartType } from '@/types/slides'
 import useCreateElement from './useCreateElement'
 import useSlideHandler from './useSlideHandler'
 import { useMainStore, useSlidesStore } from '@/store'
+import { hashJson, hashString } from './hostBridge/hash'
+import { runWhenIdle } from './hostBridge/idle'
+import { applyHostSettingsToSlides, emitPresentationExportToHost, migrateLegacyDraftToHost } from './hostBridge/messages'
 
 interface DashboardChartMessage {
   chartType: ChartType
@@ -46,118 +49,13 @@ export default () => {
     )
   })
 
-  const hashString = (input: string) => {
-    let hash = 5381
-    for (let i = 0; i < input.length; i++) {
-      hash = ((hash << 5) + hash) ^ input.charCodeAt(i)
-    }
-    return (hash >>> 0).toString(16)
-  }
-
-  const hashSlides = (slides: unknown) => {
-    try {
-      return hashString(JSON.stringify(slides ?? null))
-    }
-    catch {
-      return ''
-    }
-  }
-
-  const runWhenIdle = (fn: () => void, timeoutMs = 1200) => {
-    const w = window as any
-    if (typeof w.requestIdleCallback === 'function') {
-      w.requestIdleCallback(() => fn(), { timeout: timeoutMs })
-      return
-    }
-    window.setTimeout(fn, 0)
-  }
-
-  const applyHostSettings = (payload?: {
-    globalSettings?: any
-    chartTheme?: { palette?: string[]; typography?: { fontFamily?: string } }
-  }) => {
-    const palette = payload?.chartTheme?.palette
-    const fontFamily = payload?.chartTheme?.typography?.fontFamily
-
-    if (Array.isArray(palette) && palette.length > 0) {
-      slidesStore.setTheme({ themeColors: palette })
-      try {
-        document.documentElement.style.setProperty('--realpptx-accent', palette[0])
-      } catch {
-        // ignore
-      }
-    }
-    if (typeof fontFamily === 'string' && fontFamily.trim()) {
-      slidesStore.setTheme({ fontName: fontFamily })
-    }
-
-    const background = payload?.globalSettings?.theme?.background
-    if (typeof background === 'string' && background.trim().startsWith('#')) {
-      try {
-        document.documentElement.style.setProperty('--realpptx-bg', background.trim())
-      } catch {
-        // ignore
-      }
-    }
-  }
-
-  const migrateLegacyLocalStorage = () => {
-    try {
-      const id = presentationId.value
-      if (!id) return
-
-      const legacyKey = `pptist_presentation_draft_${id}`
-      const nextKey = `realpptx_presentation_draft_${id}`
-      const raw = localStorage.getItem(nextKey) || localStorage.getItem(legacyKey)
-      if (!raw) return
-
-      const parsed = JSON.parse(raw) as { slides?: any[]; title?: string; theme?: any } | null
-      if (!parsed?.slides || !Array.isArray(parsed.slides)) return
-
-      window.parent?.postMessage(
-        {
-          source: HOST_SOURCE,
-          type: 'autosave-presentation',
-          payload: {
-            presentationId: id,
-            slides: parsed.slides,
-            title: parsed.title,
-            theme: parsed.theme,
-            migratedFrom: raw === localStorage.getItem(nextKey) ? nextKey : legacyKey,
-          },
-        },
-        '*'
-      )
-
-      localStorage.removeItem(legacyKey)
-      localStorage.removeItem(nextKey)
-    } catch {
-      // ignore
-    }
-  }
-
-  const emitPresentationExport = () => {
-    const slides = JSON.parse(JSON.stringify(slidesStore.slides || []))
-    const theme = JSON.parse(JSON.stringify(slidesStore.theme || {}))
-    const payload = {
-      slides,
-      title: slidesStore.title,
-      theme,
-    }
-    window.parent?.postMessage({
-      source: HOST_SOURCE,
-      type: 'presentation-export',
-      payload,
-    }, '*')
-  }
-
   const handleMessage = (event: MessageEvent) => {
     if (typeof event.data !== 'object' || !event.data) return
     if (event.data?.source !== 'realdata-host') return
 
     if (event.data?.type === 'host-settings') {
       applyingHostUpdate.value = true
-      applyHostSettings(event.data?.payload)
+      applyHostSettingsToSlides({ slidesStore, payload: event.data?.payload })
       window.setTimeout(() => {
         applyingHostUpdate.value = false
       }, 0)
@@ -165,7 +63,7 @@ export default () => {
 
     if (event.data?.type === 'project-context') {
       applyingHostUpdate.value = true
-      applyHostSettings(event.data)
+      applyHostSettingsToSlides({ slidesStore, payload: event.data })
       window.setTimeout(() => {
         applyingHostUpdate.value = false
       }, 0)
@@ -197,7 +95,7 @@ export default () => {
     }
 
     if (event.data?.type === 'request-presentation-export') {
-      emitPresentationExport()
+      emitPresentationExportToHost({ slidesStore, hostSource: HOST_SOURCE })
     }
 
     if (event.data?.type === 'load-presentation') {
@@ -218,7 +116,7 @@ export default () => {
       const isNewPresentation = presentationId.value !== nextPresentationId
       if (isNewPresentation) {
         presentationId.value = nextPresentationId
-        migrateLegacyLocalStorage()
+        migrateLegacyDraftToHost({ presentationId: nextPresentationId, hostSource: HOST_SOURCE })
       }
 
       const incomingUpdatedAt = typeof payload?.updatedAt === 'number' ? payload.updatedAt : 0
@@ -226,8 +124,8 @@ export default () => {
       const hasIncomingSlides = Array.isArray(incomingSlides)
 
       if (hasIncomingSlides) {
-        const currentSlidesHash = lastSlidesHash.value || hashSlides(slidesStore.slides)
-        const incomingSlidesHash = hashSlides(incomingSlides)
+        const currentSlidesHash = lastSlidesHash.value || hashJson(slidesStore.slides)
+        const incomingSlidesHash = hashJson(incomingSlides)
 
         const isDuplicate = incomingSlidesHash && incomingSlidesHash === currentSlidesHash
         const isOlderThanAppliedHost =
@@ -252,7 +150,7 @@ export default () => {
           if (incomingUpdatedAt > 0) lastAppliedHostUpdatedAt.value = incomingUpdatedAt
           else lastAppliedHostUpdatedAt.value = Date.now()
 
-          lastSlidesHash.value = incomingSlidesHash || hashSlides(slidesStore.slides)
+          lastSlidesHash.value = incomingSlidesHash || hashJson(slidesStore.slides)
 
           if (isNewPresentation) {
             slidesStore.updateSlideIndex(0)
@@ -267,7 +165,7 @@ export default () => {
       if (payload?.theme) {
         slidesStore.setTheme(payload.theme)
       }
-      applyHostSettings(payload as any)
+      applyHostSettingsToSlides({ slidesStore, payload: payload as any })
 
       window.setTimeout(() => {
         applyingHostUpdate.value = false
@@ -354,7 +252,7 @@ export default () => {
         const payload = JSON.parse(payloadJson) as { slides: any[]; title: string; theme: any }
 
         lastStateHash.value = nextStateHash
-        const nextSlidesHash = hashSlides(payload.slides)
+        const nextSlidesHash = hashJson(payload.slides)
         if (nextSlidesHash) lastSlidesHash.value = nextSlidesHash
 
         const now = Date.now()

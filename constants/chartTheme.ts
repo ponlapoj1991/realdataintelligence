@@ -45,8 +45,8 @@ export const CLASSIC_ANALYTICS_THEME: ChartTheme = {
   },
 };
 
-export const PPTIST_CHART_THEME: ChartTheme = {
-  id: 'pptist',
+export const DECK_READY_CHART_THEME: ChartTheme = {
+  id: 'deck-ready',
   name: 'Deck Ready',
   description: 'PowerPoint-inspired palette with crisp outlines',
   palette: ['#3563AE', '#E46C0B', '#7F7F7F', '#4BACC6', '#9BBB59', '#C0504D', '#8064A2', '#0096C7', '#FFB703', '#EE6C4D'],
@@ -70,7 +70,7 @@ export const PPTIST_CHART_THEME: ChartTheme = {
 };
 
 export const REALPPTX_CHART_THEME: ChartTheme = {
-  ...PPTIST_CHART_THEME,
+  ...DECK_READY_CHART_THEME,
   id: 'realpptx',
   name: 'RealPPTX',
 };
