@@ -7,7 +7,6 @@ import type {
   RadarSeriesOption,
 } from 'echarts/charts'
 import type { ChartData, ChartType } from '@/types/slides'
-import { buildEChartsOption } from '@shared/chartSpec'
 
 type EChartOption = ComposeOption<BarSeriesOption | LineSeriesOption | PieSeriesOption | ScatterSeriesOption | RadarSeriesOption>
 
@@ -723,19 +722,5 @@ const getChartOptionLegacy = ({
 }
 
 export const getChartOption = (payload: ChartOptionPayload): EChartOption | null => {
-  const { type, data, themeColors, textColor, lineColor, ...rest } = payload
-  const optionRaw = buildEChartsOption(
-    {
-      type: type as any,
-      data: data as any,
-      themeColors,
-      textColor,
-      lineColor,
-      options: rest as any,
-    },
-    2,
-    false
-  )
-
-  return (optionRaw as any) ?? getChartOptionLegacy(payload as any)
+  return getChartOptionLegacy(payload)
 }
