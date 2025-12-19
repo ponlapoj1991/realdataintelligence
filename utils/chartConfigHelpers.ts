@@ -37,10 +37,10 @@ const SUPPORT_MATRIX: Record<ChartType, ChartSupports> = {
   pie:           { dimension: true, stackBy: false, multiSeries: false, measure: true,  bubble: false, scatterXY: false, pie: true,  line: false, area: false, axes: false, legend: true, dataLabels: true, sort: true, categoryFilter: false, categoryConfig: true },
   donut:         { dimension: true, stackBy: false, multiSeries: false, measure: true,  bubble: false, scatterXY: false, pie: true,  line: false, area: false, axes: false, legend: true, dataLabels: true, sort: true, categoryFilter: false, categoryConfig: true },
   scatter:       { dimension: true,  stackBy: false, multiSeries: false, measure: false, bubble: false, scatterXY: true,  pie: false, line: false, area: false, axes: true,  legend: true,  dataLabels: true,  sort: false, categoryFilter: false, categoryConfig: true  },
-  bubble:        { dimension: false, stackBy: false, multiSeries: false, measure: false, bubble: true,  scatterXY: false, pie: false, line: false, area: false, axes: true,  legend: false, dataLabels: false, sort: false, categoryFilter: false, categoryConfig: false },
+  bubble:        { dimension: true,  stackBy: false, multiSeries: false, measure: false, bubble: true,  scatterXY: true,  pie: false, line: false, area: false, axes: true,  legend: true,  dataLabels: true,  sort: false, categoryFilter: false, categoryConfig: true  },
   combo:         { dimension: true, stackBy: false, multiSeries: true,  measure: false, bubble: false, scatterXY: false, pie: false, line: false, area: false, axes: true,  legend: true, dataLabels: true, sort: true, categoryFilter: true, categoryConfig: true },
   table:         { dimension: false, stackBy: false, multiSeries: false, measure: false, bubble: false, scatterXY: false, pie: false, line: false, area: false, axes: false, legend: false, dataLabels: false, sort: false, categoryFilter: false, categoryConfig: false },
-  kpi:           { dimension: false, stackBy: false, multiSeries: false, measure: false, bubble: false, scatterXY: false, pie: false, line: false, area: false, axes: false, legend: false, dataLabels: false, sort: false, categoryFilter: false, categoryConfig: false },
+  kpi:           { dimension: false, stackBy: false, multiSeries: false, measure: true,  bubble: false, scatterXY: false, pie: false, line: false, area: false, axes: false, legend: false, dataLabels: true,  sort: false, categoryFilter: false, categoryConfig: false },
   wordcloud:     { dimension: true, stackBy: false, multiSeries: false, measure: true,  bubble: false, scatterXY: false, pie: false, line: false, area: false, axes: false, legend: false, dataLabels: false, sort: false, categoryFilter: false, categoryConfig: false }
 };
 
@@ -125,10 +125,25 @@ export const validateChartConfig = (type: ChartType, config: any): string[] => {
   const errors: string[] = [];
 
   // Dimension requirements
-  if (supports.bubble) {
+  if (supports.scatterXY) {
+    if (!config.dimension) errors.push('กรุณาเลือก Group By');
+
+    if (config.xMeasure === 'sum' || config.xMeasure === 'avg') {
+      if (!config.xMeasureCol) errors.push('กรุณาเลือก X Value Column');
+    }
+
+    if (config.yMeasure === 'sum' || config.yMeasure === 'avg') {
+      if (!config.yMeasureCol) errors.push('กรุณาเลือก Y Value Column');
+    }
+
+    if (type === 'bubble' && !config.sizeDimension) {
+      errors.push('กรุณาเลือก Bubble Size');
+    }
+  } else if (supports.bubble) {
+    // Legacy mode (direct X/Y columns)
     if (!config.xDimension) errors.push('กรุณาเลือก X-Axis Dimension');
     if (!config.yDimension) errors.push('กรุณาเลือก Y-Axis Dimension');
-    if (type === 'bubble' && !config.sizeDimension) errors.push('Bubble chart ต้องเลือก Size Dimension');
+    if (type === 'bubble' && !config.sizeDimension) errors.push('กรุณาเลือก Bubble Size');
   } else if (supports.dimension && !config.dimension) {
     errors.push('กรุณาเลือก Dimension');
   }
@@ -154,6 +169,10 @@ export const validateChartConfig = (type: ChartType, config: any): string[] => {
     if ((config.measure === 'sum' || config.measure === 'avg') && !config.measureCol) {
       errors.push('กรุณาเลือก Column สำหรับ Measure');
     }
+  }
+
+  if (type === 'kpi' && config.measure === 'count' && !config.measureCol) {
+    errors.push('กรุณาเลือก Column สำหรับ Count');
   }
 
   return errors;

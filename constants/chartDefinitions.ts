@@ -159,9 +159,9 @@ export const CHART_DEFINITIONS: ChartDefinition[] = [
   {
     type: 'kpi',
     category: 'other',
-    label: 'KPI',
+    label: 'Number',
     icon: 'Hash',
-    description: 'Key Performance Indicator - single large number'
+    description: 'Single number - show Sum / Count / Avg as a big value'
   },
   {
     type: 'wordcloud',

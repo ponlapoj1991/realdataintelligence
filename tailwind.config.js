@@ -7,7 +7,7 @@ export default {
     "./views/**/*.{ts,tsx}",
     "./main/**/*.{ts,tsx}",
     "./utils/**/*.{ts,tsx,js}",
-    "./integrations/pptist/src/**/*.{vue,js,ts,jsx,tsx}",
+    "./integrations/realpptx/src/**/*.{vue,js,ts,jsx,tsx}",
   ],
   theme: {
     extend: {

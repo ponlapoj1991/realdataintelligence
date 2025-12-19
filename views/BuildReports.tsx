@@ -1,16 +1,20 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Loader2, RefreshCw, AlertTriangle } from 'lucide-react';
 import type { Project } from '../types';
+import { GlobalSettings } from '../types';
+import { ChartTheme } from '../constants/chartTheme';
 
 interface BuildReportsProps {
   project: Project;
+  globalSettings?: GlobalSettings;
+  chartTheme?: Pick<ChartTheme, 'id' | 'name' | 'palette' | 'typography'>;
   onMessage?: (event: MessageEvent) => void;
   onIframeLoad?: (iframe: HTMLIFrameElement | null) => void;
 }
 
 const BUILD_REPORTS_ENTRY = '/build-reports/index.html';
 
-const BuildReports: React.FC<BuildReportsProps> = ({ project, onMessage, onIframeLoad }) => {
+const BuildReports: React.FC<BuildReportsProps> = ({ project, globalSettings, chartTheme, onMessage, onIframeLoad }) => {
   const iframeRef = useRef<HTMLIFrameElement>(null);
   const [isAvailable, setIsAvailable] = useState<boolean | null>(null);
   const [isLoaded, setIsLoaded] = useState(false);
@@ -45,9 +49,9 @@ const BuildReports: React.FC<BuildReportsProps> = ({ project, onMessage, onIfram
   useEffect(() => {
     const handleMessage = (event: MessageEvent) => {
       if (typeof event.data !== 'object' || !event.data) return;
-      if (event.data?.source !== 'pptist') return;
+      if (event.data?.source !== 'pptist' && event.data?.source !== 'realpptx') return;
       if (event.data?.type === 'ready') {
-        setHandshakeMessage('Connected. PPTist editor ready.');
+        setHandshakeMessage('Connected. RealPPTX editor ready.');
       }
       onMessage?.(event);
     };
@@ -69,17 +73,19 @@ const BuildReports: React.FC<BuildReportsProps> = ({ project, onMessage, onIfram
         name: project.name,
         description: project.description ?? '',
       },
+      globalSettings,
+      chartTheme,
     };
 
     iframe.contentWindow.postMessage(payload, '*');
-  }, [isLoaded, project]);
+  }, [isLoaded, project, globalSettings, chartTheme]);
 
   const statusMessage = useMemo(() => {
     if (isAvailable === false) {
-      return 'PPTist assets are missing. Build them first.';
+      return 'Editor assets are unavailable.';
     }
     if (isLoaded) return handshakeMessage;
-    if (isAvailable) return 'Loading PPTist editor...';
+    if (isAvailable) return 'Loading RealPPTX editor...';
     return 'Checking editor assets...';
   }, [handshakeMessage, isAvailable, isLoaded]);
 
@@ -89,16 +95,34 @@ const BuildReports: React.FC<BuildReportsProps> = ({ project, onMessage, onIfram
     iframeRef.current?.contentWindow?.location.reload();
   };
 
+  useEffect(() => {
+    if (!isLoaded) return;
+    const iframe = iframeRef.current;
+    if (!iframe || !iframe.contentWindow) return;
+    iframe.contentWindow.postMessage(
+      {
+        source: 'realdata-host',
+        type: 'host-settings',
+        payload: {
+          globalSettings,
+          chartTheme,
+        },
+      },
+      '*'
+    );
+  }, [isLoaded, globalSettings, chartTheme]);
+
   return (
-    <div className="w-full h-full bg-[#0f1115] relative flex flex-col">
+    <div
+      className="w-full h-full relative flex flex-col"
+      style={{ background: globalSettings?.theme?.background ?? '#0f1115' }}
+    >
       {isAvailable === false && (
         <div className="flex-1 flex flex-col items-center justify-center text-center px-6 text-gray-200 space-y-4">
           <AlertTriangle className="w-12 h-12 text-amber-400" />
           <div>
-            <p className="font-semibold text-lg mb-1">PPTist assets not found</p>
-            <p className="text-sm text-gray-400">
-              Run <code className="px-2 py-1 bg-black/40 rounded">npm run build:pptist</code> to bundle the editor before opening Build Reports.
-            </p>
+            <p className="font-semibold text-lg mb-1">RealPPTX unavailable</p>
+            <p className="text-sm text-gray-400">Editor bundle is not included in this environment.</p>
           </div>
         </div>
       )}
@@ -106,7 +130,10 @@ const BuildReports: React.FC<BuildReportsProps> = ({ project, onMessage, onIfram
       {isAvailable !== false && (
         <div className="flex-1 relative">
           {!isLoaded && (
-            <div className="absolute inset-0 flex flex-col items-center justify-center text-gray-300 space-y-3 z-10 bg-[#0f1115]">
+            <div
+              className="absolute inset-0 flex flex-col items-center justify-center text-gray-300 space-y-3 z-10"
+              style={{ background: globalSettings?.theme?.background ?? '#0f1115' }}
+            >
               <Loader2 className="w-6 h-6 animate-spin" />
               <span className="text-sm">{statusMessage}</span>
             </div>

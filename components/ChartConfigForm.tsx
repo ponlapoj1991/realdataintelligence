@@ -32,6 +32,8 @@ interface ChartConfigFormProps {
   setMeasure: (val: AggregateMethod) => void;
   measureCol: string;
   setMeasureCol: (val: string) => void;
+  primaryColor: string;
+  setPrimaryColor: (val: string) => void;
 
   // Multi-series
   series: SeriesConfig[];
@@ -72,6 +74,8 @@ interface ChartConfigFormProps {
   setCurveType: (val: 'linear' | 'monotone' | 'step') => void;
   strokeWidth: number;
   setStrokeWidth: (val: number) => void;
+  strokeStyle: 'solid' | 'dashed' | 'dotted';
+  setStrokeStyle: (val: 'solid' | 'dashed' | 'dotted') => void;
   barSize: number;
   setBarSize: (val: number) => void;
 
@@ -93,6 +97,15 @@ interface ChartConfigFormProps {
   onSelectAllCategories: () => void;
   onClearAllCategories: () => void;
   onSeriesChange: (id: string, changes: Partial<SeriesConfig>) => void;
+
+  // Line chart grouping (Major interval) - stored on X axis
+  xAxisMajor: number;
+  setXAxisMajor: (val: number) => void;
+
+  // KPI (Number)
+  kpiCountMode: 'row' | 'group';
+  setKpiCountMode: (val: 'row' | 'group') => void;
+  kpiCategories: string[];
 }
 
 const ChartConfigForm: React.FC<ChartConfigFormProps> = ({
@@ -109,6 +122,8 @@ const ChartConfigForm: React.FC<ChartConfigFormProps> = ({
   setMeasure,
   measureCol,
   setMeasureCol,
+  primaryColor,
+  setPrimaryColor,
   series,
   sortSeriesId,
   setSortSeriesId,
@@ -139,6 +154,8 @@ const ChartConfigForm: React.FC<ChartConfigFormProps> = ({
   setCurveType,
   strokeWidth,
   setStrokeWidth,
+  strokeStyle,
+  setStrokeStyle,
   barSize,
   setBarSize,
   sortBy,
@@ -157,7 +174,12 @@ const ChartConfigForm: React.FC<ChartConfigFormProps> = ({
   onCategoryToggle,
   onSelectAllCategories,
   onClearAllCategories,
-  onSeriesChange
+  onSeriesChange,
+  xAxisMajor,
+  setXAxisMajor,
+  kpiCountMode,
+  setKpiCountMode,
+  kpiCategories
 }) => {
   const supports = getChartSupports(chartType);
   const showStackBy = supports.stackBy;
@@ -244,12 +266,150 @@ const ChartConfigForm: React.FC<ChartConfigFormProps> = ({
     );
   };
 
+  const showMajorControl = useMemo(() => {
+    if (!(showLine || showArea)) return false;
+    if (!dimension) return false;
+    const dtype = columnProfiles[dimension]?.type;
+    return dtype === 'date' || dtype === 'number';
+  }, [showLine, showArea, dimension, columnProfiles]);
+
+  const kpiColumnOptions = useMemo(() => {
+    if (chartType !== 'kpi') return [];
+    if (measure === 'sum' || measure === 'avg') {
+      return availableColumns.filter((col) => columnProfiles[col]?.type === 'number');
+    }
+    return availableColumns;
+  }, [chartType, measure, availableColumns, columnProfiles]);
+
+  const filteredKpiCategories = useMemo(() => {
+    return kpiCategories.filter((cat) => cat.toLowerCase().includes(categorySearch.toLowerCase()));
+  }, [kpiCategories, categorySearch]);
+
   return (
     <div className="space-y-4">
       {/* ========================================
+          KPI (Number)
+          ======================================== */}
+      {chartType === 'kpi' && (
+        <div className="space-y-3">
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-2">Measure</label>
+            <select
+              value={measure}
+              onChange={(e) => {
+                const next = e.target.value as AggregateMethod;
+                setMeasure(next);
+                if ((next === 'sum' || next === 'avg') && measureCol && columnProfiles[measureCol]?.type !== 'number') {
+                  setMeasureCol('');
+                }
+              }}
+              className="w-full px-3 py-2 border border-gray-300 rounded text-sm"
+            >
+              <option value="count">Count</option>
+              <option value="sum">Sum</option>
+              <option value="avg">Average</option>
+            </select>
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-2">Column</label>
+            <select
+              value={measureCol}
+              onChange={(e) => setMeasureCol(e.target.value)}
+              className="w-full px-3 py-2 border border-gray-300 rounded text-sm"
+            >
+              <option value="">Select...</option>
+              {kpiColumnOptions.map((col) => (
+                <option key={col} value={col}>
+                  {formatOptionLabel(col)}
+                </option>
+              ))}
+            </select>
+            {fieldErrors.measureCol && <p className="text-xs text-red-500 mt-1">{fieldErrors.measureCol}</p>}
+          </div>
+
+          {measure === 'count' && measureCol && (
+            <div className="border border-gray-200 rounded-lg p-3 bg-gray-50 space-y-2">
+              <label className="block text-sm font-medium text-gray-700">Mode</label>
+              <div className="flex items-center gap-4">
+                <label className="flex items-center gap-2 text-sm text-gray-700">
+                  <input
+                    type="radio"
+                    name="kpi-count-mode"
+                    checked={kpiCountMode === 'row'}
+                    onChange={() => setKpiCountMode('row')}
+                  />
+                  Row
+                </label>
+                <label className="flex items-center gap-2 text-sm text-gray-700">
+                  <input
+                    type="radio"
+                    name="kpi-count-mode"
+                    checked={kpiCountMode === 'group'}
+                    onChange={() => setKpiCountMode('group')}
+                  />
+                  Group
+                </label>
+              </div>
+            </div>
+          )}
+
+          {measure === 'count' && measureCol && kpiCountMode === 'group' && kpiCategories.length > 0 && (
+            <div>
+              <div className="flex items-center justify-between mb-2">
+                <label className="block text-sm font-medium text-gray-700">
+                  Categories ({kpiCategories.length - categoryFilter.length} of {kpiCategories.length} visible)
+                </label>
+                <div className="flex gap-2">
+                  <button onClick={onClearAllCategories} className="text-xs text-blue-600 hover:text-blue-800">
+                    Show All
+                  </button>
+                  <button onClick={onSelectAllCategories} className="text-xs text-gray-600 hover:text-gray-800">
+                    Hide All
+                  </button>
+                </div>
+              </div>
+
+              {kpiCategories.length > 5 && (
+                <div className="mb-2">
+                  <input
+                    type="text"
+                    value={categorySearch}
+                    onChange={(e) => setCategorySearch(e.target.value)}
+                    placeholder="Search categories..."
+                    className="w-full px-3 py-2 border border-gray-300 rounded text-sm"
+                  />
+                </div>
+              )}
+
+              <div className="border border-gray-200 rounded p-3 max-h-48 overflow-y-auto bg-gray-50">
+                {filteredKpiCategories.map((cat, idx) => (
+                  <label
+                    key={idx}
+                    className="flex items-center py-1.5 px-2 hover:bg-gray-100 rounded cursor-pointer"
+                  >
+                    <input
+                      type="checkbox"
+                      checked={!categoryFilter.includes(cat)}
+                      onChange={() => onCategoryToggle(cat)}
+                      className="mr-2"
+                    />
+                    <span className="text-sm text-gray-900">{cat}</span>
+                  </label>
+                ))}
+              </div>
+              <p className="text-xs text-gray-500 mt-1">
+                {categoryFilter.length === 0 ? 'All categories visible' : `${categoryFilter.length} hidden`}
+              </p>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* ========================================
           BUBBLE / SCATTER - Special Dimensions
           ======================================== */}
-      {showBubble && (
+      {showBubble && !showScatterXY && (
         <>
           {renderColumnSelect('xDimension', xDimension, setXDimension, 'X-Axis Dimension')}
 
@@ -285,7 +445,7 @@ const ChartConfigForm: React.FC<ChartConfigFormProps> = ({
                 <option value="avg">Average (เฉลี่ย)</option>
               </select>
               {(xMeasure === 'sum' || xMeasure === 'avg') && (
-                renderColumnSelect('xMeasureCol' as any, xMeasureCol, setXMeasureCol, 'X Value Column')
+                renderColumnSelect('xMeasureCol', xMeasureCol, setXMeasureCol, 'X Value Column')
               )}
             </div>
           </div>
@@ -303,10 +463,16 @@ const ChartConfigForm: React.FC<ChartConfigFormProps> = ({
                 <option value="avg">Average (เฉลี่ย)</option>
               </select>
               {(yMeasure === 'sum' || yMeasure === 'avg') && (
-                renderColumnSelect('yMeasureCol' as any, yMeasureCol, setYMeasureCol, 'Y Value Column')
+                renderColumnSelect('yMeasureCol', yMeasureCol, setYMeasureCol, 'Y Value Column')
               )}
             </div>
           </div>
+
+          {chartType === 'bubble' && (
+            <div className="pt-2">
+              {renderColumnSelect('sizeDimension', sizeDimension, setSizeDimension, 'Bubble Size')}
+            </div>
+          )}
         </>
       )}
 
@@ -505,7 +671,7 @@ const ChartConfigForm: React.FC<ChartConfigFormProps> = ({
       {/* ========================================
           SINGLE MEASURE (for non-combo, non-bubble)
           ======================================== */}
-      {showMeasure && !showMultiSeries && !showBubble && (
+      {showMeasure && !showMultiSeries && !showBubble && chartType !== 'kpi' && (
         <div className="space-y-3">
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-2">Measure</label>
@@ -596,6 +762,60 @@ const ChartConfigForm: React.FC<ChartConfigFormProps> = ({
               className="w-full"
             />
           </div>
+
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-2">Stroke Style</label>
+            <select
+              value={strokeStyle}
+              onChange={(e) => setStrokeStyle(e.target.value as any)}
+              className="w-full px-3 py-2 border border-gray-300 rounded text-sm"
+            >
+              <option value="solid">Solid</option>
+              <option value="dashed">Dashed</option>
+              <option value="dotted">Dotted</option>
+            </select>
+          </div>
+
+          {!supports.stackBy && !supports.multiSeries && (
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-2">Line Color</label>
+              <div className="flex items-center gap-3">
+                <input
+                  type="color"
+                  value={primaryColor || '#3B82F6'}
+                  onChange={(e) => setPrimaryColor(e.target.value)}
+                  className="h-10 w-12 rounded border border-gray-200 bg-white"
+                />
+                <input
+                  type="text"
+                  value={primaryColor || ''}
+                  onChange={(e) => setPrimaryColor(e.target.value)}
+                  className="flex-1 px-3 py-2 border border-gray-300 rounded text-sm font-mono"
+                />
+              </div>
+            </div>
+          )}
+
+          {showMajorControl && (
+            <div className="border border-gray-200 rounded-lg p-3 bg-gray-50">
+              <label className="block text-sm font-medium text-gray-700 mb-2">
+                Major (Group Interval)
+              </label>
+              <div className="flex items-center gap-3">
+                <input
+                  type="number"
+                  min={0}
+                  max={365}
+                  value={xAxisMajor}
+                  onChange={(e) => setXAxisMajor(parseInt(e.target.value || '0', 10) || 0)}
+                  className="w-28 px-3 py-2 border border-gray-300 rounded text-sm bg-white"
+                />
+                <p className="text-xs text-gray-500">
+                  ใส่ 0 เพื่อแสดงทุกค่า, ใส่ 7 เพื่อรวมเป็นช่วงละ 7 หน่วย
+                </p>
+              </div>
+            </div>
+          )}
         </>
       )}
 
@@ -665,20 +885,20 @@ const ChartConfigForm: React.FC<ChartConfigFormProps> = ({
         <div>
           <div className="flex items-center justify-between mb-2">
             <label className="block text-sm font-medium text-gray-700">
-              Categories ({categoryFilter.length > 0 ? categoryFilter.length : allCategories.length} of {allCategories.length})
+              Categories ({allCategories.length - categoryFilter.length} of {allCategories.length} visible)
             </label>
             <div className="flex gap-2">
               <button
-                onClick={onSelectAllCategories}
+                onClick={onClearAllCategories}
                 className="text-xs text-blue-600 hover:text-blue-800"
               >
-                Select All
+                Show All
               </button>
               <button
-                onClick={onClearAllCategories}
+                onClick={onSelectAllCategories}
                 className="text-xs text-gray-600 hover:text-gray-800"
               >
-                Clear
+                Hide All
               </button>
             </div>
           </div>
@@ -703,7 +923,7 @@ const ChartConfigForm: React.FC<ChartConfigFormProps> = ({
               >
                 <input
                   type="checkbox"
-                  checked={categoryFilter.length === 0 || categoryFilter.includes(cat)}
+                  checked={!categoryFilter.includes(cat)}
                   onChange={() => onCategoryToggle(cat)}
                   className="mr-2"
                 />
@@ -712,7 +932,7 @@ const ChartConfigForm: React.FC<ChartConfigFormProps> = ({
             ))}
           </div>
           <p className="text-xs text-gray-500 mt-1">
-            {categoryFilter.length === 0 ? 'All categories shown' : `${categoryFilter.length} selected`}
+            {categoryFilter.length === 0 ? 'All categories visible' : `${categoryFilter.length} hidden`}
           </p>
         </div>
       )}

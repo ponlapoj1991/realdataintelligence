@@ -5,6 +5,8 @@ export type ChartFieldKey =
   | 'dimension'
   | 'stackBy'
   | 'measureCol'
+  | 'xMeasureCol'
+  | 'yMeasureCol'
   | 'xDimension'
   | 'yDimension'
   | 'sizeDimension'
@@ -34,6 +36,22 @@ const baseDimension = (label = 'Dimension'): FieldConstraint => ({
 const measureConstraint: FieldConstraint = {
   key: 'measureCol',
   label: 'Value Column',
+  required: false,
+  allowedTypes: numericOnly,
+  helper: 'Required only when using Sum or Average'
+};
+
+const scatterMeasureX: FieldConstraint = {
+  key: 'xMeasureCol',
+  label: 'X Value Column',
+  required: false,
+  allowedTypes: numericOnly,
+  helper: 'Required only when using Sum or Average'
+};
+
+const scatterMeasureY: FieldConstraint = {
+  key: 'yMeasureCol',
+  label: 'Y Value Column',
   required: false,
   allowedTypes: numericOnly,
   helper: 'Required only when using Sum or Average'
@@ -98,15 +116,15 @@ const constraintsMap: Partial<Record<ChartType, FieldConstraint[]>> = {
   '100-stacked-area': [baseDimension(), stackConstraint],
   pie: [pieDimension()],
   donut: [pieDimension()],
-  scatter: [scatterX, scatterY],
-  bubble: [scatterX, scatterY, bubbleSize, colorByConstraint],
+  scatter: [baseDimension('Group By'), scatterMeasureX, scatterMeasureY],
+  bubble: [baseDimension('Group By'), scatterMeasureX, scatterMeasureY, bubbleSize],
   combo: [baseDimension()]
 };
 
 export const getFieldConstraints = (type: ChartType): FieldConstraint[] => {
   const defaults = constraintsMap[type] || [];
-  // Measure requirement for most chart types except KPI/table/wordcloud
-  const needsMeasure = !['kpi', 'table', 'wordcloud'].includes(type);
+  // Measure requirement for most chart types except table/wordcloud
+  const needsMeasure = !['table', 'wordcloud'].includes(type);
   const constraints = [...defaults];
   if (needsMeasure) {
     constraints.push(measureConstraint);

@@ -184,6 +184,7 @@ export interface DataLabelConfig {
   fontWeight: 'normal' | 'bold';
   fontFamily?: string;
   color: string;
+  valueFormat?: 'auto' | 'text' | 'number' | 'compact' | 'accounting';
   showPercent?: boolean;
   percentPlacement?: 'prefix' | 'suffix';
   percentDecimals?: number;
@@ -200,6 +201,10 @@ export interface SeriesConfig {
   yAxis: 'left' | 'right';
   color: string;
   dataLabels?: DataLabelConfig;
+  // Line/Area specific
+  smooth?: boolean;
+  strokeWidth?: number;
+  strokeStyle?: 'solid' | 'dashed' | 'dotted';
 }
 
 // Axis Configuration
@@ -221,6 +226,9 @@ export interface AxisConfig {
   // Gridlines
   showGridlines?: boolean;
   gridColor?: string;
+
+  // Line chart grouping (Major interval). 0/undefined = no grouping
+  major?: number;
 }
 
 // Gridlines Configuration
@@ -289,6 +297,10 @@ export interface DashboardWidget {
   // Line Chart Specific
   curveType?: 'linear' | 'monotone' | 'step';
   strokeWidth?: number;
+  strokeStyle?: 'solid' | 'dashed' | 'dotted';
+
+  // KPI (Number) Specific
+  kpiCountMode?: 'row' | 'group';
 
   limit?: number;         // Limit rows (Top 10, 20, etc)
   sortBy?: SortOrder;     // Sort order for data
@@ -470,7 +482,7 @@ export interface Project {
   dashboards?: ProjectDashboard[];
   activeDashboardId?: string;
 
-  // Magic Dashboard (ECharts-based, PPTist-compatible)
+  // Magic Dashboard (ECharts-based, RealPPTX-compatible)
   magicDashboards?: ProjectDashboard[];
   activeMagicDashboardId?: string;
   

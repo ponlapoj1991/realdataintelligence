@@ -2,8 +2,8 @@ import fs from 'fs/promises';
 import path from 'path';
 
 const projectRoot = process.cwd();
-const pptistSrc = path.resolve(projectRoot, 'integrations', 'pptist', 'src');
-const localeDir = path.join(pptistSrc, 'locales');
+const realpptxSrc = path.resolve(projectRoot, 'integrations', 'realpptx', 'src');
+const localeDir = path.join(realpptxSrc, 'locales');
 const manualLocalePath = path.join(localeDir, 'en.ts');
 const autoLocalePath = path.join(localeDir, 'generated.ts');
 
@@ -37,7 +37,7 @@ function extractTranslations(content) {
 }
 
 async function collectChineseStrings() {
-  const files = await getFiles(pptistSrc);
+  const files = await getFiles(realpptxSrc);
   const found = new Set();
   for (const file of files) {
     const text = await fs.readFile(file, 'utf8');

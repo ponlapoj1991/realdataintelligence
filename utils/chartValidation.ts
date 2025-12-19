@@ -7,6 +7,10 @@ export interface ChartFieldState {
   stackBy: string;
   measure: AggregateMethod;
   measureCol: string;
+  xMeasure: AggregateMethod;
+  xMeasureCol: string;
+  yMeasure: AggregateMethod;
+  yMeasureCol: string;
   xDimension: string;
   yDimension: string;
   sizeDimension: string;
@@ -36,6 +40,14 @@ export const buildFieldErrors = (
       return; // not required for Count
     }
 
+    if (constraint.key === 'xMeasureCol' && state.xMeasure === 'count') {
+      return;
+    }
+
+    if (constraint.key === 'yMeasureCol' && state.yMeasure === 'count') {
+      return;
+    }
+
     if (constraint.required && !value) {
       errors[constraint.key] = 'จำเป็นต้องเลือกคอลัมน์นี้';
       return;
@@ -60,6 +72,18 @@ export const buildFieldErrors = (
 
   if ((state.measure === 'sum' || state.measure === 'avg') && !state.measureCol) {
     errors.measureCol = 'ต้องเลือกคอลัมน์เพื่อคำนวณ';
+  }
+
+  if (chartType === 'kpi' && state.measure === 'count' && !state.measureCol) {
+    errors.measureCol = 'ต้องเลือกคอลัมน์เพื่อคำนวณ';
+  }
+
+  if ((chartType === 'scatter' || chartType === 'bubble') && (state.xMeasure === 'sum' || state.xMeasure === 'avg') && !state.xMeasureCol) {
+    errors.xMeasureCol = 'ต้องเลือกคอลัมน์เพื่อคำนวณ';
+  }
+
+  if ((chartType === 'scatter' || chartType === 'bubble') && (state.yMeasure === 'sum' || state.yMeasure === 'avg') && !state.yMeasureCol) {
+    errors.yMeasureCol = 'ต้องเลือกคอลัมน์เพื่อคำนวณ';
   }
 
   return errors;

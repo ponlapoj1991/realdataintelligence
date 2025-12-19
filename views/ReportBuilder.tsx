@@ -1,7 +1,8 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Plus, Edit3, Trash2, ArrowLeft, Loader2, Save, X, LayoutDashboard } from 'lucide-react';
 import { Project, DashboardWidget, ReportSlide } from '../types';
 import { useToast } from '../components/ToastProvider';
+import { useGlobalSettings } from '../components/GlobalSettingsProvider';
 import {
   ensurePresentations,
   addPresentation,
@@ -14,9 +15,34 @@ import { ensureMagicDashboards } from '../utils/dashboards';
 import { resolveDashboardBaseData } from '../utils/dashboardData';
 import { saveProject } from '../utils/storage-compat';
 import BuildReports from './BuildReports';
-import { PPTIST_CHART_THEME } from '../constants/chartTheme';
+import { REALPPTX_CHART_THEME } from '../constants/chartTheme';
 import { buildDashboardChartPayload } from '../utils/dashboardChartPayload';
 import { buildMagicEchartsOption } from '../utils/magicOptionBuilder';
+
+const hashString = (input: string) => {
+  let hash = 5381;
+  for (let i = 0; i < input.length; i++) {
+    hash = ((hash << 5) + hash) ^ input.charCodeAt(i);
+  }
+  return (hash >>> 0).toString(16);
+};
+
+const hashJson = (value: unknown) => {
+  try {
+    return hashString(JSON.stringify(value ?? null));
+  } catch {
+    return '';
+  }
+};
+
+const runWhenIdle = (fn: () => void, timeoutMs = 1200) => {
+  const w = window as any;
+  if (typeof w.requestIdleCallback === 'function') {
+    w.requestIdleCallback(() => fn(), { timeout: timeoutMs });
+    return;
+  }
+  window.setTimeout(fn, 0);
+};
 
 // Helper to strip functions from objects before postMessage (functions can't be cloned)
 const stripFunctions = (obj: any): any => {
@@ -44,6 +70,7 @@ interface ReportBuilderProps {
 type ViewMode = 'list' | 'editor';
 
 const ReportBuilder: React.FC<ReportBuilderProps> = ({ project, onUpdateProject }) => {
+  const { settings: globalSettings } = useGlobalSettings();
   const {
     project: withMagicDash,
     dashboards: magicDashboards,
@@ -103,9 +130,37 @@ const ReportBuilder: React.FC<ReportBuilderProps> = ({ project, onUpdateProject 
     await saveProject(next);
   };
 
+  const autosaveTimerRef = useRef<number | null>(null);
+  const lastSentLoadRef = useRef<{ presentationId: string; slidesHash: string } | null>(null);
+
   const editingPresentation =
     presentations.find((p) => p.id === (selectedPresentationId || normalizedProject.activePresentationId)) ||
     activePresentation;
+
+  const queueAutosave = useCallback(
+    (presentationId: string, slides: ReportSlide[], name?: string) => {
+      if (autosaveTimerRef.current) {
+        window.clearTimeout(autosaveTimerRef.current);
+      }
+      autosaveTimerRef.current = window.setTimeout(() => {
+        if (!editingPresentation) return;
+        if (editingPresentation.id !== presentationId) return;
+        runWhenIdle(() => {
+          if (!editingPresentation) return;
+          if (editingPresentation.id !== presentationId) return;
+          const updatedProject = updatePresentationSlides(normalizedProject, editingPresentation.id, slides);
+          if (name && name.trim() && name.trim() !== editingPresentation.name) {
+            const renamed = renamePresentation(updatedProject, editingPresentation.id, name.trim());
+            void persistProject(renamed);
+            return;
+          }
+          void persistProject(updatedProject);
+        }, 1500);
+      }, 900);
+    },
+    [editingPresentation, normalizedProject, persistProject]
+  );
+
   const selectedDashboard =
     dashboardsForInsert.find((dash) => dash.id === selectedDashboardId) || dashboardsForInsert[0];
 
@@ -141,13 +196,13 @@ const ReportBuilder: React.FC<ReportBuilderProps> = ({ project, onUpdateProject 
       const intentToUse = intentOverride ?? pendingSaveIntent;
       if (!intentToUse) return false;
       if (!iframeWindow) {
-        showToast('Editor unavailable', 'Unable to communicate with PPTist.', 'error');
+        showToast('Editor unavailable', 'Unable to communicate with RealPPTX.', 'error');
         setPendingSaveIntent(null);
         setIsSaving(false);
         return false;
       }
       if (!isEditorReady) {
-        showToast('Editor still loading', 'Waiting for PPTist to finish initializing.', 'info');
+        showToast('Editor still loading', 'Waiting for RealPPTX to finish initializing.', 'info');
         return false;
       }
       setIsSaving(true);
@@ -218,7 +273,7 @@ const ReportBuilder: React.FC<ReportBuilderProps> = ({ project, onUpdateProject 
   const handleInsertChart = useCallback(
     async (widget: DashboardWidget) => {
       if (!iframeWindow) {
-        showToast('Editor not ready', 'Waiting for PPTist to finish loading.', 'warning');
+        showToast('Editor not ready', 'Waiting for RealPPTX to finish loading.', 'warning');
         return;
       }
       setInsertingWidgetId(widget.id);
@@ -229,7 +284,7 @@ const ReportBuilder: React.FC<ReportBuilderProps> = ({ project, onUpdateProject 
         const { rows: baseRows } = resolveDashboardBaseData(normalizedProject, dashboard ?? null);
 
         const payload = buildDashboardChartPayload(widget, baseRows, {
-          theme: PPTIST_CHART_THEME,
+          theme: REALPPTX_CHART_THEME,
           sourceDashboardId: dashboard?.id,
         });
         if (!payload) {
@@ -274,10 +329,10 @@ const ReportBuilder: React.FC<ReportBuilderProps> = ({ project, onUpdateProject 
   const handlePptistMessage = useCallback(
     (event: MessageEvent) => {
       if (typeof event.data !== 'object' || !event.data) return;
-      if (event.data.source !== 'pptist') return;
+      if (event.data.source !== 'pptist' && event.data.source !== 'realpptx') return;
       if (event.data.type === 'open-dashboard-insert') {
         if (!dashboardsForInsert.length) {
-          showToast('No dashboards', 'Create a dashboard in Dashboard or Dashboard Magic before inserting charts.', 'info');
+          showToast('No dashboards', 'No dashboard configuration found.', 'info');
           return;
         }
         setInsertDrawerOpen(true);
@@ -297,6 +352,12 @@ const ReportBuilder: React.FC<ReportBuilderProps> = ({ project, onUpdateProject 
           return;
         }
         persistSlidesFromExport(payload.slides, pendingSaveIntent === 'close');
+      }
+
+      if (event.data.type === 'autosave-presentation') {
+        const payload = event.data.payload as { presentationId?: string; slides?: ReportSlide[]; title?: string } | undefined;
+        if (!payload?.presentationId || !payload.slides || !Array.isArray(payload.slides)) return;
+        queueAutosave(payload.presentationId, payload.slides, payload.title);
       }
 
       // Automation Report: Handle update request for linked charts
@@ -325,7 +386,7 @@ const ReportBuilder: React.FC<ReportBuilderProps> = ({ project, onUpdateProject 
           const { rows: baseRows } = resolveDashboardBaseData(normalizedProject, dashboard);
 
           const payload = buildDashboardChartPayload(widget, baseRows, {
-            theme: PPTIST_CHART_THEME,
+            theme: REALPPTX_CHART_THEME,
             sourceDashboardId: dashboard.id,
           });
 
@@ -342,7 +403,7 @@ const ReportBuilder: React.FC<ReportBuilderProps> = ({ project, onUpdateProject 
           // Strip functions before postMessage (functions can't be cloned)
           const safeOptionRaw = stripFunctions(optionRaw);
 
-          // Send update to PPTist
+          // Send update to RealPPTX
           iframeWindow?.postMessage(
             {
               source: 'realdata-host',
@@ -372,7 +433,7 @@ const ReportBuilder: React.FC<ReportBuilderProps> = ({ project, onUpdateProject 
         showToast('No linked charts', 'Insert charts from Dashboard first to enable updates.', 'info');
       }
     },
-    [dashboardsForInsert, iframeWindow, normalizedProject, pendingSaveIntent, persistSlidesFromExport, requestPresentationExport, showToast]
+    [dashboardsForInsert, iframeWindow, normalizedProject, pendingSaveIntent, persistSlidesFromExport, queueAutosave, requestPresentationExport, showToast]
   );
 
   useEffect(() => {
@@ -395,18 +456,36 @@ const ReportBuilder: React.FC<ReportBuilderProps> = ({ project, onUpdateProject 
 
   useEffect(() => {
     if (!iframeWindow || mode !== 'editor' || !editingPresentation || !isEditorReady) return;
+
+    const slides = editingPresentation.slides || [];
+    const slidesHash = hashJson(slides);
+    const updatedAt = typeof editingPresentation.updatedAt === 'number' ? editingPresentation.updatedAt : 0;
+
+    const lastSent = lastSentLoadRef.current;
+    const isSamePayload =
+      !!lastSent &&
+      lastSent.presentationId === editingPresentation.id &&
+      lastSent.slidesHash === slidesHash;
+
+    if (isSamePayload) return;
+    lastSentLoadRef.current = { presentationId: editingPresentation.id, slidesHash };
+
     iframeWindow.postMessage(
       {
         source: 'realdata-host',
         type: 'load-presentation',
         payload: {
-          slides: editingPresentation.slides || [],
+          presentationId: editingPresentation.id,
+          slides,
           title: editingPresentation.name,
+          updatedAt,
+          globalSettings,
+          chartTheme: REALPPTX_CHART_THEME,
         },
       },
       '*'
     );
-  }, [editingPresentation, iframeWindow, mode, isEditorReady]);
+  }, [editingPresentation, iframeWindow, mode, isEditorReady, globalSettings]);
 
   const renderListView = () => (
     <div className="h-full flex flex-col px-10 py-8 overflow-y-auto w-full bg-[#F8F9FA]">
@@ -415,7 +494,7 @@ const ReportBuilder: React.FC<ReportBuilderProps> = ({ project, onUpdateProject 
           <div>
             <h1 className="text-2xl font-bold text-gray-900">Canvas Start</h1>
             <p className="text-sm text-gray-500 mt-1">
-              Create multiple decks per project and jump back into PPTist instantly.
+              Create multiple decks per project and jump back into RealPPTX instantly.
             </p>
           </div>
           <button
@@ -653,6 +732,8 @@ const ReportBuilder: React.FC<ReportBuilderProps> = ({ project, onUpdateProject 
           <BuildReports
             key={editingPresentation.id}
             project={project}
+            globalSettings={globalSettings}
+            chartTheme={REALPPTX_CHART_THEME}
             onMessage={handlePptistMessage}
             onIframeLoad={handleIframeLoad}
           />

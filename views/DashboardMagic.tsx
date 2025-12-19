@@ -36,11 +36,12 @@ import {
 import { ensureDataSources } from '../utils/dataSources';
 import { resolveDashboardBaseData } from '../utils/dashboardData';
 import { saveProject } from '../utils/storage-compat';
-import { PPTIST_CHART_THEME } from '../constants/chartTheme';
+import { REALPPTX_CHART_THEME } from '../constants/chartTheme';
 import { buildMagicChartPayload } from '../utils/magicChartPayload';
 import { buildMagicEchartsOption } from '../utils/magicOptionBuilder';
 import { exportToExcel } from '../utils/excel';
 import { generatePowerPoint } from '../utils/report';
+import { useMagicAggregationWorker } from '../hooks/useMagicAggregationWorker';
 
 // --- Helper Functions (Ported from Analytics.tsx) ---
 const SAMPLE_SIZE = 50;
@@ -146,22 +147,24 @@ const DashboardMagic: React.FC<DashboardMagicProps> = ({ project, onUpdateProjec
   // --- New States for Filters & Interaction ---
   const [filters, setFilters] = useState<DashboardFilter[]>([]);
   const [isPresentationMode, setIsPresentationMode] = useState(false);
-  const [interactionMode, setInteractionMode] = useState<'drill' | 'filter'>('filter');
+  const [interactionMode, setInteractionMode] = useState<'drill' | 'filter'>('drill');
   const [isExporting, setIsExporting] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [newFilterCol, setNewFilterCol] = useState('');
   const [drillDown, setDrillDown] = useState<DrillDownState | null>(null);
 
   // Grid State
-  const [draggedWidget, setDraggedWidget] = useState<{ id: string; sectionIndex: number } | null>(null);
+  const [draggedWidget, setDraggedWidget] = useState<{ id: string; sectionIndex: number; colSpan: number; heightPx: number } | null>(null);
   const [resizing, setResizing] = useState<{ id: string; startX: number; startSpan: number } | null>(null);
+  const [dragOverSection, setDragOverSection] = useState<number | null>(null);
+  const [dropTarget, setDropTarget] = useState<{ sectionIndex: number; beforeId?: string; afterId?: string } | null>(null);
 
   // Migration: Auto-assign sections and colSpan
   useEffect(() => {
     if (widgets.length > 0 && widgets.some((w) => w.sectionIndex === undefined || w.colSpan === undefined)) {
       const updated = widgets.map((w, idx) => {
-        // Default logic: 2 widgets per section, max 5 sections
-        const defaultSection = Math.min(Math.floor(idx / 2), 4);
+        // Default logic: 2 widgets per section (no hard limit)
+        const defaultSection = Math.floor(idx / 2);
         const defaultSpan = w.width === 'full' ? 4 : 2;
         return {
           ...w,
@@ -241,6 +244,8 @@ const DashboardMagic: React.FC<DashboardMagicProps> = ({ project, onUpdateProjec
     if (filters.length === 0) return baseData;
     return baseData.filter(row => filters.every(f => matchesFilterCondition(row, f)));
   }, [baseData, filters, matchesFilterCondition]);
+
+  const magicAggWorker = useMagicAggregationWorker(filteredData, REALPPTX_CHART_THEME);
 
   const persistProject = useCallback(
     async (updated: Project) => {
@@ -382,7 +387,7 @@ const DashboardMagic: React.FC<DashboardMagicProps> = ({ project, onUpdateProjec
 
   const handleExportWidget = (widget: DashboardWidget) => {
     const payload = buildMagicChartPayload(widget, filteredData, {
-      theme: PPTIST_CHART_THEME,
+      theme: REALPPTX_CHART_THEME,
       sourceDashboardId: editingDashboard?.id,
     });
     if (!payload) {
@@ -401,6 +406,136 @@ const DashboardMagic: React.FC<DashboardMagicProps> = ({ project, onUpdateProjec
   };
 
   const dashboardRef = useRef<HTMLDivElement>(null);
+  const editorScrollRef = useRef<HTMLDivElement>(null);
+
+  const SECTION_GAP_PX = 32; // space-y-8
+  const SECTION_BASE_PX = 150; // empty section dropzone height
+  const WIDGET_CARD_PX = 300; // minHeight in widget card
+  const WIDGET_HEADER_PX = 72; // title/meta + padding approximation
+  const GRID_GAP_PX = 24; // gap-6
+
+  const getSectionCount = useCallback((nextWidgets: DashboardWidget[]) => {
+    const maxIndex = nextWidgets.reduce((max, w) => Math.max(max, w.sectionIndex ?? 0), 0);
+    return Math.max(2, maxIndex + 2); // keep one empty tail section available
+  }, []);
+
+  const estimateSectionHeightPx = useCallback((sectionWidgets: DashboardWidget[]) => {
+    if (sectionWidgets.length === 0) return SECTION_BASE_PX;
+
+    // Estimate grid rows by packing widgets into 4 columns using colSpan
+    let rows = 1;
+    let filled = 0;
+    for (const w of sectionWidgets) {
+      const span = Math.max(1, Math.min(4, w.colSpan || (w.width === 'full' ? 4 : 2)));
+      if (filled + span > 4) {
+        rows += 1;
+        filled = 0;
+      }
+      filled += span;
+      if (filled >= 4) filled = 0;
+    }
+
+    const rowHeight = WIDGET_CARD_PX + WIDGET_HEADER_PX;
+    const total = rows * rowHeight + Math.max(0, rows - 1) * GRID_GAP_PX + 2 * 16; // section padding
+    return Math.max(SECTION_BASE_PX, total);
+  }, []);
+
+  const [scrollState, setScrollState] = useState({ top: 0, height: 0 });
+  useEffect(() => {
+    if (mode !== 'editor') return;
+    const el = editorScrollRef.current;
+    if (!el) return;
+
+    let raf = 0;
+    const update = () => {
+      raf = 0;
+      setScrollState({ top: el.scrollTop, height: el.clientHeight });
+    };
+
+    const onScroll = () => {
+      if (raf) return;
+      raf = window.requestAnimationFrame(update);
+    };
+
+    update();
+    el.addEventListener('scroll', onScroll, { passive: true });
+    window.addEventListener('resize', update);
+    return () => {
+      if (raf) window.cancelAnimationFrame(raf);
+      el.removeEventListener('scroll', onScroll);
+      window.removeEventListener('resize', update);
+    };
+  }, [mode]);
+
+  const sectionCount = useMemo(() => getSectionCount(widgets), [widgets, getSectionCount]);
+  const sections = useMemo(() => Array.from({ length: sectionCount }, (_, i) => i), [sectionCount]);
+
+  const sectionHeights = useMemo(() => {
+    const heights: number[] = [];
+    for (let i = 0; i < sectionCount; i++) {
+      const sectionWidgets = widgets.filter((w) => (w.sectionIndex ?? 0) === i);
+      heights.push(estimateSectionHeightPx(sectionWidgets));
+    }
+    return heights;
+  }, [widgets, sectionCount, estimateSectionHeightPx]);
+
+  const sectionTops = useMemo(() => {
+    const tops: number[] = [];
+    let acc = 0;
+    for (let i = 0; i < sectionCount; i++) {
+      tops.push(acc);
+      acc += sectionHeights[i] + SECTION_GAP_PX;
+    }
+    return tops;
+  }, [sectionCount, sectionHeights]);
+
+  const totalHeight = useMemo(() => {
+    const last = sectionCount - 1;
+    if (last < 0) return 0;
+    return sectionTops[last] + sectionHeights[last];
+  }, [sectionCount, sectionTops, sectionHeights]);
+
+  const windowedSectionRange = useMemo(() => {
+    const { top: scrollTop, height: viewportHeight } = scrollState;
+    const bufferPx = 800;
+    const fromPx = Math.max(0, scrollTop - bufferPx);
+    const toPx = scrollTop + viewportHeight + bufferPx;
+
+    let startIdx = 0;
+    for (let i = 0; i < sectionCount; i++) {
+      const bottom = sectionTops[i] + sectionHeights[i];
+      if (bottom >= fromPx) {
+        startIdx = i;
+        break;
+      }
+    }
+
+    let endIdx = sectionCount - 1;
+    for (let i = sectionCount - 1; i >= 0; i--) {
+      if (sectionTops[i] <= toPx) {
+        endIdx = i;
+        break;
+      }
+    }
+
+    if (draggedWidget) {
+      startIdx = Math.min(startIdx, Math.max(0, draggedWidget.sectionIndex - 1));
+      endIdx = Math.max(endIdx, Math.min(sectionCount - 1, draggedWidget.sectionIndex + 1));
+    }
+
+    if (typeof dragOverSection === 'number') {
+      startIdx = Math.min(startIdx, Math.max(0, dragOverSection - 1));
+      endIdx = Math.max(endIdx, Math.min(sectionCount - 1, dragOverSection + 1));
+    }
+
+    return { startIdx, endIdx };
+  }, [scrollState, sectionCount, sectionTops, sectionHeights, draggedWidget, dragOverSection]);
+
+  const topSpacer = sectionTops[windowedSectionRange.startIdx] || 0;
+  const bottomSpacer = Math.max(
+    0,
+    totalHeight - (sectionTops[windowedSectionRange.endIdx] + sectionHeights[windowedSectionRange.endIdx])
+  );
 
   const handleExportPPT = async () => {
     if (!dashboardRef.current || widgets.length === 0) {
@@ -417,7 +552,7 @@ const DashboardMagic: React.FC<DashboardMagicProps> = ({ project, onUpdateProjec
         filtersStr,
         widgets,
         filteredData,
-        PPTIST_CHART_THEME
+        REALPPTX_CHART_THEME
       );
     } catch (e) {
       console.error('PPT export failed:', e);
@@ -430,7 +565,13 @@ const DashboardMagic: React.FC<DashboardMagicProps> = ({ project, onUpdateProjec
   // --- Grid Handlers ---
 
   const onDragStart = (e: React.DragEvent, id: string, sectionIndex: number) => {
-    setDraggedWidget({ id, sectionIndex });
+    const target = e.currentTarget as HTMLElement;
+    const rect = target.getBoundingClientRect();
+    const w = widgets.find((x) => x.id === id);
+    const colSpan = Math.max(1, Math.min(4, w?.colSpan || (w?.width === 'full' ? 4 : 2)));
+    setDraggedWidget({ id, sectionIndex, colSpan, heightPx: Math.max(120, Math.round(rect.height)) });
+    setDragOverSection(sectionIndex);
+    setDropTarget(null);
     e.dataTransfer.effectAllowed = 'move';
     // Transparent drag image if needed, or default
   };
@@ -442,29 +583,73 @@ const DashboardMagic: React.FC<DashboardMagicProps> = ({ project, onUpdateProjec
 
   const onDropSection = async (targetSection: number) => {
     if (!draggedWidget) return;
-    const { id, sectionIndex: sourceSection } = draggedWidget;
+    const { id } = draggedWidget;
 
-    // Constraint: Can only move 1 step (e.g. 1->2 or 1->0, NOT 1->3)
-    // Exception: Moving within same section is always allowed (reorder?)
-    // But requirement says "ขยับข้าม section จะต้องทำได้ทีละ step"
-    const diff = Math.abs(targetSection - sourceSection);
-    
-    if (sourceSection !== targetSection && diff > 1) {
-      alert('Can only move widgets one section at a time (e.g. Section 1 to 2).');
-      setDraggedWidget(null);
-      return;
+    const moving = widgets.find((w) => w.id === id);
+    if (!moving) return;
+
+    const next = widgets.filter((w) => w.id !== id);
+    const moved = { ...moving, sectionIndex: targetSection };
+
+    const target = dropTarget && dropTarget.sectionIndex === targetSection ? dropTarget : null;
+
+    let insertIndex = next.length;
+    if (target?.beforeId) {
+      const idx = next.findIndex((w) => w.id === target.beforeId);
+      if (idx >= 0) insertIndex = idx;
+    } else if (target?.afterId) {
+      const idx = next.findIndex((w) => w.id === target.afterId);
+      if (idx >= 0) insertIndex = idx + 1;
+    } else {
+      const lastIdx = (() => {
+        for (let i = next.length - 1; i >= 0; i--) {
+          if ((next[i].sectionIndex ?? 0) === targetSection) return i;
+        }
+        return -1;
+      })();
+      if (lastIdx >= 0) insertIndex = lastIdx + 1;
     }
 
-    const updated = widgets.map((w) => {
-      if (w.id === id) {
-        return { ...w, sectionIndex: targetSection };
-      }
-      return w;
-    });
-    
-    setWidgets(updated);
+    next.splice(insertIndex, 0, moved);
+
+    setWidgets(next);
     setDraggedWidget(null);
-    await handleSaveWidgets(updated);
+    setDragOverSection(null);
+    setDropTarget(null);
+    await handleSaveWidgets(next);
+  };
+
+  const onDragEnd = () => {
+    setDraggedWidget(null);
+    setDragOverSection(null);
+    setDropTarget(null);
+  };
+
+  const onDragEnterSection = (sectionIndex: number) => {
+    if (!draggedWidget) return;
+    setDragOverSection(sectionIndex);
+    if (!dropTarget || dropTarget.sectionIndex !== sectionIndex) {
+      setDropTarget({ sectionIndex });
+    }
+  };
+
+  const onDragOverWidget = (e: React.DragEvent, sectionIndex: number, widgetId: string) => {
+    if (!draggedWidget) return;
+    if (draggedWidget.id === widgetId) {
+      setDragOverSection(sectionIndex);
+      setDropTarget({ sectionIndex });
+      return;
+    }
+    e.preventDefault();
+    e.stopPropagation();
+    setDragOverSection(sectionIndex);
+
+    const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+    const isBefore = e.clientY < rect.top + rect.height / 2;
+    setDropTarget({
+      sectionIndex,
+      ...(isBefore ? { beforeId: widgetId } : { afterId: widgetId }),
+    });
   };
 
   // Resize Logic
@@ -544,11 +729,6 @@ const DashboardMagic: React.FC<DashboardMagicProps> = ({ project, onUpdateProjec
     const filterColumn = widget.dimension;
     if (!filterColumn) return;
 
-    if (interactionMode === 'filter') {
-      addFilter(filterColumn, activeLabel);
-      return;
-    }
-
     const clickedData = filteredData.filter((row) => String(row[filterColumn] ?? '').includes(activeLabel));
 
     setDrillDown({
@@ -567,7 +747,7 @@ const DashboardMagic: React.FC<DashboardMagicProps> = ({ project, onUpdateProjec
           <div>
             <h1 className="text-2xl font-bold text-gray-900">Dashboard Magic</h1>
             <p className="text-sm text-gray-500 mt-1">
-              Create ECharts dashboards that stay compatible with PPTist.
+              Create ECharts dashboards that stay compatible with RealPPTX.
             </p>
           </div>
           <button
@@ -646,7 +826,7 @@ const DashboardMagic: React.FC<DashboardMagicProps> = ({ project, onUpdateProjec
           <div className="bg-white rounded-xl shadow-2xl w-full max-w-md p-6 space-y-4">
             <h3 className="text-lg font-bold text-gray-900">Create Magic Dashboard</h3>
             <p className="text-sm text-gray-500">
-              Organize charts for PPTist-compatible rendering.
+              Organize charts for RealPPTX-compatible rendering.
             </p>
             <div>
               <label className="text-xs font-semibold text-gray-600">Dashboard Name</label>
@@ -749,7 +929,7 @@ const DashboardMagic: React.FC<DashboardMagicProps> = ({ project, onUpdateProjec
         </div>
 
         {/* Toolbar & Content */}
-        <div className="flex-1 overflow-auto p-8">
+        <div ref={editorScrollRef} className="flex-1 overflow-auto p-8">
           <div className="flex flex-col md:flex-row md:items-end justify-between gap-4 mb-6">
             <div>
               <h2 className="text-2xl font-bold text-gray-900 flex items-center">
@@ -781,16 +961,8 @@ const DashboardMagic: React.FC<DashboardMagicProps> = ({ project, onUpdateProjec
               {/* Interaction Toggle */}
               <div className="bg-white border border-gray-300 rounded-lg flex p-0.5 shadow-sm">
                 <button
-                  onClick={() => setInteractionMode('filter')}
-                  className={`flex items-center px-3 py-1.5 rounded-md text-xs font-medium transition-all ${interactionMode === 'filter' ? 'bg-blue-100 text-blue-700' : 'text-gray-500 hover:text-gray-900'}`}
-                  title="Click charts to filter dashboard"
-                >
-                  <Filter className="w-3 h-3 mr-1.5" />
-                  Filter
-                </button>
-                <button
                   onClick={() => setInteractionMode('drill')}
-                  className={`flex items-center px-3 py-1.5 rounded-md text-xs font-medium transition-all ${interactionMode === 'drill' ? 'bg-blue-100 text-blue-700' : 'text-gray-500 hover:text-gray-900'}`}
+                  className="flex items-center px-3 py-1.5 rounded-md text-xs font-medium transition-all bg-blue-100 text-blue-700"
                   title="Click charts to see data rows"
                 >
                   <MousePointer2 className="w-3 h-3 mr-1.5" />
@@ -837,7 +1009,7 @@ const DashboardMagic: React.FC<DashboardMagicProps> = ({ project, onUpdateProjec
             <div className={`bg-white border border-gray-200 rounded-xl p-4 mb-8 shadow-sm transition-all ${isPresentationMode ? 'opacity-80 hover:opacity-100' : ''}`}>
               <div className="flex items-center space-x-2 mb-3">
                 <Filter className="w-4 h-4 text-gray-500" />
-                <span className="text-sm font-bold text-gray-700">Global Filters</span>
+                <span className="text-sm font-bold text-gray-700">Magic Filters</span>
                 <span className="text-xs text-gray-400">(Applies to all charts)</span>
               </div>
 
@@ -925,8 +1097,31 @@ const DashboardMagic: React.FC<DashboardMagicProps> = ({ project, onUpdateProjec
             />
           ) : (
             <div ref={dashboardRef} className="space-y-8 pb-20">
-              {[0, 1, 2, 3, 4].map((sectionIndex) => {
+              {topSpacer > 0 && <div style={{ height: topSpacer }} />}
+
+              {sections.slice(windowedSectionRange.startIdx, windowedSectionRange.endIdx + 1).map((sectionIndex) => {
                 const sectionWidgets = widgets.filter((w) => (w.sectionIndex ?? 0) === sectionIndex);
+                const isDropActive = !!draggedWidget && dragOverSection === sectionIndex;
+                const canShowSection = sectionWidgets.length > 0 || !!draggedWidget || sectionIndex < 2;
+                const target = dropTarget && dropTarget.sectionIndex === sectionIndex ? dropTarget : null;
+                const placeholder =
+                  isDropActive && draggedWidget
+                    ? {
+                        colSpan: draggedWidget.colSpan,
+                        heightPx: draggedWidget.heightPx,
+                      }
+                    : null;
+
+                const renderPlaceholder = (key: string) => (
+                  <div
+                    key={key}
+                    className="rounded-2xl border-2 border-dashed border-blue-300 bg-blue-50/50"
+                    style={{
+                      gridColumn: `span ${placeholder?.colSpan || 2} / span ${placeholder?.colSpan || 2}`,
+                      height: placeholder?.heightPx || 240,
+                    }}
+                  />
+                );
                 // Only show section if it has widgets OR if it's the next available empty section (to allow dropping)
                 // Actually, show all 5 sections to allow dragging freely between them
                 // But styling: if empty, maybe show a placeholder "Drop here"
@@ -935,15 +1130,13 @@ const DashboardMagic: React.FC<DashboardMagicProps> = ({ project, onUpdateProjec
                   <div
                     key={sectionIndex}
                     onDragOver={onDragOver}
+                    onDragEnter={() => onDragEnterSection(sectionIndex)}
                     onDrop={() => onDropSection(sectionIndex)}
                     className={`relative rounded-xl border-2 border-dashed transition-colors min-h-[150px] p-4 grid grid-cols-4 gap-6 ${
-                      draggedWidget && Math.abs(draggedWidget.sectionIndex - sectionIndex) <= 1
+                      isDropActive
                         ? 'border-blue-300 bg-blue-50/30'
                         : 'border-transparent' // Invisible border when not dragging
-                    } ${sectionWidgets.length === 0 && !draggedWidget ? 'hidden' : ''} ${
-                      // Always show at least first 2 sections or if it has widgets
-                      sectionIndex < 2 ? 'block' : ''
-                    }`}
+                    } ${!canShowSection ? 'hidden' : ''}`}
                   >
                     {/* Section Label (Optional, for debugging or clarity) */}
                     {isPresentationMode ? null : (
@@ -952,96 +1145,124 @@ const DashboardMagic: React.FC<DashboardMagicProps> = ({ project, onUpdateProjec
                       </div>
                     )}
 
-                    {sectionWidgets.map((widget) => (
-                      <div
-                        key={widget.id}
-                        draggable={!isPresentationMode}
-                        onDragStart={(e) => onDragStart(e, widget.id, sectionIndex)}
-                        className={`group relative flex flex-col rounded-2xl border border-gray-200 bg-white/80 backdrop-blur-sm p-5 shadow-sm transition-shadow hover:shadow-md`}
-                        style={{
-                          gridColumn: `span ${widget.colSpan || 2} / span ${widget.colSpan || 2}`,
-                          minHeight: '300px',
-                          cursor: isPresentationMode ? 'default' : 'grab'
-                        }}
-                      >
-                        {/* Header */}
-                        <div className="flex justify-between items-start mb-3">
-                          <div className="flex items-center space-x-2 overflow-hidden">
-                            {!isPresentationMode && <GripHorizontal className="w-4 h-4 text-gray-300 cursor-grab active:cursor-grabbing flex-shrink-0" />}
-                            <div className="min-w-0">
-                              <h4 className="widget-title font-bold text-gray-800 truncate">{widget.title}</h4>
-                              <p className="widget-meta text-xs text-gray-500 capitalize truncate">
-                                {widget.type} {widget.dimension ? `by ${widget.dimension}` : ''}
-                              </p>
+                    {(() => {
+                      const nodes: React.ReactNode[] = [];
+                      const shouldAppendPlaceholderAtEnd = !!placeholder && !target?.beforeId && !target?.afterId;
+
+                      for (const w of sectionWidgets) {
+                        if (placeholder && target?.beforeId === w.id) nodes.push(renderPlaceholder(`ph-before-${w.id}`));
+
+                        nodes.push(
+                          <div
+                            key={w.id}
+                            draggable={!isPresentationMode}
+                            onDragStart={(e) => onDragStart(e, w.id, sectionIndex)}
+                            onDragEnd={onDragEnd}
+                            onDragOver={(e) => onDragOverWidget(e, sectionIndex, w.id)}
+                            className={`group relative flex flex-col rounded-2xl border border-gray-200 bg-white/80 backdrop-blur-sm p-5 shadow-sm transition-shadow hover:shadow-md ${
+                              draggedWidget?.id === w.id ? 'opacity-60' : ''
+                            }`}
+                            style={{
+                              gridColumn: `span ${w.colSpan || 2} / span ${w.colSpan || 2}`,
+                              minHeight: '300px',
+                              cursor: isPresentationMode ? 'default' : 'grab'
+                            }}
+                          >
+                            {/* Header */}
+                            <div className="flex justify-between items-start mb-3">
+                              <div className="flex items-center space-x-2 overflow-hidden">
+                                {!isPresentationMode && <GripHorizontal className="w-4 h-4 text-gray-300 cursor-grab active:cursor-grabbing flex-shrink-0" />}
+                                <div className="min-w-0">
+                                  <h4 className="widget-title font-bold text-gray-800 truncate">{w.title}</h4>
+                                  <p className="widget-meta text-xs text-gray-500 capitalize truncate">
+                                    {w.type} {w.dimension ? `by ${w.dimension}` : ''}
+                                  </p>
+                                </div>
+                              </div>
+                              {!isPresentationMode && (
+                                <div className="flex space-x-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                                  <button
+                                    onClick={() => handleExportWidget(w)}
+                                    className="p-1.5 text-gray-400 hover:text-emerald-600 hover:bg-emerald-50 rounded"
+                                    title="Export JSON"
+                                  >
+                                    <Download className="w-3.5 h-3.5" />
+                                  </button>
+                                  <button
+                                    onClick={() => {
+                                      setEditingWidget(w);
+                                      setIsBuilderOpen(true);
+                                    }}
+                                    className="p-1.5 text-gray-400 hover:text-blue-600 hover:bg-blue-50 rounded"
+                                    title="Edit"
+                                  >
+                                    <Edit3 className="w-3.5 h-3.5" />
+                                  </button>
+                                  <button
+                                    onClick={() => handleDeleteWidget(w.id)}
+                                    className="p-1.5 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded"
+                                    title="Delete"
+                                  >
+                                    <Trash2 className="w-3.5 h-3.5" />
+                                  </button>
+                                </div>
+                              )}
+                            </div>
+
+                            {/* Chart */}
+                            <div className="flex-1 min-h-0 relative">
+                              <MagicWidgetRenderer
+                                widget={w}
+                                data={filteredData}
+                                filters={w.filters}
+                                theme={REALPPTX_CHART_THEME}
+                                isEditing={!isPresentationMode}
+                                isInteracting={!!draggedWidget || !!resizing}
+                                workerClient={magicAggWorker}
+                                onValueClick={(val, w2) => handleChartValueSelect(w2, val)}
+                              />
+
+                              {/* Resize Handle */}
+                              {!isPresentationMode && (
+                                <div
+                                  className="absolute top-1/2 -right-6 transform -translate-y-1/2 w-4 h-12 flex items-center justify-center cursor-col-resize text-gray-300 hover:text-blue-500 opacity-0 group-hover:opacity-100 transition-opacity z-20"
+                                  onMouseDown={(e) => {
+                                    e.preventDefault();
+                                    e.stopPropagation();
+                                    setResizing({ id: w.id, startX: e.clientX, startSpan: w.colSpan || 2 });
+                                  }}
+                                  title="Drag to resize width"
+                                >
+                                  <div className="w-1.5 h-8 bg-gray-200 rounded-full hover:bg-blue-400" />
+                                </div>
+                              )}
                             </div>
                           </div>
-                          {!isPresentationMode && (
-                            <div className="flex space-x-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                              <button
-                                onClick={() => handleExportWidget(widget)}
-                                className="p-1.5 text-gray-400 hover:text-emerald-600 hover:bg-emerald-50 rounded"
-                                title="Export JSON"
-                              >
-                                <Download className="w-3.5 h-3.5" />
-                              </button>
-                              <button
-                                onClick={() => {
-                                  setEditingWidget(widget);
-                                  setIsBuilderOpen(true);
-                                }}
-                                className="p-1.5 text-gray-400 hover:text-blue-600 hover:bg-blue-50 rounded"
-                                title="Edit"
-                              >
-                                <Edit3 className="w-3.5 h-3.5" />
-                              </button>
-                              <button
-                                onClick={() => handleDeleteWidget(widget.id)}
-                                className="p-1.5 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded"
-                                title="Delete"
-                              >
-                                <Trash2 className="w-3.5 h-3.5" />
-                              </button>
-                            </div>
-                          )}
-                        </div>
+                        );
 
-                        {/* Chart */}
-                        <div className="flex-1 min-h-0 relative">
-                          <MagicWidgetRenderer
-                            widget={widget}
-                            data={filteredData}
-                            filters={widget.filters}
-                            theme={PPTIST_CHART_THEME}
-                            onValueClick={(value) => handleChartValueSelect(widget, value)}
-                          />
-                          
-                          {/* Resize Handle */}
-                          {!isPresentationMode && (
-                            <div
-                              className="absolute top-1/2 -right-6 transform -translate-y-1/2 w-4 h-12 flex items-center justify-center cursor-col-resize text-gray-300 hover:text-blue-500 opacity-0 group-hover:opacity-100 transition-opacity z-20"
-                              onMouseDown={(e) => {
-                                e.preventDefault();
-                                e.stopPropagation();
-                                setResizing({ id: widget.id, startX: e.clientX, startSpan: widget.colSpan || 2 });
-                              }}
-                              title="Drag to resize width"
-                            >
-                              <div className="w-1.5 h-8 bg-gray-200 rounded-full hover:bg-blue-400" />
-                            </div>
-                          )}
-                        </div>
-                      </div>
-                    ))}
+                        if (placeholder && target?.afterId === w.id) nodes.push(renderPlaceholder(`ph-after-${w.id}`));
+                      }
+
+                      if (shouldAppendPlaceholderAtEnd) nodes.push(renderPlaceholder('ph-end'));
+
+                      return nodes;
+                    })()}
                     
-                    {/* Placeholder for empty section to maintain height/dropzone */}
-                    {sectionWidgets.length === 0 && (
+                    {/* Empty state for section (keep minimal; avoid instructional text) */}
+                    {sectionWidgets.length === 0 && !placeholder && (
                       <div className="col-span-4 h-24 flex items-center justify-center border-2 border-dashed border-gray-100 rounded-xl text-gray-300 text-sm italic">
-                        Empty Section (Drop charts here)
+                        Empty section
                       </div>
                     )}
+
+                    {sectionWidgets.length > 0 && isDropActive && placeholder && !target?.beforeId && !target?.afterId ? (
+                      <div className="col-span-4 h-0" />
+                    ) : null}
                   </div>
                 );
               })}
+
+              {bottomSpacer > 0 && <div style={{ height: bottomSpacer }} />}
             </div>
           )}
         </div>
@@ -1060,7 +1281,7 @@ const DashboardMagic: React.FC<DashboardMagicProps> = ({ project, onUpdateProjec
         availableColumns={availableColumns}
         initialWidget={editingWidget}
         data={filteredData}
-        chartTheme={PPTIST_CHART_THEME}
+        chartTheme={REALPPTX_CHART_THEME}
       />
 
       {/* Drill Down Modal */}
