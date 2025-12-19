@@ -1,11 +1,12 @@
-import { MagicChartPayload } from './magicChartPayload';
+import type { MagicChartPayload } from './magicChartPayload';
+import { buildEChartsOption } from '@shared/chartSpec';
 
 /**
  * Build ECharts option from MagicChartPayload (pixel-perfect).
  * Keeps parity with MagicWidgetRenderer logic.
  * @param isEditing - When true, disables animation to prevent distracting re-renders during editing
  */
-export const buildMagicEchartsOption = (payload: MagicChartPayload | null, colSpan: number = 2, isEditing: boolean = false) => {
+const buildMagicEchartsOptionLegacy = (payload: MagicChartPayload | null, colSpan: number = 2, isEditing: boolean = false) => {
   if (!payload) return null;
 
   // Animation settings - disabled during editing to prevent distracting re-renders
@@ -976,3 +977,7 @@ export const buildMagicEchartsOption = (payload: MagicChartPayload | null, colSp
 
   return null;
 };
+
+export const buildMagicEchartsOption = (payload: MagicChartPayload | null, colSpan: number = 2, isEditing: boolean = false) => {
+  return buildEChartsOption(payload as any, colSpan, isEditing) ?? buildMagicEchartsOptionLegacy(payload, colSpan, isEditing)
+}

@@ -7,6 +7,7 @@ import type {
   RadarSeriesOption,
 } from 'echarts/charts'
 import type { ChartData, ChartType } from '@/types/slides'
+import { buildEChartsOption } from '@shared/chartSpec'
 
 type EChartOption = ComposeOption<BarSeriesOption | LineSeriesOption | PieSeriesOption | ScatterSeriesOption | RadarSeriesOption>
 
@@ -147,7 +148,7 @@ const normalizeLineLabelPosition = (pos: ChartOptionPayload['dataLabelPosition']
   return (pos || 'top') as 'top' | 'inside'
 }
 
-export const getChartOption = ({
+const getChartOptionLegacy = ({
   type,
   data,
   themeColors,
@@ -719,4 +720,22 @@ export const getChartOption = ({
   }
 
   return null
+}
+
+export const getChartOption = (payload: ChartOptionPayload): EChartOption | null => {
+  const { type, data, themeColors, textColor, lineColor, ...rest } = payload
+  const optionRaw = buildEChartsOption(
+    {
+      type: type as any,
+      data: data as any,
+      themeColors,
+      textColor,
+      lineColor,
+      options: rest as any,
+    },
+    2,
+    false
+  )
+
+  return (optionRaw as any) ?? getChartOptionLegacy(payload as any)
 }
