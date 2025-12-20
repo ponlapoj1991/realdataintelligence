@@ -17,6 +17,8 @@ import type {
   TableCell,
   ChartType,
   SlideBackground,
+  LineStyleType,
+  PPTElementOutline,
   PPTShapeElement,
   PPTLineElement,
   PPTImageElement,
@@ -85,6 +87,11 @@ const toFiniteNumber = (value: unknown) => {
   return Number.isFinite(n) ? n : null
 }
 
+const toLineStyleType = (value: unknown): LineStyleType => {
+  if (value === 'dashed' || value === 'dotted' || value === 'solid') return value
+  return 'solid'
+}
+
 const resolveSchemeColor = (value: string, themeColors: string[]) => {
   const key = value.trim().toLowerCase()
   const accentMatch = key.match(/^accent([1-6])$/)
@@ -112,7 +119,7 @@ const resolveColor = (value: string, themeColors: string[], fallback: string) =>
   return fc.getAlpha() < 1 ? fc.toRgbString() : fc.toHexString()
 }
 
-const buildOutline = (value: { borderWidth?: unknown; borderColor?: unknown; borderType?: unknown }, ratio: number, themeColors: string[]) => {
+const buildOutline = (value: { borderWidth?: unknown; borderColor?: unknown; borderType?: unknown }, ratio: number, themeColors: string[]): PPTElementOutline | undefined => {
   const widthRaw = toFiniteNumber(value.borderWidth)
   if (!widthRaw || widthRaw <= 0) return undefined
 
@@ -123,7 +130,7 @@ const buildOutline = (value: { borderWidth?: unknown; borderColor?: unknown; bor
   const c = tinycolor(color)
   if (!c.isValid() || c.getAlpha() === 0) return undefined
 
-  const style = typeof value.borderType === 'string' && value.borderType ? value.borderType : 'solid'
+  const style = toLineStyleType(value.borderType)
   return {
     color,
     width: +((widthRaw * ratio).toFixed(2)),
