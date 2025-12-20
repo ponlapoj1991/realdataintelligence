@@ -226,11 +226,11 @@ export const buildEChartsOption = (payload: SharedChartPayload | null, colSpan: 
       triggerEvent: true,
     };
 
-    const seriesTotals = data.series.map((s) => s.reduce((sum, v) => sum + (Number(v) || 0), 0));
-    const stackedIndexTotals =
+    const seriesTotals = data.series.map((s) => s.reduce<number>((sum, v) => sum + getNumericValue(v), 0));
+    const stackedIndexTotals: number[] =
       options?.stack || options?.percentStack
         ? data.labels.map((_, i) =>
-            data.series.reduce((sum, s) => sum + (Number(s[i]) || 0), 0)
+            data.series.reduce<number>((sum, s) => sum + getNumericValue(s[i]), 0)
           )
         : [];
 
@@ -321,11 +321,11 @@ export const buildEChartsOption = (payload: SharedChartPayload | null, colSpan: 
   }
 
   if (type === 'line') {
-    const seriesTotals = data.series.map((s) => s.reduce((sum, v) => sum + (Number(v) || 0), 0));
-    const stackedIndexTotals =
+    const seriesTotals = data.series.map((s) => s.reduce<number>((sum, v) => sum + getNumericValue(v), 0));
+    const stackedIndexTotals: number[] =
       options?.stack || options?.percentStack
         ? data.labels.map((_, i) =>
-            data.series.reduce((sum, s) => sum + (Number(s[i]) || 0), 0)
+            data.series.reduce<number>((sum, s) => sum + getNumericValue(s[i]), 0)
           )
         : [];
 
@@ -437,11 +437,11 @@ export const buildEChartsOption = (payload: SharedChartPayload | null, colSpan: 
   }
 
   if (type === 'area') {
-    const seriesTotals = data.series.map((s) => s.reduce((sum, v) => sum + (Number(v) || 0), 0));
-    const stackedIndexTotals =
+    const seriesTotals = data.series.map((s) => s.reduce<number>((sum, v) => sum + getNumericValue(v), 0));
+    const stackedIndexTotals: number[] =
       options?.stack || options?.percentStack
         ? data.labels.map((_, i) =>
-            data.series.reduce((sum, s) => sum + (Number(s[i]) || 0), 0)
+            data.series.reduce<number>((sum, s) => sum + getNumericValue(s[i]), 0)
           )
         : [];
 
@@ -723,11 +723,11 @@ export const buildEChartsOption = (payload: SharedChartPayload | null, colSpan: 
     const usePointColorsForSingleBarSeries =
       !!(data.dataColors?.length) && resolvedTypes.filter((t) => t === 'bar').length === 1;
 
-    const seriesTotals = data.series.map((s) => s.reduce((sum, v) => sum + (Number(v) || 0), 0));
-    const stackedIndexTotals =
+    const seriesTotals = data.series.map((s) => s.reduce<number>((sum, v) => sum + getNumericValue(v), 0));
+    const stackedIndexTotals: number[] =
       options?.stack || options?.percentStack
         ? data.labels.map((_, i) =>
-            data.series.reduce((sum, s) => sum + (Number(s[i]) || 0), 0)
+            data.series.reduce<number>((sum, s) => sum + getNumericValue(s[i]), 0)
           )
         : [];
 
