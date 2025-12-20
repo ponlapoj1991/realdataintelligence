@@ -161,7 +161,7 @@ export function addChartElementToSlide(params: {
     return dataColors[dataColors.length - 1] || '000000'
   }
 
-  const pointCount = Math.max(labels.length, series[0]?.length || 0)
+  const pointCount = labels.length
 
   const isPieLike = el.chartType === 'pie' || el.chartType === 'ring'
   const isBarLike = el.chartType === 'bar' || el.chartType === 'column'
