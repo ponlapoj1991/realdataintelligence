@@ -313,6 +313,10 @@ export interface ShapeText {
   defaultColor: string
   align: ShapeTextAlign
   type?: TextType
+  padding?: number
+  lineHeight?: number
+  paragraphSpace?: number
+  clip?: boolean
 }
 
 /**

@@ -42,6 +42,49 @@ const normalizeColorInput = (value: string) => {
   return raw
 }
 
+const parseHexColor = (value: string) => {
+  const raw = value.trim()
+  const match = raw.match(/^#?([0-9a-f]{3,4}|[0-9a-f]{6}|[0-9a-f]{8})$/i)
+  if (!match) return null
+
+  const hex = match[1].toLowerCase()
+  const expand = (c: string) => c + c
+
+  const rgb = hex.length === 3 || hex.length === 4
+    ? [expand(hex[0]), expand(hex[1]), expand(hex[2])]
+    : [hex.slice(0, 2), hex.slice(2, 4), hex.slice(4, 6)]
+
+  const alphaHex = hex.length === 4
+    ? expand(hex[3])
+    : (hex.length === 8 ? hex.slice(6, 8) : 'ff')
+
+  const r = parseInt(rgb[0], 16)
+  const g = parseInt(rgb[1], 16)
+  const b = parseInt(rgb[2], 16)
+  const a = parseInt(alphaHex, 16) / 255
+
+  if (![r, g, b, a].every(n => Number.isFinite(n))) return null
+
+  return { r, g, b, a }
+}
+
+const toRgbaString = (rgba: { r: number; g: number; b: number; a: number }) => {
+  const alpha = Number(rgba.a.toFixed(4))
+  return `rgba(${rgba.r}, ${rgba.g}, ${rgba.b}, ${alpha})`
+}
+
+const normalizeCssColorInput = (value: string) => {
+  const normalized = normalizeColorInput(value)
+  const parsed = parseHexColor(normalized)
+  if (parsed && parsed.a < 1) return toRgbaString(parsed)
+  return normalized
+}
+
+const toFiniteNumber = (value: unknown) => {
+  const n = typeof value === 'number' ? value : Number(value)
+  return Number.isFinite(n) ? n : null
+}
+
 const resolveSchemeColor = (value: string, themeColors: string[]) => {
   const key = value.trim().toLowerCase()
   const accentMatch = key.match(/^accent([1-6])$/)
@@ -59,10 +102,33 @@ const resolveSchemeColor = (value: string, themeColors: string[]) => {
 
 const resolveColor = (value: string, themeColors: string[], fallback: string) => {
   const scheme = resolveSchemeColor(value, themeColors)
-  const normalized = normalizeColorInput(scheme || value)
+  const normalized = normalizeCssColorInput(scheme || value)
   const c = tinycolor(normalized)
-  if (!c.isValid()) return fallback
-  return c.getAlpha() < 1 ? c.toHex8String() : c.toHexString()
+  if (c.isValid()) return c.getAlpha() < 1 ? c.toRgbString() : c.toHexString()
+
+  const fallbackNormalized = normalizeCssColorInput(fallback)
+  const fc = tinycolor(fallbackNormalized)
+  if (!fc.isValid()) return ''
+  return fc.getAlpha() < 1 ? fc.toRgbString() : fc.toHexString()
+}
+
+const buildOutline = (value: { borderWidth?: unknown; borderColor?: unknown; borderType?: unknown }, ratio: number, themeColors: string[]) => {
+  const widthRaw = toFiniteNumber(value.borderWidth)
+  if (!widthRaw || widthRaw <= 0) return undefined
+
+  const colorInput = typeof value.borderColor === 'string' ? value.borderColor : ''
+  const color = resolveColor(colorInput, themeColors, '')
+  if (!color) return undefined
+
+  const c = tinycolor(color)
+  if (!c.isValid() || c.getAlpha() === 0) return undefined
+
+  const style = typeof value.borderType === 'string' && value.borderType ? value.borderType : 'solid'
+  return {
+    color,
+    width: +((widthRaw * ratio).toFixed(2)),
+    style,
+  }
 }
 
 const sanitizeFontFamily = (value: string, fallback: string) => {
@@ -412,11 +478,11 @@ export default () => {
               const fallbackFontName = theme.value.fontName || 'Arial'
               const fallbackColor = theme.value.fontColor || '#333'
 
-              const textEl: PPTTextElement = {
-                type: 'text',
-                id: nanoid(10),
-                width: el.width,
-                height: el.height,
+               const textEl: PPTTextElement = {
+                 type: 'text',
+                 id: nanoid(10),
+                 width: el.width,
+                 height: el.height,
                 left: el.left,
                 top: el.top,
                 rotate: el.rotate,
@@ -424,22 +490,19 @@ export default () => {
                 defaultColor: resolveColor(defaults.color || fallbackColor, pptxThemeColors, fallbackColor),
                 content,
                 padding: 0,
-                lineHeight: 1,
-                paragraphSpace: 0,
-                valign: vAlignMap[el.vAlign] || 'top',
-                autoResize: false,
-                outline: {
-                  color: resolveColor(el.borderColor, pptxThemeColors, el.borderColor),
-                  width: +(el.borderWidth * ratio).toFixed(2),
-                  style: el.borderType,
-                },
-                fill: el.fill.type === 'color' ? resolveColor(el.fill.value, pptxThemeColors, '') : '',
-                vertical: el.isVertical,
-              }
-              if (el.shadow) {
-                textEl.shadow = {
-                  h: el.shadow.h * ratio,
-                  v: el.shadow.v * ratio,
+                 lineHeight: 1,
+                 paragraphSpace: 0,
+                 valign: vAlignMap[el.vAlign] || 'top',
+                 autoResize: false,
+                 fill: el.fill.type === 'color' ? resolveColor(el.fill.value, pptxThemeColors, '') : '',
+                 vertical: el.isVertical,
+               }
+               const outline = buildOutline({ borderWidth: el.borderWidth, borderColor: el.borderColor, borderType: el.borderType }, ratio, pptxThemeColors)
+               if (outline) textEl.outline = outline
+               if (el.shadow) {
+                 textEl.shadow = {
+                   h: el.shadow.h * ratio,
+                   v: el.shadow.v * ratio,
                   blur: el.shadow.blur * ratio,
                   color: resolveColor(el.shadow.color, pptxThemeColors, el.shadow.color),
                 }
@@ -456,21 +519,16 @@ export default () => {
                 left: el.left,
                 top: el.top,
                 fixedRatio: true,
-                rotate: el.rotate,
-                flipH: el.isFlipH,
-                flipV: el.isFlipV,
-              }
-              if (el.borderWidth) {
-                element.outline = {
-                  color: resolveColor(el.borderColor, pptxThemeColors, el.borderColor),
-                  width: +(el.borderWidth * ratio).toFixed(2),
-                  style: el.borderType,
-                }
-              }
-              const clipShapeTypes = ['roundRect', 'ellipse', 'triangle', 'rhombus', 'pentagon', 'hexagon', 'heptagon', 'octagon', 'parallelogram', 'trapezoid']
-              if (el.rect) {
-                element.clip = {
-                  shape: (el.geom && clipShapeTypes.includes(el.geom)) ? el.geom : 'rect',
+                 rotate: el.rotate,
+                 flipH: el.isFlipH,
+                 flipV: el.isFlipV,
+               }
+               const outline = buildOutline({ borderWidth: el.borderWidth, borderColor: el.borderColor, borderType: el.borderType }, ratio, pptxThemeColors)
+               if (outline) element.outline = outline
+               const clipShapeTypes = ['roundRect', 'ellipse', 'triangle', 'rhombus', 'pentagon', 'hexagon', 'heptagon', 'octagon', 'parallelogram', 'trapezoid']
+               if (el.rect) {
+                 element.clip = {
+                   shape: (el.geom && clipShapeTypes.includes(el.geom)) ? el.geom : 'rect',
                   range: [
                     [
                       el.rect.l || 0,
@@ -566,38 +624,39 @@ export default () => {
                 const fallbackFontName = theme.value.fontName || 'Arial'
                 const fallbackColor = theme.value.fontColor || '#333'
                 
-                const element: PPTShapeElement = {
-                  type: 'shape',
-                  id: nanoid(10),
-                  width: el.width,
-                  height: el.height,
+                 const element: PPTShapeElement = {
+                   type: 'shape',
+                   id: nanoid(10),
+                   width: el.width,
+                   height: el.height,
                   left: el.left,
                   top: el.top,
                   viewBox: [200, 200],
                   path: 'M 0 0 L 200 0 L 200 200 L 0 200 Z',
                   fill,
                   gradient,
-                  pattern,
-                  fixedRatio: false,
-                  rotate: el.rotate,
-                  outline: {
-                    color: resolveColor(el.borderColor, pptxThemeColors, el.borderColor),
-                    width: +(el.borderWidth * ratio).toFixed(2),
-                    style: el.borderType,
-                  },
-                  text: {
-                    content: textContent,
-                    defaultFontName: sanitizeFontFamily(textDefaults.fontFamily || fallbackFontName, fallbackFontName),
-                    defaultColor: resolveColor(textDefaults.color || fallbackColor, pptxThemeColors, fallbackColor),
-                    align: vAlignMap[el.vAlign] || 'middle',
-                  },
-                  flipH: el.isFlipH,
-                  flipV: el.isFlipV,
-                }
-                if (el.shadow) {
-                  element.shadow = {
-                    h: el.shadow.h * ratio,
-                    v: el.shadow.v * ratio,
+                   pattern,
+                   fixedRatio: false,
+                   rotate: el.rotate,
+                   text: {
+                     content: textContent,
+                     defaultFontName: sanitizeFontFamily(textDefaults.fontFamily || fallbackFontName, fallbackFontName),
+                     defaultColor: resolveColor(textDefaults.color || fallbackColor, pptxThemeColors, fallbackColor),
+                     align: vAlignMap[el.vAlign] || 'middle',
+                     padding: 0,
+                     lineHeight: 1,
+                     paragraphSpace: 0,
+                     clip: true,
+                   },
+                   flipH: el.isFlipH,
+                   flipV: el.isFlipV,
+                 }
+                 const outline = buildOutline({ borderWidth: el.borderWidth, borderColor: el.borderColor, borderType: el.borderType }, ratio, pptxThemeColors)
+                 if (outline) element.outline = outline
+                 if (el.shadow) {
+                   element.shadow = {
+                     h: el.shadow.h * ratio,
+                     v: el.shadow.v * ratio,
                     blur: el.shadow.blur * ratio,
                     color: resolveColor(el.shadow.color, pptxThemeColors, el.shadow.color),
                   }
