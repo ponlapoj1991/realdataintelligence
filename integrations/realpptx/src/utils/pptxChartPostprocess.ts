@@ -35,6 +35,13 @@ const XLSX_NS = 'http://schemas.openxmlformats.org/spreadsheetml/2006/main'
 
 const DATA_LABEL_RANGE_URI = '{02D57815-91ED-43cb-92C2-25804820EDAC}'
 
+const isParserErrorDoc = (doc: Document) => {
+  const rootName = doc.documentElement?.localName?.toLowerCase?.() || ''
+  if (rootName === 'parsererror') return true
+  if (doc.getElementsByTagName('parsererror').length > 0) return true
+  return false
+}
+
 const toExcelCol = (index1Based: number) => {
   let n = index1Based
   let col = ''
@@ -158,8 +165,10 @@ const getSeriesSpPr = (seriesNode: Element) => {
 }
 
 const patchChartXml = (xml: string, item: ChartPostprocessItem) => {
+  const originalXml = xml
   const parser = new DOMParser()
   const doc = parser.parseFromString(xml, 'application/xml')
+  if (isParserErrorDoc(doc)) return { xml: originalXml, layout: null as ChartWorkbookLayout | null }
 
   const seriesNodes = Array.from(doc.getElementsByTagNameNS(CHART_NS, 'ser')) as Element[]
   const seriesMeta: ChartSeriesMeta[] = []
@@ -282,18 +291,22 @@ const patchChartXml = (xml: string, item: ChartPostprocessItem) => {
 
   const serializer = new XMLSerializer()
   const nextXml = serializer.serializeToString(doc)
+  const verify = parser.parseFromString(nextXml, 'application/xml')
+  if (isParserErrorDoc(verify)) return { xml: originalXml, layout: null as ChartWorkbookLayout | null }
   const layout: ChartWorkbookLayout = { sheetName, labelLevels, seriesColsSorted, seriesNamesSorted, lastRow }
   return { xml: nextXml, layout }
 }
 
 const patchWorkbookXlsx = async (xlsxArrayBuffer: ArrayBuffer, layout: ChartWorkbookLayout, item: ChartPostprocessItem) => {
+  const originalBuffer = xlsxArrayBuffer
   const zip = await JSZip.loadAsync(xlsxArrayBuffer)
   const sheet = zip.file('xl/worksheets/sheet1.xml')
-  if (!sheet) return xlsxArrayBuffer
+  if (!sheet) return originalBuffer
 
   const sheetXml = await sheet.async('text')
   const parser = new DOMParser()
   const doc = parser.parseFromString(sheetXml, 'application/xml')
+  if (isParserErrorDoc(doc)) return originalBuffer
 
   const dimension = doc.getElementsByTagNameNS(XLSX_NS, 'dimension')[0]
   const newLastColIndex = layout.labelLevels + layout.seriesColsSorted.length + layout.seriesColsSorted.length
@@ -301,11 +314,11 @@ const patchWorkbookXlsx = async (xlsxArrayBuffer: ArrayBuffer, layout: ChartWork
   if (dimension) dimension.setAttribute('ref', newDim)
 
   const sheetData = doc.getElementsByTagNameNS(XLSX_NS, 'sheetData')[0]
-  if (!sheetData) return xlsxArrayBuffer
+  if (!sheetData) return originalBuffer
 
   const rows = Array.from(sheetData.getElementsByTagNameNS(XLSX_NS, 'row')) as Element[]
   const wantPercentLabels = item.options?.showDataLabels !== false && !!item.options?.dataLabelShowPercent
-  if (!wantPercentLabels) return xlsxArrayBuffer
+  if (!wantPercentLabels) return originalBuffer
 
   const seriesTotals = item.patch.alignedSeries.map(s => s.reduce((sum, v) => sum + (Number.isFinite(v) ? v : 0), 0))
   const legendIndexByName = new Map<string, number>()
@@ -354,6 +367,8 @@ const patchWorkbookXlsx = async (xlsxArrayBuffer: ArrayBuffer, layout: ChartWork
   }
 
   const nextSheetXml = new XMLSerializer().serializeToString(doc)
+  const verify = parser.parseFromString(nextSheetXml, 'application/xml')
+  if (isParserErrorDoc(verify)) return originalBuffer
   zip.file('xl/worksheets/sheet1.xml', nextSheetXml)
   return zip.generateAsync({ type: 'arraybuffer' })
 }
