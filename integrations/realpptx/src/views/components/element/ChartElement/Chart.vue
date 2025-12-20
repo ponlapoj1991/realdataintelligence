@@ -6,7 +6,7 @@
 import { onMounted, useTemplateRef, computed, watch, onBeforeUnmount } from 'vue'
 import tinycolor from 'tinycolor2'
 import type { ChartData, ChartOptions, ChartType } from '@/types/slides'
-import { getChartOption } from './chartOption'
+import { buildEChartsOption } from '@shared/chartSpec'
 import emitter, { EmitterEvents } from '@/utils/emitter'
 
 import * as echarts from 'echarts/core'
@@ -87,33 +87,20 @@ const updateOption = () => {
   const scale = getFontScale()
   lastFontScale = scale
 
-  if (props.optionRaw) {
-    const option = scale === 1 ? props.optionRaw : cloneWithScaledFontSize(props.optionRaw, scale)
-    chart!.setOption(option, true)
-    chart!.resize()
-    return
-  }
+  const option =
+    buildEChartsOption(
+      {
+        type: props.type,
+        data: props.data,
+        themeColors: themeColors.value,
+        textColor: props.textColor,
+        lineColor: props.lineColor,
+        options: props.options,
+      },
+      2,
+      true,
+    ) ?? props.optionRaw
 
-  const option = getChartOption({
-    type: props.type,
-    data: props.data,
-    themeColors: themeColors.value,
-    textColor: props.textColor,
-    lineColor: props.lineColor,
-    lineSmooth: props.options?.lineSmooth || false,
-    stack: props.options?.stack || false,
-    seriesTypes: props.options?.seriesTypes,
-    pointSizes: props.options?.pointSizes,
-    // Phase 1: New features
-    yAxisIndexes: props.options?.yAxisIndexes,
-    showDataLabels: props.options?.showDataLabels,
-    dataLabelPosition: props.options?.dataLabelPosition,
-    percentStack: props.options?.percentStack,
-    // Phase 2: Axis & Legend config
-    axisTitle: props.options?.axisTitle,
-    axisRange: props.options?.axisRange,
-    legendPosition: props.options?.legendPosition,
-  })
   if (!option) return
 
   const scaledOption = scale === 1 ? option : cloneWithScaledFontSize(option, scale)

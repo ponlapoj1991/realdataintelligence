@@ -17,7 +17,6 @@ import { saveProject } from '../utils/storage-compat';
 import BuildReports from './BuildReports';
 import { REALPPTX_CHART_THEME } from '../constants/chartTheme';
 import { buildDashboardChartPayload } from '../utils/dashboardChartPayload';
-import { buildMagicEchartsOption } from '../utils/magicOptionBuilder';
 
 const hashString = (input: string) => {
   let hash = 5381;
@@ -42,24 +41,6 @@ const runWhenIdle = (fn: () => void, timeoutMs = 1200) => {
     return;
   }
   window.setTimeout(fn, 0);
-};
-
-// Helper to strip functions from objects before postMessage (functions can't be cloned)
-const stripFunctions = (obj: any): any => {
-  if (obj === null || obj === undefined) return obj;
-  if (typeof obj === 'function') return undefined;
-  if (Array.isArray(obj)) return obj.map(stripFunctions);
-  if (typeof obj === 'object') {
-    const result: any = {};
-    for (const key in obj) {
-      const value = stripFunctions(obj[key]);
-      if (value !== undefined) {
-        result[key] = value;
-      }
-    }
-    return result;
-  }
-  return obj;
 };
 
 interface ReportBuilderProps {
@@ -291,21 +272,11 @@ const ReportBuilder: React.FC<ReportBuilderProps> = ({ project, onUpdateProject 
           showToast('Nothing to insert', 'This chart has no data after filters.', 'warning');
           return;
         }
-        const optionRaw = buildMagicEchartsOption({
-          type: payload.chartType as any,
-          data: payload.data,
-          themeColors: payload.theme.colors,
-          textColor: payload.theme.textColor,
-          lineColor: payload.theme.lineColor,
-          options: payload.options,
-        });
-        // Strip functions before postMessage (functions can't be cloned)
-        const safeOptionRaw = stripFunctions(optionRaw);
         iframeWindow.postMessage(
           {
             source: 'realdata-host',
             type: 'insert-dashboard-chart',
-            payload: { ...payload, optionRaw: safeOptionRaw },
+            payload,
           },
           '*'
         );
@@ -391,17 +362,6 @@ const ReportBuilder: React.FC<ReportBuilderProps> = ({ project, onUpdateProject 
           });
 
           if (!payload) return;
- 
-          const optionRaw = buildMagicEchartsOption({
-            type: payload.chartType as any,
-            data: payload.data,
-            themeColors: payload.theme.colors,
-            textColor: payload.theme.textColor,
-            lineColor: payload.theme.lineColor,
-            options: payload.options,
-          });
-          // Strip functions before postMessage (functions can't be cloned)
-          const safeOptionRaw = stripFunctions(optionRaw);
 
           // Send update to RealPPTX
           iframeWindow?.postMessage(
@@ -412,7 +372,6 @@ const ReportBuilder: React.FC<ReportBuilderProps> = ({ project, onUpdateProject 
                 elementId: linked.elementId,
                 data: payload.data,
                 options: payload.options,
-                optionRaw: safeOptionRaw,
                 theme: payload.theme,
               },
             },

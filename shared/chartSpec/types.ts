@@ -51,6 +51,8 @@ export interface SharedSeriesDataLabel {
 export interface SharedChartOptions {
   // Series/stack
   lineSmooth?: boolean
+  lineStrokeWidth?: number
+  lineStrokeStyle?: 'solid' | 'dashed' | 'dotted'
   stack?: boolean
   percentStack?: boolean
   subType?: 'clustered' | 'stacked' | 'percentStacked' | 'scatter' | 'bubble'
@@ -69,6 +71,7 @@ export interface SharedChartOptions {
   showDataLabels?: boolean
   dataLabelPosition?: SharedDataLabelPosition
   dataLabelFontSize?: number
+  dataLabelFontFamily?: string
   dataLabelFontWeight?: 'normal' | 'bold'
   dataLabelColor?: string
   dataLabelValueFormat?: ValueFormatMode
@@ -81,6 +84,7 @@ export interface SharedChartOptions {
   legendPosition?: 'top' | 'bottom' | 'left' | 'right'
   legendAlign?: 'left' | 'center' | 'right'
   legendFontSize?: number
+  legendFontFamily?: string
   legendFontColor?: string
 
   // Axis
@@ -92,17 +96,20 @@ export interface SharedChartOptions {
   axisShowYRight?: boolean
 
   axisLabelFontSizeX?: number
+  axisLabelFontFamilyX?: string
   axisLabelColorX?: string
   axisLabelSlantX?: number
   axisGridShowX?: boolean
   axisGridColorX?: string
 
   axisLabelFontSizeYLeft?: number
+  axisLabelFontFamilyYLeft?: string
   axisLabelColorYLeft?: string
   axisGridShowYLeft?: boolean
   axisGridColorYLeft?: string
 
   axisLabelFontSizeYRight?: number
+  axisLabelFontFamilyYRight?: string
   axisLabelColorYRight?: string
   axisGridShowYRight?: boolean
   axisGridColorYRight?: string
@@ -127,4 +134,3 @@ export interface SharedChartPayload {
   lineColor?: string
   options?: SharedChartOptions
 }
-
