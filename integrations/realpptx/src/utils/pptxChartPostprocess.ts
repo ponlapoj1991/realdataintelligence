@@ -70,7 +70,7 @@ const parseSeriesValueRef = (formula: string) => {
   return { colLetter, colIndex: excelColToIndex(colLetter), startRow, endRow }
 }
 
-const safeXmlText = (value: string) => value.replace(/[<>&]/g, '')
+const safeXmlText = (value: string) => value.replace(/[<>&]/g, '').replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F]/g, '')
 
 const formatNumberText = (value: number, mode?: ChartOptions['dataLabelValueFormat']) => {
   if (!Number.isFinite(value)) return '0'
