@@ -620,15 +620,15 @@ export default () => {
             y: el.top / ratioPx2Inch.value,
             w: el.width / ratioPx2Inch.value,
             h: el.height / ratioPx2Inch.value,
-            fontSize: defaultFontSize / ratioPx2Pt.value,
-            fontFace: 'Arial',
-            color: '000000',
-            valign: 'top',
-            margin: 10 / ratioPx2Pt.value,
-            paraSpaceBefore: 5 / ratioPx2Pt.value,
-            lineSpacingMultiple: 1.5 / 1.25,
-            autoFit: true,
-          }
+             fontSize: defaultFontSize / ratioPx2Pt.value,
+             fontFace: 'Arial',
+             color: '000000',
+             valign: toPptxVAlign(el.valign),
+             margin: 10 / ratioPx2Pt.value,
+             paraSpaceBefore: 5 / ratioPx2Pt.value,
+             lineSpacingMultiple: 1.5 / 1.25,
+             autoFit: true,
+           }
           if (el.rotate) options.rotate = el.rotate
           if (el.wordSpace) {
             const ws = toFiniteNumber(el.wordSpace)

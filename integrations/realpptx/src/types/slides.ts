@@ -183,6 +183,8 @@ export interface PPTTextElement extends PPTBaseElement {
   shadow?: PPTElementShadow
   paragraphSpace?: number
   vertical?: boolean
+  valign?: 'top' | 'middle' | 'bottom'
+  autoResize?: boolean
   textType?: TextType
 }
 

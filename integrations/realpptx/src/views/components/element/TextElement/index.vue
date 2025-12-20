@@ -18,7 +18,12 @@
         ref="elementRef"
         :style="{
           width: elementInfo.vertical ? 'auto' : elementInfo.width + 'px',
-          height: elementInfo.vertical ? elementInfo.height + 'px' : 'auto',
+          height: (elementInfo.vertical || elementInfo.autoResize === false) ? elementInfo.height + 'px' : 'auto',
+          display: elementInfo.autoResize === false ? 'flex' : undefined,
+          flexDirection: elementInfo.autoResize === false ? 'column' : undefined,
+          justifyContent: elementInfo.autoResize === false
+            ? (elementInfo.valign === 'bottom' ? 'flex-end' : (elementInfo.valign === 'middle' ? 'center' : 'flex-start'))
+            : undefined,
           backgroundColor: elementInfo.fill,
           opacity: elementInfo.opacity,
           textShadow: shadowStyle,
@@ -123,6 +128,7 @@ watch(isScaling, () => {
 })
 
 const updateTextElementHeight = (entries: ResizeObserverEntry[]) => {
+  if (props.elementInfo.autoResize === false) return
   const contentRect = entries[0].contentRect
   if (!elementRef.value) return
 
