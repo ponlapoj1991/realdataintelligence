@@ -945,12 +945,14 @@ export default () => {
             y: el.top / ratioPx2Inch.value,
             w: el.width / ratioPx2Inch.value,
             h: el.height / ratioPx2Inch.value,
-            colW: el.colWidths.map(item => el.width * (toFiniteNumber(item) ?? 0) / ratioPx2Inch.value),
           }
-          if (options.colW.some(w => !Number.isFinite(w) || w <= 0)) {
-            const colCount = Math.max(1, el.colWidths.length)
-            options.colW = Array.from({ length: colCount }, () => el.width / colCount / ratioPx2Inch.value)
+
+          const colCount = Math.max(1, el.colWidths.length)
+          let colW = el.colWidths.map(item => el.width * (toFiniteNumber(item) ?? 0) / ratioPx2Inch.value)
+          if (!colW.length || colW.some((w: number) => !Number.isFinite(w) || w <= 0)) {
+            colW = Array.from({ length: colCount }, () => el.width / colCount / ratioPx2Inch.value)
           }
+          options.colW = colW
           if (el.theme) options.fill = { color: 'FFFFFF' }
           if (el.outline.width && el.outline.color) {
             options.border = {
