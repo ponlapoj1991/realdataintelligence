@@ -326,6 +326,13 @@ export function addChartElementToSlide(params: {
 
   // Data labels
   if (['bar', 'column', 'line', 'area', 'pie', 'ring'].includes(el.chartType)) {
+    const resolveDataLabelFormatCode = (mode?: string) => {
+      if (mode === 'number') return '#,##0'
+      if (mode === 'accounting') return '#,##0.00'
+      if (mode === 'compact') return '[>=1000000000]0.0,,,"B";[>=1000000]0.0,,"M";[>=1000]0.0,"K";0'
+      return undefined
+    }
+
     options.dataLabelColor = dataLabelColor
     options.dataLabelFontSize = pxToPt(dataLabelFontSizePx)
     options.dataLabelFontBold = dataLabelBold
@@ -333,19 +340,13 @@ export function addChartElementToSlide(params: {
 
     if (el.chartType === 'bar' || el.chartType === 'column') {
       options.showValue = showDataLabels
-      if (showDataLabels && !el.options?.dataLabelShowPercent) {
-        if (el.options?.dataLabelValueFormat === 'number') options.dataLabelFormatCode = '#,##0'
-        if (el.options?.dataLabelValueFormat === 'accounting') options.dataLabelFormatCode = '#,##0.00'
-      }
+      if (showDataLabels) options.dataLabelFormatCode = resolveDataLabelFormatCode(el.options?.dataLabelValueFormat)
       const mapped = mapDataLabelPosForBar(el.options?.dataLabelPosition)
       if (mapped) options.dataLabelPosition = mapped
     }
     else if (el.chartType === 'line' || el.chartType === 'area') {
       options.showValue = showDataLabels
-      if (showDataLabels && !el.options?.dataLabelShowPercent) {
-        if (el.options?.dataLabelValueFormat === 'number') options.dataLabelFormatCode = '#,##0'
-        if (el.options?.dataLabelValueFormat === 'accounting') options.dataLabelFormatCode = '#,##0.00'
-      }
+      if (showDataLabels) options.dataLabelFormatCode = resolveDataLabelFormatCode(el.options?.dataLabelValueFormat)
       const mapped = mapDataLabelPosForLine(el.options?.dataLabelPosition)
       if (mapped) options.dataLabelPosition = mapped
       if (el.options?.lineSmooth) options.lineSmooth = true
@@ -361,8 +362,7 @@ export function addChartElementToSlide(params: {
         options.dataLabelFormatCode = `0.${'0'.repeat(Math.max(0, decimals))}%`
       }
       else if (showDataLabels) {
-        if (el.options?.dataLabelValueFormat === 'number') options.dataLabelFormatCode = '#,##0'
-        if (el.options?.dataLabelValueFormat === 'accounting') options.dataLabelFormatCode = '#,##0.00'
+        options.dataLabelFormatCode = resolveDataLabelFormatCode(el.options?.dataLabelValueFormat)
       }
 
       const mapped = mapDataLabelPosForPie(el.options?.dataLabelPosition)
@@ -486,6 +486,15 @@ export function addChartElementToSlide(params: {
     const areaColorIndex: number[] = []
     const areaSecondaryColorIndex: number[] = []
 
+    const resolveSeriesColor = (seriesIndex: number) => {
+      if (!fallbackPalette.length) return '000000'
+      return fallbackPalette[seriesIndex % fallbackPalette.length] || fallbackPalette[0] || '000000'
+    }
+
+    const buildSeriesColors = (seriesIndexes: number[]) => {
+      return seriesIndexes.map(resolveSeriesColor)
+    }
+
     for (let i = 0; i < alignedSeries.length; i++) {
       const seriesType = seriesTypes[i] || 'bar'
       const obj = {
@@ -509,22 +518,75 @@ export function addChartElementToSlide(params: {
       }
     }
 
-    const concatOrderColors: string[] = []
-    for (const idx of barColorIndex) concatOrderColors.push(fallbackPalette[idx % fallbackPalette.length] || fallbackPalette[0] || '000000')
-    for (const idx of barSecondaryColorIndex) concatOrderColors.push(fallbackPalette[idx % fallbackPalette.length] || fallbackPalette[0] || '000000')
-    for (const idx of lineColorIndex) concatOrderColors.push(fallbackPalette[idx % fallbackPalette.length] || fallbackPalette[0] || '000000')
-    for (const idx of lineSecondaryColorIndex) concatOrderColors.push(fallbackPalette[idx % fallbackPalette.length] || fallbackPalette[0] || '000000')
-    for (const idx of areaColorIndex) concatOrderColors.push(fallbackPalette[idx % fallbackPalette.length] || fallbackPalette[0] || '000000')
-    for (const idx of areaSecondaryColorIndex) concatOrderColors.push(fallbackPalette[idx % fallbackPalette.length] || fallbackPalette[0] || '000000')
-    options.chartColors = concatOrderColors.length ? concatOrderColors : fallbackPalette.slice(0, Math.max(1, alignedSeries.length))
+    const shouldUseBarPerPointColors = dataColors.length > 1 && (barData.length + barSecondaryData.length) === 1
+    const barPerPointColors = shouldUseBarPerPointColors
+      ? Array.from({ length: labels.length }, (_, idx) => resolveDataPointColor(idx))
+      : []
 
     const multi: any[] = []
-    if (barData.length) multi.push({ type: pptx.ChartType.bar, data: barData })
-    if (barSecondaryData.length) multi.push({ type: pptx.ChartType.bar, data: barSecondaryData, options: { secondaryValAxis: true, secondaryCatAxis: true } })
-    if (lineData.length) multi.push({ type: pptx.ChartType.line, data: lineData })
-    if (lineSecondaryData.length) multi.push({ type: pptx.ChartType.line, data: lineSecondaryData, options: { secondaryValAxis: true, secondaryCatAxis: true } })
-    if (areaData.length) multi.push({ type: pptx.ChartType.area, data: areaData })
-    if (areaSecondaryData.length) multi.push({ type: pptx.ChartType.area, data: areaSecondaryData, options: { secondaryValAxis: true, secondaryCatAxis: true } })
+
+    if (barData.length) {
+      multi.push({
+        type: pptx.ChartType.bar,
+        data: barData,
+        options: {
+          chartColors: (shouldUseBarPerPointColors && barData.length === 1) ? barPerPointColors : buildSeriesColors(barColorIndex),
+        },
+      })
+    }
+    if (barSecondaryData.length) {
+      multi.push({
+        type: pptx.ChartType.bar,
+        data: barSecondaryData,
+        options: {
+          secondaryValAxis: true,
+          secondaryCatAxis: true,
+          chartColors: (shouldUseBarPerPointColors && barSecondaryData.length === 1) ? barPerPointColors : buildSeriesColors(barSecondaryColorIndex),
+        },
+      })
+    }
+    if (lineData.length) {
+      multi.push({
+        type: pptx.ChartType.line,
+        data: lineData,
+        options: {
+          chartColors: buildSeriesColors(lineColorIndex),
+          ...(lineData.length > 1 ? { lineDataSymbol: 'none' } : {}),
+        },
+      })
+    }
+    if (lineSecondaryData.length) {
+      multi.push({
+        type: pptx.ChartType.line,
+        data: lineSecondaryData,
+        options: {
+          secondaryValAxis: true,
+          secondaryCatAxis: true,
+          chartColors: buildSeriesColors(lineSecondaryColorIndex),
+          ...(lineSecondaryData.length > 1 ? { lineDataSymbol: 'none' } : {}),
+        },
+      })
+    }
+    if (areaData.length) {
+      multi.push({
+        type: pptx.ChartType.area,
+        data: areaData,
+        options: {
+          chartColors: buildSeriesColors(areaColorIndex),
+        },
+      })
+    }
+    if (areaSecondaryData.length) {
+      multi.push({
+        type: pptx.ChartType.area,
+        data: areaSecondaryData,
+        options: {
+          secondaryValAxis: true,
+          secondaryCatAxis: true,
+          chartColors: buildSeriesColors(areaSecondaryColorIndex),
+        },
+      })
+    }
 
     options.barDir = 'col'
     if (el.options?.percentStack) options.barGrouping = 'percentStacked'
@@ -556,6 +618,214 @@ export function addChartElementToSlide(params: {
         {},
         { catAxisHidden: true },
       ]
+    }
+
+    const pptxSeriesOrder = [
+      ...barColorIndex,
+      ...barSecondaryColorIndex,
+      ...lineColorIndex,
+      ...lineSecondaryColorIndex,
+      ...areaColorIndex,
+      ...areaSecondaryColorIndex,
+    ]
+
+    const shouldShowLegend = legendEnabled && alignedSeries.length > 1
+    const shouldUseCustomLegend =
+      shouldShowLegend &&
+      (shouldUseBarPerPointColors || pptxSeriesOrder.some((idx, pos) => idx !== pos))
+
+    const outer = { x: options.x || x, y: options.y || y, w: options.w || w, h: options.h || h }
+
+    if (shouldUseCustomLegend) {
+      const legendPosition = el.options?.legendPosition || 'bottom'
+      const legendAlign = el.options?.legendAlign || 'center'
+      const legendFontSizePt = pxToPt(scaleFontPx(el.options?.legendFontSize ?? 12))
+      const legendColor = toPptxHex(el.options?.legendFontColor || valAxisTextColor)
+
+      const legendFontIn = Math.max(0.01, legendFontSizePt / 72)
+      const padX = Math.max(0.08, legendFontIn * 0.7)
+      const padY = Math.max(0.06, legendFontIn * 0.6)
+      const rowH = Math.max(0.18, legendFontIn * 1.8)
+      const rowGap = Math.max(0.05, legendFontIn * 0.6)
+      const iconW = Math.max(0.16, legendFontIn * 1.6)
+      const iconH = Math.max(0.08, legendFontIn * 0.8)
+      const iconGap = Math.max(0.06, legendFontIn * 0.6)
+      const itemGap = Math.max(0.12, legendFontIn * 1.0)
+      const charW = legendFontIn * 0.55
+
+      const itemWidths = legends.map((name, seriesIndex) => {
+        const seriesType = seriesTypes[seriesIndex] || 'bar'
+        const extra = seriesType === 'line' ? iconW * 0.3 : 0
+        return iconW + iconGap + (name.length * charW) + extra
+      })
+
+      const splitRows = (availableW: number) => {
+        const rows: number[][] = []
+        let row: number[] = []
+        let rowW = 0
+
+        for (let i = 0; i < legends.length; i++) {
+          const wItem = itemWidths[i] || (iconW + iconGap)
+          const nextW = row.length ? rowW + itemGap + wItem : wItem
+          if (nextW > availableW && row.length) {
+            rows.push(row)
+            row = [i]
+            rowW = wItem
+            continue
+          }
+          row.push(i)
+          rowW = nextW
+        }
+        if (row.length) rows.push(row)
+        return rows
+      }
+
+      const splitRect = () => {
+        const ox = Number(outer.x)
+        const oy = Number(outer.y)
+        const ow = Number(outer.w)
+        const oh = Number(outer.h)
+
+        const maxLegendH = Math.max(0.2, Math.min(oh * 0.4, padY * 2 + rowH * 2 + rowGap))
+        const maxLegendW = Math.max(0.6, Math.min(ow * 0.45, ow - 0.5))
+
+        if (legendPosition === 'top' || legendPosition === 'bottom') {
+          const availableW = Math.max(0.01, ow - padX * 2)
+          const rows = splitRows(availableW)
+          const legendH = Math.min(maxLegendH, padY * 2 + rows.length * rowH + Math.max(0, rows.length - 1) * rowGap)
+
+          if (legendPosition === 'top') {
+            return {
+              chart: { x: ox, y: oy + legendH, w: ow, h: Math.max(0.01, oh - legendH) },
+              legend: { x: ox, y: oy, w: ow, h: legendH },
+              rows,
+            }
+          }
+          return {
+            chart: { x: ox, y: oy, w: ow, h: Math.max(0.01, oh - legendH) },
+            legend: { x: ox, y: oy + oh - legendH, w: ow, h: legendH },
+            rows,
+          }
+        }
+
+        const legendW = maxLegendW
+        if (legendPosition === 'left') {
+          return {
+            chart: { x: ox + legendW, y: oy, w: Math.max(0.01, ow - legendW), h: oh },
+            legend: { x: ox, y: oy, w: legendW, h: oh },
+            rows: legends.map((_, idx) => [idx]),
+          }
+        }
+        return {
+          chart: { x: ox, y: oy, w: Math.max(0.01, ow - legendW), h: oh },
+          legend: { x: ox + ow - legendW, y: oy, w: legendW, h: oh },
+          rows: legends.map((_, idx) => [idx]),
+        }
+      }
+
+      const { chart, legend, rows } = splitRect()
+
+      options.x = chart.x
+      options.y = chart.y
+      options.w = chart.w
+      options.h = chart.h
+      options.showLegend = false
+
+      ;(pptxSlide as any).addChart(stripUndefinedDeep(multi) as any, undefined as any, stripUndefinedDeep(options))
+
+      const drawRectIcon = (sx: number, sy: number, color: string) => {
+        pptxSlide.addShape(pptx.ShapeType.rect as any, {
+          x: sx,
+          y: sy,
+          w: iconW,
+          h: iconH,
+          fill: { color },
+          line: { color, transparency: 100 },
+        })
+      }
+
+      const drawLineIcon = (sx: number, sy: number, color: string) => {
+        const lineH = Math.max(0.03, iconH * 0.22)
+        const lineY = sy + (iconH - lineH) / 2
+        pptxSlide.addShape(pptx.ShapeType.rect as any, {
+          x: sx,
+          y: lineY,
+          w: iconW,
+          h: lineH,
+          fill: { color },
+          line: { color, transparency: 100 },
+        })
+        const dotSize = Math.max(0.06, iconH * 0.7)
+        pptxSlide.addShape(pptx.ShapeType.ellipse as any, {
+          x: sx + iconW / 2 - dotSize / 2,
+          y: sy + iconH / 2 - dotSize / 2,
+          w: dotSize,
+          h: dotSize,
+          fill: { color },
+          line: { color, transparency: 100 },
+        })
+      }
+
+      const drawItem = (itemX: number, itemY: number, seriesIndex: number) => {
+        const seriesType = seriesTypes[seriesIndex] || 'bar'
+        const color = resolveSeriesColor(seriesIndex)
+        const iconY = itemY + (rowH - iconH) / 2
+        if (seriesType === 'line') drawLineIcon(itemX, iconY, color)
+        else drawRectIcon(itemX, iconY, color)
+
+        pptxSlide.addText(legends[seriesIndex] || '', {
+          x: itemX + iconW + iconGap,
+          y: itemY,
+          w: Math.max(0.01, legend.w - (itemX - legend.x) - iconW - iconGap - padX),
+          h: rowH,
+          fontFace,
+          fontSize: legendFontSizePt,
+          color: legendColor,
+          valign: 'middle',
+        })
+      }
+
+      const calcRowWidth = (row: number[]) => {
+        let total = 0
+        for (let i = 0; i < row.length; i++) {
+          total += itemWidths[row[i]] || 0
+          if (i > 0) total += itemGap
+        }
+        return total
+      }
+
+      if (legendPosition === 'left' || legendPosition === 'right') {
+        const listTotalH = rows.length * rowH + Math.max(0, rows.length - 1) * rowGap
+        let cy = legend.y + Math.max(padY, (legend.h - listTotalH) / 2)
+        const cx = legend.x + padX
+        for (const row of rows) {
+          const idx = row[0]
+          drawItem(cx, cy, idx)
+          cy += rowH + rowGap
+        }
+      }
+      else {
+        let cy = legend.y + padY
+        for (const row of rows) {
+          const rowW = calcRowWidth(row)
+          const startX =
+            legendAlign === 'left'
+              ? legend.x + padX
+              : legendAlign === 'right'
+                ? legend.x + Math.max(padX, legend.w - padX - rowW)
+                : legend.x + Math.max(padX, (legend.w - rowW) / 2)
+
+          let cx = startX
+          for (let i = 0; i < row.length; i++) {
+            const idx = row[i]
+            drawItem(cx, cy, idx)
+            cx += (itemWidths[idx] || 0) + itemGap
+          }
+          cy += rowH + rowGap
+        }
+      }
+
+      return
     }
 
     ;(pptxSlide as any).addChart(stripUndefinedDeep(multi) as any, undefined as any, stripUndefinedDeep(options))
