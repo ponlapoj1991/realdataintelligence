@@ -163,6 +163,14 @@ export default () => {
 
   type FormatColor = ReturnType<typeof formatColor>
 
+  const sanitizePptxText = (value: unknown) => {
+    const raw = (value === null || value === undefined) ? '' : String(value)
+    return raw
+      .replace(/\r\n/g, '\n')
+      .replace(/\r/g, '\n')
+      .replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F]/g, '')
+  }
+
   // 将HTML字符串格式化为pptxgenjs所需的格式
   // 核心思路：将HTML字符串按样式分片平铺，每个片段需要继承祖先元素的样式信息，遇到块级元素需要换行
   const formatHTML = (html: string) => {
@@ -231,7 +239,9 @@ export default () => {
           slices.push({ text: '', options: { breakLine: true } })
         }
         else if ('content' in item) {
-          const text = item.content.replace(/&nbsp;/g, ' ').replace(/&gt;/g, '>').replace(/&lt;/g, '<').replace(/&amp;/g, '&').replace(/\n/g, '')
+          const text = sanitizePptxText(
+            item.content.replace(/&nbsp;/g, ' ').replace(/&gt;/g, '>').replace(/&lt;/g, '<').replace(/&amp;/g, '&').replace(/\n/g, '')
+          )
           const options: pptxgen.TextPropsOptions = {}
 
           if (styleObj['font-size']) {
@@ -273,7 +283,10 @@ export default () => {
           if (styleObj['font-weight']) options.bold = styleObj['font-weight'] === 'bold'
           if (styleObj['font-style']) options.italic = styleObj['font-style'] === 'italic'
           if (styleObj['font-family']) options.fontFace = styleObj['font-family']
-          if (styleObj['href']) options.hyperlink = { url: styleObj['href'] }
+          if (styleObj['href']) {
+            const href = sanitizePptxText(styleObj['href']).trim()
+            if (/^(https?:\/\/|mailto:)/i.test(href)) options.hyperlink = { url: href }
+          }
 
           if (bulletFlag && styleObj['list-type'] === 'ol') {
             options.bullet = { type: 'number', indent: (options.fontSize || defaultFontSize) * 1.25 }
@@ -529,7 +542,7 @@ export default () => {
         const text = []
         for (const p of pList) {
           const textContent = p.textContent
-          text.push(textContent || '')
+          text.push(sanitizePptxText(textContent || ''))
         }
         pptxSlide.addNotes(text.join('\n'))
       }
@@ -833,7 +846,7 @@ export default () => {
 
               if (!hiddenCells.includes(`${i}_${j}`)) {
                 _row.push({
-                  text: cell.text,
+                  text: sanitizePptxText(cell.text),
                   options: cellOptions,
                 })
               }

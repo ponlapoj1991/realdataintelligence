@@ -212,6 +212,13 @@ const patchChartXml = (xml: string, item: ChartPostprocessItem) => {
   const wantPercentLabels = item.options?.showDataLabels !== false && !!item.options?.dataLabelShowPercent
   const sheetName = 'Sheet1'
 
+  const getFirstNonPointLabelNode = (dLbls: Element) => {
+    return Array.from(dLbls.childNodes)
+      .filter(n => n.nodeType === Node.ELEMENT_NODE)
+      .map(n => n as Element)
+      .find(el => el.localName !== 'dLbl') || null
+  }
+
   for (const meta of seriesMeta) {
     const workbookIndex = Math.max(0, seriesColsSorted.indexOf(meta.valueColIndex))
     const labelColIndex = labelLevels + seriesColsSorted.length + workbookIndex + 1
@@ -237,44 +244,51 @@ const patchChartXml = (xml: string, item: ChartPostprocessItem) => {
         if ((existing as Element).getAttribute('uri') === DATA_LABEL_RANGE_URI) extLst.removeChild(existing)
       }
 
-      const ext = doc.createElementNS(CHART_NS, 'c:ext')
-      ext.setAttribute('uri', DATA_LABEL_RANGE_URI)
-      ext.setAttributeNS('http://www.w3.org/2000/xmlns/', 'xmlns:c15', C15_NS)
+      for (const existing of Array.from(dLbls.getElementsByTagNameNS(CHART_NS, 'dLbl'))) {
+        if (existing.parentNode === dLbls) dLbls.removeChild(existing)
+      }
 
-      const dlRange = doc.createElementNS(C15_NS, 'c15:datalabelsRange')
-      const f = doc.createElementNS(C15_NS, 'c15:f')
-      f.textContent = `${sheetName}!$${labelColLetter}$${meta.valueStartRow}:$${labelColLetter}$${meta.valueEndRow}`
-      dlRange.appendChild(f)
-
-      const strCache = doc.createElementNS(C15_NS, 'c15:dlblRangeCache')
-      const ptCount = doc.createElementNS(C15_NS, 'c15:ptCount')
       const pointCount = Math.max(0, meta.valueEndRow - meta.valueStartRow + 1)
-      ptCount.setAttribute('val', String(pointCount))
-      strCache.appendChild(ptCount)
 
       const idxInPayload = item.patch.legends.findIndex(n => n === meta.name)
       const seriesValues = idxInPayload >= 0 ? (item.patch.alignedSeries[idxInPayload] || []) : []
       const seriesTotal = seriesValues.reduce((sum, v) => sum + (Number.isFinite(v) ? v : 0), 0)
 
+      const insertBefore = getFirstNonPointLabelNode(dLbls)
+
       for (let i = 0; i < pointCount; i++) {
-        const pt = doc.createElementNS(C15_NS, 'c15:pt')
-        pt.setAttribute('idx', String(i))
-        const v = doc.createElementNS(C15_NS, 'c15:v')
+        const rowNum = meta.valueStartRow + i
+        const cellRef = `${sheetName}!$${labelColLetter}$${rowNum}`
+
+        const dLbl = doc.createElementNS(CHART_NS, 'c:dLbl')
+        const idx = doc.createElementNS(CHART_NS, 'c:idx')
+        idx.setAttribute('val', String(i))
+        dLbl.appendChild(idx)
+
+        const tx = doc.createElementNS(CHART_NS, 'c:tx')
+        const strRef = doc.createElementNS(CHART_NS, 'c:strRef')
+        const f = doc.createElementNS(CHART_NS, 'c:f')
+        f.textContent = cellRef
+        strRef.appendChild(f)
+
+        const strCache = doc.createElementNS(CHART_NS, 'c:strCache')
+        const cacheCount = doc.createElementNS(CHART_NS, 'c:ptCount')
+        cacheCount.setAttribute('val', '1')
+        strCache.appendChild(cacheCount)
+        const pt = doc.createElementNS(CHART_NS, 'c:pt')
+        pt.setAttribute('idx', '0')
+        const v = doc.createElementNS(CHART_NS, 'c:v')
         const value = Number(seriesValues[i] ?? 0)
-        const text = buildPercentLabelText(value, seriesTotal, item.options)
-        v.textContent = safeXmlText(text)
+        v.textContent = safeXmlText(buildPercentLabelText(value, seriesTotal, item.options))
         pt.appendChild(v)
         strCache.appendChild(pt)
+        strRef.appendChild(strCache)
+        tx.appendChild(strRef)
+        dLbl.appendChild(tx)
+
+        if (insertBefore) dLbls.insertBefore(dLbl, insertBefore)
+        else dLbls.appendChild(dLbl)
       }
-
-      dlRange.appendChild(strCache)
-
-      const showRange = doc.createElementNS(C15_NS, 'c15:showDataLabelsRange')
-      showRange.setAttribute('val', '1')
-
-      ext.appendChild(dlRange)
-      ext.appendChild(showRange)
-      extLst.appendChild(ext)
     }
 
     const legendColor = legendColorByName.get(meta.name)
