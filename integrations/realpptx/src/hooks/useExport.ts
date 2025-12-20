@@ -238,15 +238,15 @@ export default () => {
             options.fontSize = parseInt(styleObj['font-size']) / ratioPx2Pt.value
           }
           if (styleObj['color']) {
-            options.color = formatColor(styleObj['color']).color
+            options.color = toPptxHex(formatColor(styleObj['color']).color)
           }
           if (styleObj['background-color']) {
-            options.highlight = formatColor(styleObj['background-color']).color
+            options.highlight = toPptxHex(formatColor(styleObj['background-color']).color)
           }
           if (styleObj['text-decoration-line']) {
             if (styleObj['text-decoration-line'].indexOf('underline') !== -1) {
               options.underline = {
-                color: options.color || '#000000',
+                color: options.color || '000000',
                 style: 'sng',
               }
             }
@@ -257,7 +257,7 @@ export default () => {
           if (styleObj['text-decoration']) {
             if (styleObj['text-decoration'].indexOf('underline') !== -1) {
               options.underline = {
-                color: options.color || '#000000',
+                color: options.color || '000000',
                 style: 'sng',
               }
             }
@@ -823,13 +823,13 @@ export default () => {
                 else if (theme.colHeader && j === 0) c = themeColor
                 else if (theme.colFooter && j === row.length - 1) c = themeColor
 
-                cellOptions.fill = { color: c.color, transparency: (1 - c.alpha) * 100 }
+                cellOptions.fill = { color: toPptxHex(c.color), transparency: (1 - c.alpha) * 100 }
               }
               if (cell.style?.backcolor) {
                 const c = formatColor(cell.style.backcolor)
-                cellOptions.fill = { color: c.color, transparency: (1 - c.alpha) * 100 }
+                cellOptions.fill = { color: toPptxHex(c.color), transparency: (1 - c.alpha) * 100 }
               }
-              if (cell.style?.color) cellOptions.color = formatColor(cell.style.color).color
+              if (cell.style?.color) cellOptions.color = toPptxHex(formatColor(cell.style.color).color)
 
               if (!hiddenCells.includes(`${i}_${j}`)) {
                 _row.push({
