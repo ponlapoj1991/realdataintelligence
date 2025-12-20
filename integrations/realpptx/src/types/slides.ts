@@ -177,6 +177,7 @@ export interface PPTTextElement extends PPTBaseElement {
   defaultColor: string
   outline?: PPTElementOutline
   fill?: string
+  padding?: number
   lineHeight?: number
   wordSpace?: number
   opacity?: number

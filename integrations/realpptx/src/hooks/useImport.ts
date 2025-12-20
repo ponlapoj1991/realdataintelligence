@@ -37,6 +37,8 @@ const normalizeColorInput = (value: string) => {
   if (!raw) return ''
   if (/^[0-9a-f]{6}$/i.test(raw)) return `#${raw}`
   if (/^[0-9a-f]{3}$/i.test(raw)) return `#${raw}`
+  if (/^[0-9a-f]{8}$/i.test(raw)) return `#${raw}`
+  if (/^[0-9a-f]{4}$/i.test(raw)) return `#${raw}`
   return raw
 }
 
@@ -60,7 +62,7 @@ const resolveColor = (value: string, themeColors: string[], fallback: string) =>
   const normalized = normalizeColorInput(scheme || value)
   const c = tinycolor(normalized)
   if (!c.isValid()) return fallback
-  return c.toHexString()
+  return c.getAlpha() < 1 ? c.toHex8String() : c.toHexString()
 }
 
 const sanitizeFontFamily = (value: string, fallback: string) => {
@@ -421,7 +423,9 @@ export default () => {
                 defaultFontName: sanitizeFontFamily(defaults.fontFamily || fallbackFontName, fallbackFontName),
                 defaultColor: resolveColor(defaults.color || fallbackColor, pptxThemeColors, fallbackColor),
                 content,
+                padding: 0,
                 lineHeight: 1,
+                paragraphSpace: 0,
                 valign: vAlignMap[el.vAlign] || 'top',
                 autoResize: false,
                 outline: {
