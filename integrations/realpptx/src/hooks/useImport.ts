@@ -34,6 +34,21 @@ const convertFontSizePtToPx = (html: string, ratio: number) => {
   })
 }
 
+const parseFontSizeToPx = (value: string, ratio: number) => {
+  const raw = value.trim()
+  if (!raw) return ''
+  const match = raw.match(/^([\d.]+)\s*(pt|px)?$/i)
+  if (!match) return ''
+
+  const size = parseFloat(match[1])
+  if (!Number.isFinite(size)) return ''
+
+  const unit = (match[2] || 'px').toLowerCase()
+  const baseRatio = 96 / 72
+  const scaled = unit === 'pt' ? size * ratio : size * (ratio / baseRatio)
+  return `${scaled.toFixed(1)}px`
+}
+
 const normalizeColorInput = (value: string) => {
   const raw = value.trim()
   if (!raw) return ''
@@ -305,7 +320,7 @@ export default () => {
       top: el.top,
       start,
       end,
-      style: el.borderType,
+      style: toLineStyleType(el.borderType),
       color: resolveColor(el.borderColor, themeColors, el.borderColor),
       points: ['', /straightConnector/.test(el.shapType) ? 'arrow' : '']
     }
@@ -723,6 +738,16 @@ export default () => {
   
               const fallbackFontName = theme.value.fontName || 'Arial'
               const fallbackColor = theme.value.fontColor || '#333'
+              const scaledRowHeights = Array.isArray(el.rowHeights)
+                ? el.rowHeights.map(item => {
+                    const n = toFiniteNumber(item)
+                    return n && n > 0 ? +((n * ratio).toFixed(2)) : 0
+                  })
+                : []
+              const rowHeights = scaledRowHeights.length === row && scaledRowHeights.every(item => item > 0)
+                ? scaledRowHeights
+                : undefined
+
               const style: TableCellStyle = {
                 fontname: fallbackFontName,
                 color: fallbackColor,
@@ -739,7 +764,7 @@ export default () => {
                   const align = p?.style.textAlign || 'left'
  
                   const span = textDiv.querySelector('span')
-                  const fontsize = span?.style.fontSize ? (parseInt(span?.style.fontSize) * ratio).toFixed(1) + 'px' : ''
+                  const fontsize = span?.style.fontSize ? parseFontSizeToPx(span.style.fontSize, ratio) : ''
                   const fontname = sanitizeFontFamily(span?.style.fontFamily || '', fallbackFontName)
                   const color = span?.style.color || cellData.fontColor
 
@@ -778,23 +803,27 @@ export default () => {
               const borderWidth = border?.borderWidth || 0
               const borderStyle = border?.borderType || 'solid'
               const borderColor = border?.borderColor || '#eeece1'
+              const outline = buildOutline({ borderWidth, borderColor, borderType: borderStyle }, ratio, pptxThemeColors) || {
+                width: 0,
+                style: 'solid',
+                color: 'transparent',
+              }
+              const cellMinHeight = rowHeights?.length ? Math.min(...rowHeights) : (scaledRowHeights[0] || 36)
+              const height = rowHeights?.length ? rowHeights.reduce((sum, item) => sum + item, 0) : el.height
   
               slide.elements.push({
                 type: 'table',
                 id: nanoid(10),
                 width: el.width,
-                height: el.height,
+                height,
                 left: el.left,
                 top: el.top,
                 colWidths,
+                rowHeights,
                 rotate: 0,
                 data,
-                outline: {
-                  width: +(borderWidth * ratio || 2).toFixed(2),
-                  style: borderStyle,
-                  color: resolveColor(borderColor, pptxThemeColors, borderColor),
-                },
-                cellMinHeight: el.rowHeights[0] ? el.rowHeights[0] * ratio : 36,
+                outline,
+                cellMinHeight,
               })
             }
             else if (el.type === 'chart') {

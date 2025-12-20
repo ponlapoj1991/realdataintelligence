@@ -14,10 +14,10 @@
       :style="`--themeColor: ${theme?.color}; --subThemeColor1: ${subThemeColor[0]}; --subThemeColor2: ${subThemeColor[1]}`"
     >
       <colgroup>
-        <col span="1" v-for="(width, index) in colSizeList" :key="index" :width="width">
+        <col span="1" v-for="(width, index) in colSizeList" :key="index" :style="{ width: width + 'px' }">
       </colgroup>
       <tbody>
-        <tr v-for="(rowCells, rowIndex) in data" :key="rowIndex" :style="{ height: cellMinHeight + 'px' }">
+        <tr v-for="(rowCells, rowIndex) in data" :key="rowIndex" :style="{ height: getRowHeight(rowIndex) + 'px' }">
           <td 
             class="cell"
             :style="{
@@ -32,7 +32,7 @@
             :colspan="cell.colspan"
             v-show="!hideCells.includes(`${rowIndex}_${colIndex}`)"
           >
-            <div class="cell-text" :style="{ minHeight: (cellMinHeight - 4) + 'px' }" v-html="formatText(cell.text)" />
+            <div class="cell-text" :style="getCellTextBoxStyle(rowIndex, colIndex)" v-html="formatText(cell.text)" />
           </td>
         </tr>
       </tbody>
@@ -52,6 +52,7 @@ const props = withDefaults(defineProps<{
   width: number
   cellMinHeight: number
   colWidths: number[]
+  rowHeights?: number[]
   outline: PPTElementOutline
   theme?: TableTheme
   editable?: boolean
@@ -68,6 +69,34 @@ watch([
 ], () => {
   colSizeList.value = props.colWidths.map(item => item * props.width)
 }, { immediate: true })
+
+const getRowHeight = (rowIndex: number) => {
+  const height = props.rowHeights?.[rowIndex]
+  return typeof height === 'number' && height > 0 ? height : props.cellMinHeight
+}
+
+const getCellHeight = (rowIndex: number, colIndex: number) => {
+  const cell = props.data[rowIndex]?.[colIndex]
+  const span = Math.max(1, cell?.rowspan || 1)
+  let height = 0
+  for (let i = 0; i < span; i++) height += getRowHeight(rowIndex + i)
+  return height || getRowHeight(rowIndex)
+}
+
+const getCellTextBoxStyle = (rowIndex: number, colIndex: number) => {
+  const borderInset = Math.max(0, (props.outline.width || 0) * 2)
+  const height = Math.max(0, getCellHeight(rowIndex, colIndex) - borderInset)
+  if (props.rowHeights?.length) {
+    return {
+      height: height + 'px',
+      overflow: 'hidden',
+      padding: '2px',
+      lineHeight: 1.2,
+      boxSizing: 'border-box',
+    }
+  }
+  return { minHeight: height + 'px' }
+}
 
 const cells = computed(() => props.data)
 const { hideCells } = useHideCells(cells)
