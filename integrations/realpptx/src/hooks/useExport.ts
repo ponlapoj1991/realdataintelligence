@@ -13,6 +13,8 @@ import { type SvgPoints, toPoints } from '@/utils/svgPathParser'
 import { encrypt } from '@/utils/crypto'
 import { svg2Base64 } from '@/utils/svg2Base64'
 import { addChartElementToSlide } from '@/utils/pptxChartExport'
+import type { ChartPostprocessItem } from '@/utils/pptxChartPostprocess'
+import { postprocessPptxCharts } from '@/utils/pptxChartPostprocess'
 import message from '@/utils/message'
 
 interface ExportImageConfig {
@@ -463,6 +465,8 @@ export default () => {
   // 导出PPTX文件
   const buildPPTX = async (_slides: Slide[], masterOverwrite: boolean, ignoreMedia: boolean) => {
     const pptx = new pptxgen()
+    const chartItems: ChartPostprocessItem[] = []
+    let chartId = 0
 
     if (viewportRatio.value === 0.625) pptx.layout = 'LAYOUT_16x10'
     else if (viewportRatio.value === 0.75) pptx.layout = 'LAYOUT_4x3'
@@ -747,7 +751,7 @@ export default () => {
         }
 
         else if (el.type === 'chart') {
-          addChartElementToSlide({
+          const patch = addChartElementToSlide({
             pptx,
             pptxSlide,
             el,
@@ -755,6 +759,16 @@ export default () => {
             ratioPx2Pt: ratioPx2Pt.value,
             formatColor,
           })
+
+          if (patch) {
+            chartId += 1
+            chartItems.push({
+              chartId,
+              chartType: el.chartType,
+              options: el.options,
+              patch,
+            })
+          }
         }
 
         else if (el.type === 'table') {
@@ -894,7 +908,7 @@ export default () => {
       }
     }
 
-    return pptx
+    return { pptx, chartItems }
   }
 
   const exportPPTX = (_slides: Slide[], masterOverwrite: boolean, ignoreMedia: boolean) => {
@@ -902,10 +916,19 @@ export default () => {
 
     setTimeout(async () => {
       try {
-        const pptx = await buildPPTX(_slides, masterOverwrite, ignoreMedia)
+        const { pptx, chartItems } = await buildPPTX(_slides, masterOverwrite, ignoreMedia)
         const fileName = `${title.value}.pptx`
         const blob = await (pptx as any).write('blob')
-        saveAs(blob as Blob, fileName)
+
+        let outBlob = blob as Blob
+        try {
+          outBlob = await postprocessPptxCharts(outBlob, chartItems)
+        }
+        catch (postprocessErr) {
+          console.error(postprocessErr)
+        }
+
+        saveAs(outBlob, fileName)
       }
       catch (err) {
         console.error(err)
