@@ -345,11 +345,11 @@ const toggleLoop = () => {
   loop.value = !loop.value
 }
 
-const autoHideControllerTimer = ref(-1)
+const autoHideControllerTimer = ref<ReturnType<typeof setTimeout> | null>(null)
 const hideController = ref(false)
 const autoHideController = () => {
   hideController.value = false
-  clearTimeout(autoHideControllerTimer.value)
+  if (autoHideControllerTimer.value !== null) clearTimeout(autoHideControllerTimer.value)
   autoHideControllerTimer.value = setTimeout(() => {
     if (videoRef.value?.played.length) hideController.value = true
   }, 3000)
