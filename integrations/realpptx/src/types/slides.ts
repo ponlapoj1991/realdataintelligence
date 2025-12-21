@@ -175,6 +175,7 @@ export interface PPTTextElement extends PPTBaseElement {
   content: string
   defaultFontName: string
   defaultColor: string
+  defaultFontSize?: string
   outline?: PPTElementOutline
   fill?: string
   padding?: number
@@ -311,6 +312,7 @@ export interface ShapeText {
   content: string
   defaultFontName: string
   defaultColor: string
+  defaultFontSize?: string
   align: ShapeTextAlign
   type?: TextType
   padding?: number

@@ -53,6 +53,7 @@
           :value="elementInfo.content"
           :style="{
             '--paragraphSpace': `${elementInfo.paragraphSpace === undefined ? 5 : elementInfo.paragraphSpace}px`,
+            '--defaultFontSize': elementInfo.defaultFontSize || undefined,
           }"
           @update="({ value, ignore }) => updateContent(value, ignore)"
           @mousedown="$event => handleSelectElement($event, false)"

@@ -28,9 +28,17 @@ import type {
   Gradient,
 } from '@/types/slides'
 
-const convertFontSizePtToPx = (html: string, ratio: number) => {
-  return html.replace(/font-size:\s*([\d.]+)pt/g, (match, p1) => {
-    return `font-size: ${(parseFloat(p1) * ratio).toFixed(1)}px`
+const normalizeFontSizeToPx = (html: string, ratio: number) => {
+  if (!html) return html
+
+  return html.replace(/font-size:\s*([\d.]+)\s*(pt|px)?/gi, (match, p1, unitRaw) => {
+    const size = parseFloat(p1)
+    if (!Number.isFinite(size)) return match
+
+    const unit = (unitRaw || '').toLowerCase()
+    if (unit === 'px') return match
+
+    return `font-size: ${(size * ratio).toFixed(1)}px`
   })
 }
 
@@ -164,20 +172,32 @@ const sanitizeFontFamily = (value: string, fallback: string) => {
 
   const lower = cleaned.toLowerCase()
   if (!cleaned) return fallback
+  if (lower.startsWith('+')) return fallback
   if (['inherit', 'initial', 'unset', 'sans-serif', 'serif', 'monospace', 'system-ui'].includes(lower)) return fallback
   return cleaned
 }
 
 const extractTextDefaults = (html: string) => {
-  if (!html) return { fontFamily: '', color: '' }
+  if (!html) return { fontFamily: '', color: '', fontSize: '' }
   const doc = new DOMParser().parseFromString(html, 'text/html')
   const nodes = Array.from(doc.body.querySelectorAll<HTMLElement>('*'))
+  let fontFamily = ''
+  let color = ''
+  let fontSize = ''
+
   for (const node of nodes) {
-    const fontFamily = node.style.fontFamily || ''
-    const color = node.style.color || ''
-    if (fontFamily || color) return { fontFamily, color }
+    if (!fontFamily && node.style.fontFamily) fontFamily = node.style.fontFamily
+    if (!color && node.style.color) color = node.style.color
+    if (!fontSize && node.style.fontSize) fontSize = node.style.fontSize
+    if (fontFamily && color && fontSize) break
   }
-  return { fontFamily: '', color: '' }
+
+  if (!fontSize) {
+    const match = html.match(/font-size:\s*([\d.]+px)/i)
+    if (match) fontSize = match[1]
+  }
+
+  return { fontFamily, color, fontSize }
 }
 
 export default () => {
@@ -495,7 +515,7 @@ export default () => {
                 up: 'top',
               }
 
-              const content = convertFontSizePtToPx(el.content, ratio)
+              const content = normalizeFontSizeToPx(el.content, ratio)
               const defaults = extractTextDefaults(content)
               const fallbackFontName = theme.value.fontName || 'Arial'
               const fallbackColor = theme.value.fontColor || '#333'
@@ -510,6 +530,7 @@ export default () => {
                 rotate: el.rotate,
                 defaultFontName: sanitizeFontFamily(defaults.fontFamily || fallbackFontName, fallbackFontName),
                 defaultColor: resolveColor(defaults.color || fallbackColor, pptxThemeColors, fallbackColor),
+                defaultFontSize: defaults.fontSize || undefined,
                 content,
                 padding: 0,
                  lineHeight: 1,
@@ -641,7 +662,7 @@ export default () => {
 
                 const fill = el.fill?.type === 'color' ? resolveColor(el.fill.value, pptxThemeColors, '') : ''
 
-                const textContent = convertFontSizePtToPx(el.content, ratio)
+                const textContent = normalizeFontSizeToPx(el.content, ratio)
                 const textDefaults = extractTextDefaults(textContent)
                 const fallbackFontName = theme.value.fontName || 'Arial'
                 const fallbackColor = theme.value.fontColor || '#333'
@@ -664,6 +685,7 @@ export default () => {
                      content: textContent,
                      defaultFontName: sanitizeFontFamily(textDefaults.fontFamily || fallbackFontName, fallbackFontName),
                      defaultColor: resolveColor(textDefaults.color || fallbackColor, pptxThemeColors, fallbackColor),
+                     defaultFontSize: textDefaults.fontSize || undefined,
                      align: vAlignMap[el.vAlign] || 'middle',
                      padding: 0,
                      lineHeight: 1,
@@ -759,7 +781,7 @@ export default () => {
                   const cellData = el.data[i][j]
 
                   let textDiv: HTMLDivElement | null = document.createElement('div')
-                  textDiv.innerHTML = cellData.text
+                  textDiv.innerHTML = normalizeFontSizeToPx(cellData.text, ratio)
                   const p = textDiv.querySelector('p')
                   const align = p?.style.textAlign || 'left'
  
@@ -788,8 +810,16 @@ export default () => {
                 data.push(rowCells)
               }
   
-              const allWidth = el.colWidths.reduce((a, b) => a + b, 0)
-              const colWidths: number[] = el.colWidths.map(item => item / allWidth)
+              const widthValues = Array.isArray(el.colWidths) && el.colWidths.length === col
+                ? el.colWidths.map(item => {
+                    const n = toFiniteNumber(item)
+                    return n && n > 0 ? n : 0
+                  })
+                : []
+              const allWidth = widthValues.reduce((a, b) => a + b, 0)
+              const colWidths: number[] = allWidth > 0
+                ? widthValues.map(item => item / allWidth)
+                : new Array(col).fill(1 / col)
 
               const firstCell = el.data[0][0]
               const border = firstCell.borders.top ||

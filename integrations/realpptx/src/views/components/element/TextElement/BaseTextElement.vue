@@ -44,6 +44,7 @@
           :class="{ 'thumbnail': target === 'thumbnail' }"
           :style="{
             '--paragraphSpace': `${elementInfo.paragraphSpace === undefined ? 5 : elementInfo.paragraphSpace}px`,
+            '--defaultFontSize': elementInfo.defaultFontSize || undefined,
           }"
           v-html="elementInfo.content"
         ></div>

@@ -65,6 +65,7 @@
             lineHeight: text.lineHeight ?? 1.2,
             overflow: text.clip ? 'hidden' : undefined,
             '--paragraphSpace': text.paragraphSpace === undefined ? undefined : `${text.paragraphSpace}px`,
+            '--defaultFontSize': text.defaultFontSize || undefined,
           }"
         >
           <div class="ProseMirror-static" v-html="text.content"></div>
