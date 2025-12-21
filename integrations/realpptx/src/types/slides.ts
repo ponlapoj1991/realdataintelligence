@@ -175,14 +175,18 @@ export interface PPTTextElement extends PPTBaseElement {
   content: string
   defaultFontName: string
   defaultColor: string
+  defaultFontSize?: string
   outline?: PPTElementOutline
   fill?: string
+  padding?: number
   lineHeight?: number
   wordSpace?: number
   opacity?: number
   shadow?: PPTElementShadow
   paragraphSpace?: number
   vertical?: boolean
+  valign?: 'top' | 'middle' | 'bottom'
+  autoResize?: boolean
   textType?: TextType
 }
 
@@ -308,8 +312,13 @@ export interface ShapeText {
   content: string
   defaultFontName: string
   defaultColor: string
+  defaultFontSize?: string
   align: ShapeTextAlign
   type?: TextType
+  padding?: number
+  lineHeight?: number
+  paragraphSpace?: number
+  clip?: boolean
 }
 
 /**
@@ -416,6 +425,8 @@ export type ChartType = 'bar' | 'column' | 'line' | 'pie' | 'ring' | 'area' | 'r
 export interface ChartOptions {
   // Series/stack
   lineSmooth?: boolean
+  lineStrokeWidth?: number
+  lineStrokeStyle?: 'solid' | 'dashed' | 'dotted'
   stack?: boolean
   percentStack?: boolean
   subType?: 'clustered' | 'stacked' | 'percentStacked' | 'scatter' | 'bubble'
@@ -431,15 +442,19 @@ export interface ChartOptions {
   dataLabelPosition?: 'top' | 'inside' | 'outside' | 'center'
   dataLabelFontSize?: number
   dataLabelFontWeight?: 'normal' | 'bold'
+  dataLabelFontFamily?: string
   dataLabelColor?: string
+  dataLabelValueFormat?: 'auto' | 'text' | 'number' | 'compact' | 'accounting'
   dataLabelShowPercent?: boolean
   dataLabelPercentDecimals?: number
+  dataLabelPercentPlacement?: 'prefix' | 'suffix'
 
   // Legend
   legendEnabled?: boolean
   legendPosition?: 'top' | 'bottom' | 'left' | 'right'
   legendAlign?: 'left' | 'center' | 'right'
   legendFontSize?: number
+  legendFontFamily?: string
   legendFontColor?: string
 
   // Axis
@@ -450,6 +465,29 @@ export interface ChartOptions {
   axisLabelSlant?: 0 | 45 | 90
   axisGridShow?: boolean
   axisGridColor?: string
+
+  axisShowX?: boolean
+  axisShowYLeft?: boolean
+  axisShowYRight?: boolean
+
+  axisLabelFontSizeX?: number
+  axisLabelFontFamilyX?: string
+  axisLabelColorX?: string
+  axisLabelSlantX?: number
+  axisGridShowX?: boolean
+  axisGridColorX?: string
+
+  axisLabelFontSizeYLeft?: number
+  axisLabelFontFamilyYLeft?: string
+  axisLabelColorYLeft?: string
+  axisGridShowYLeft?: boolean
+  axisGridColorYLeft?: string
+
+  axisLabelFontSizeYRight?: number
+  axisLabelFontFamilyYRight?: string
+  axisLabelColorYRight?: string
+  axisGridShowYRight?: boolean
+  axisGridColorYRight?: string
 
   // Pie/Ring
   pieInnerRadius?: number // 0-100 (%)
@@ -600,6 +638,7 @@ export interface PPTTableElement extends PPTBaseElement {
   outline: PPTElementOutline
   theme?: TableTheme
   colWidths: number[]
+  rowHeights?: number[]
   cellMinHeight: number
   data: TableCell[][]
 }

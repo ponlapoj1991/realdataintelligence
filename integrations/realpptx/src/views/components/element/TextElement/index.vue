@@ -18,7 +18,14 @@
         ref="elementRef"
         :style="{
           width: elementInfo.vertical ? 'auto' : elementInfo.width + 'px',
-          height: elementInfo.vertical ? elementInfo.height + 'px' : 'auto',
+          height: (elementInfo.vertical || elementInfo.autoResize === false) ? elementInfo.height + 'px' : 'auto',
+          padding: (elementInfo.padding ?? 10) + 'px',
+          display: elementInfo.autoResize === false ? 'flex' : undefined,
+          flexDirection: elementInfo.autoResize === false ? 'column' : undefined,
+          justifyContent: elementInfo.autoResize === false
+            ? (elementInfo.valign === 'bottom' ? 'flex-end' : (elementInfo.valign === 'middle' ? 'center' : 'flex-start'))
+            : undefined,
+          overflow: elementInfo.autoResize === false ? 'hidden' : undefined,
           backgroundColor: elementInfo.fill,
           opacity: elementInfo.opacity,
           textShadow: shadowStyle,
@@ -46,6 +53,7 @@
           :value="elementInfo.content"
           :style="{
             '--paragraphSpace': `${elementInfo.paragraphSpace === undefined ? 5 : elementInfo.paragraphSpace}px`,
+            '--defaultFontSize': elementInfo.defaultFontSize || undefined,
           }"
           @update="({ value, ignore }) => updateContent(value, ignore)"
           @mousedown="$event => handleSelectElement($event, false)"
@@ -123,11 +131,13 @@ watch(isScaling, () => {
 })
 
 const updateTextElementHeight = (entries: ResizeObserverEntry[]) => {
+  if (props.elementInfo.autoResize === false) return
   const contentRect = entries[0].contentRect
   if (!elementRef.value) return
 
-  const realHeight = contentRect.height + 20
-  const realWidth = contentRect.width + 20
+  const padding = props.elementInfo.padding ?? 10
+  const realHeight = contentRect.height + padding * 2
+  const realWidth = contentRect.width + padding * 2
 
   if (!props.elementInfo.vertical && props.elementInfo.height !== realHeight) {
     if (!isScaling.value) {

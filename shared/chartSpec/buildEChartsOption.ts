@@ -1,20 +1,11 @@
-import type { MagicChartPayload } from './magicChartPayload';
-import { buildEChartsOption } from '@shared/chartSpec';
-
-/**
- * Build ECharts option from MagicChartPayload (pixel-perfect).
- * Keeps parity with MagicWidgetRenderer logic.
- * @param isEditing - When true, disables animation to prevent distracting re-renders during editing
- */
-export const buildMagicEchartsOption = (payload: MagicChartPayload | null, colSpan: number = 2, isEditing: boolean = false) => {
+import type { SharedChartPayload } from './types';
+export const buildEChartsOption = (payload: SharedChartPayload | null, colSpan: number = 2, isEditing: boolean = false) => {
   if (!payload) return null;
 
-  // Animation settings - disabled during editing to prevent distracting re-renders
   const animationSettings = isEditing
     ? ({ animation: false } as const)
     : ({ animation: true, animationDuration: 300, animationEasing: 'cubicOut' as const } as const);
 
-  // Responsive Scale Factors
   const isCompact = colSpan <= 1;
   const baseFontSize = isCompact ? 10 : 12;
   const smallFontSize = isCompact ? 9 : 11;
@@ -34,12 +25,9 @@ export const buildMagicEchartsOption = (payload: MagicChartPayload | null, colSp
 
   const buildAxisLabel = (cfg: { fontSize?: number; fontFamily?: string; color?: string; rotate?: number }) => ({
     ...(cfg.color || textColor ? { color: cfg.color ?? textColor } : {}),
-    // Scale font size if not explicit, or if explicit but we are compact mode (maybe reduce slightly?)
-    // For now, if user set explicit size, respect it. If default, use scaled.
     fontSize: typeof cfg.fontSize === 'number' ? (isCompact ? Math.max(8, cfg.fontSize - 2) : cfg.fontSize) : baseFontSize,
     ...(cfg.fontFamily ? { fontFamily: cfg.fontFamily } : {}),
     ...(typeof cfg.rotate === 'number' && cfg.rotate !== 0 ? { rotate: cfg.rotate } : {}),
-    // Compact mode: truncate labels? ECharts does this automatically mostly.
     overflow: 'truncate',
     width: isCompact ? 60 : undefined,
   });
@@ -126,9 +114,7 @@ export const buildMagicEchartsOption = (payload: MagicChartPayload | null, colSp
   };
 
   const legendEnabled = options?.legendEnabled !== false;
-  // Legend Scaling
   let legendPosition = options?.legendPosition || 'bottom';
-  // Force bottom or scrollable legend for compact mode if it was left/right (too wide)
   if (isCompact && (legendPosition === 'left' || legendPosition === 'right')) {
       legendPosition = 'bottom';
   }
@@ -137,7 +123,7 @@ export const buildMagicEchartsOption = (payload: MagicChartPayload | null, colSp
     !legendEnabled || data.series.length <= 1
       ? undefined
       : {
-          type: isCompact ? 'scroll' : 'plain', // Use scroll for compact
+          type: isCompact ? 'scroll' : 'plain',
           textStyle: {
             fontSize: typeof options?.legendFontSize === 'number' ? (isCompact ? Math.max(9, options.legendFontSize - 2) : options.legendFontSize) : baseFontSize,
             ...(options?.legendFontFamily ? { fontFamily: options.legendFontFamily } : {}),
@@ -208,8 +194,6 @@ export const buildMagicEchartsOption = (payload: MagicChartPayload | null, colSp
       : data.dataColors?.length
         ? data.dataColors
         : themeColors;
-
-    // Use point colors for single series charts (allows per-category coloring from categoryConfig)
     const usePointColors = data.dataColors?.length && data.series.length === 1;
 
     const categoryAxis = {
@@ -242,11 +226,11 @@ export const buildMagicEchartsOption = (payload: MagicChartPayload | null, colSp
       triggerEvent: true,
     };
 
-    const seriesTotals = data.series.map((s) => s.reduce((sum, v) => sum + (Number(v) || 0), 0));
-    const stackedIndexTotals =
+    const seriesTotals = data.series.map((s) => s.reduce<number>((sum, v) => sum + getNumericValue(v), 0));
+    const stackedIndexTotals: number[] =
       options?.stack || options?.percentStack
         ? data.labels.map((_, i) =>
-            data.series.reduce((sum, s) => sum + (Number(s[i]) || 0), 0)
+            data.series.reduce<number>((sum, s) => sum + getNumericValue(s[i]), 0)
           )
         : [];
 
@@ -303,7 +287,7 @@ export const buildMagicEchartsOption = (payload: MagicChartPayload | null, colSp
                   let percent: number | null = null;
 
                   if (options?.percentStack) {
-                    percent = n; // already 0..1
+                    percent = n;
                   } else if (options?.stack) {
                     const total = stackedIndexTotals[params?.dataIndex] || 0;
                     percent = total > 0 ? n / total : null;
@@ -337,11 +321,11 @@ export const buildMagicEchartsOption = (payload: MagicChartPayload | null, colSp
   }
 
   if (type === 'line') {
-    const seriesTotals = data.series.map((s) => s.reduce((sum, v) => sum + (Number(v) || 0), 0));
-    const stackedIndexTotals =
+    const seriesTotals = data.series.map((s) => s.reduce<number>((sum, v) => sum + getNumericValue(v), 0));
+    const stackedIndexTotals: number[] =
       options?.stack || options?.percentStack
         ? data.labels.map((_, i) =>
-            data.series.reduce((sum, s) => sum + (Number(s[i]) || 0), 0)
+            data.series.reduce<number>((sum, s) => sum + getNumericValue(s[i]), 0)
           )
         : [];
 
@@ -357,8 +341,6 @@ export const buildMagicEchartsOption = (payload: MagicChartPayload | null, colSp
             formatNumericText(getNumericValue(params?.value), options?.dataLabelValueFormat),
         }
       : undefined;
-
-    // Support per-point colors from categoryConfig for single series
     const usePointColors = data.dataColors?.length && data.series.length === 1;
 
     return {
@@ -431,7 +413,6 @@ export const buildMagicEchartsOption = (payload: MagicChartPayload | null, colSp
               }
             : seriesLabelBase;
 
-        // Apply per-point colors for single series line charts
         const seriesData = usePointColors
           ? s.map((v, i) => ({
               value: v,
@@ -456,11 +437,11 @@ export const buildMagicEchartsOption = (payload: MagicChartPayload | null, colSp
   }
 
   if (type === 'area') {
-    const seriesTotals = data.series.map((s) => s.reduce((sum, v) => sum + (Number(v) || 0), 0));
-    const stackedIndexTotals =
+    const seriesTotals = data.series.map((s) => s.reduce<number>((sum, v) => sum + getNumericValue(v), 0));
+    const stackedIndexTotals: number[] =
       options?.stack || options?.percentStack
         ? data.labels.map((_, i) =>
-            data.series.reduce((sum, s) => sum + (Number(s[i]) || 0), 0)
+            data.series.reduce<number>((sum, s) => sum + getNumericValue(s[i]), 0)
           )
         : [];
 
@@ -477,7 +458,6 @@ export const buildMagicEchartsOption = (payload: MagicChartPayload | null, colSp
         }
       : undefined;
 
-    // Support per-point colors from categoryConfig for single series
     const usePointColors = data.dataColors?.length && data.series.length === 1;
 
     return {
@@ -550,7 +530,6 @@ export const buildMagicEchartsOption = (payload: MagicChartPayload | null, colSp
               }
             : seriesLabelBase;
 
-        // Apply per-point colors for single series area charts
         const seriesData = usePointColors
           ? s.map((v, i) => ({
               value: v,
@@ -662,7 +641,6 @@ export const buildMagicEchartsOption = (payload: MagicChartPayload | null, colSp
   }
 
   if (type === 'scatter') {
-    // Build scatter data with labels for tooltip
     const scatterData = data.series[0].map((x, idx) => ({
       value: [x, data.series[1]?.[idx] ?? x],
       name: data.labels[idx] || `Point ${idx + 1}`,
@@ -745,11 +723,11 @@ export const buildMagicEchartsOption = (payload: MagicChartPayload | null, colSp
     const usePointColorsForSingleBarSeries =
       !!(data.dataColors?.length) && resolvedTypes.filter((t) => t === 'bar').length === 1;
 
-    const seriesTotals = data.series.map((s) => s.reduce((sum, v) => sum + (Number(v) || 0), 0));
-    const stackedIndexTotals =
+    const seriesTotals = data.series.map((s) => s.reduce<number>((sum, v) => sum + getNumericValue(v), 0));
+    const stackedIndexTotals: number[] =
       options?.stack || options?.percentStack
         ? data.labels.map((_, i) =>
-            data.series.reduce((sum, s) => sum + (Number(s[i]) || 0), 0)
+            data.series.reduce<number>((sum, s) => sum + getNumericValue(s[i]), 0)
           )
         : [];
 
@@ -855,7 +833,7 @@ export const buildMagicEchartsOption = (payload: MagicChartPayload | null, colSp
                   let percent: number | null = null;
 
                   if (options?.percentStack) {
-                    percent = n; // already 0..1
+                    percent = n;
                   } else if (options?.stack) {
                     const total = stackedIndexTotals[params?.dataIndex] || 0;
                     percent = total > 0 ? n / total : null;
@@ -881,11 +859,9 @@ export const buildMagicEchartsOption = (payload: MagicChartPayload | null, colSp
             : seriesColor
               ? { color: seriesColor }
               : undefined;
-        // Per-series smooth and strokeWidth
         const seriesSmooth = options?.seriesSmoothList?.[idx] ?? options?.lineSmooth ?? false;
         const seriesStrokeWidth = options?.seriesStrokeWidths?.[idx] ?? (options?.lineStrokeWidth ?? 2);
         const seriesStrokeStyle = options?.seriesStrokeStyles?.[idx] ?? options?.lineStrokeStyle ?? 'solid';
-        // Per-series data labels
         const perSeriesLabel = options?.seriesDataLabels?.[idx];
         const finalLabel = perSeriesLabel?.enabled
           ? {
@@ -975,9 +951,30 @@ export const buildMagicEchartsOption = (payload: MagicChartPayload | null, colSp
     };
   }
 
+  if (type === 'radar') {
+    return {
+      ...animationSettings,
+      color: data.seriesColors?.length ? data.seriesColors : themeColors,
+      legend,
+      grid: { containLabel: gridContainLabel, ...gridPadding },
+      radar: {
+        indicator: data.labels.map((label, idx) => ({
+          name: label,
+          max: getNumericValue(data.series?.[0]?.[idx]),
+        })),
+      },
+      series: [
+        {
+          type: 'radar',
+          data: data.series.map((item, index) => ({
+            value: item,
+            name: data.legends[index],
+            ...(data.seriesColors && data.seriesColors[index] ? { itemStyle: { color: data.seriesColors[index] } } : {}),
+          })),
+        },
+      ],
+    };
+  }
+
   return null;
 };
-
-export const buildMagicEchartsOptionShared = (payload: MagicChartPayload | null, colSpan: number = 2, isEditing: boolean = false) => {
-  return buildEChartsOption(payload as any, colSpan, isEditing)
-}

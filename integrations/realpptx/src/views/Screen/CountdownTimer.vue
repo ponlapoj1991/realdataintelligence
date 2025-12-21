@@ -59,7 +59,7 @@ const emit = defineEmits<{
   (event: 'close'): void
 }>()
 
-const timer = ref<number | null>(null)
+const timer = ref<ReturnType<typeof setInterval> | null>(null)
 const inTiming = ref(false)
 const isCountdown = ref(false)
 const time = ref(0)
@@ -71,7 +71,7 @@ const inputEditable = computed(() => {
 })
 
 const clearTimer = () => {
-  if (timer.value) clearInterval(timer.value)
+  if (timer.value !== null) clearInterval(timer.value)
 }
 
 onUnmounted(clearTimer)

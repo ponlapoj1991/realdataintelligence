@@ -98,11 +98,11 @@ export default () => {
   }
 
   // 关闭自动播放
-  const autoPlayTimer = ref(0)
+  const autoPlayTimer = ref<ReturnType<typeof setInterval> | null>(null)
   const closeAutoPlay = () => {
-    if (autoPlayTimer.value) {
+    if (autoPlayTimer.value !== null) {
       clearInterval(autoPlayTimer.value)
-      autoPlayTimer.value = 0
+      autoPlayTimer.value = null
     }
   }
   onUnmounted(closeAutoPlay)

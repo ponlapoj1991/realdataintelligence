@@ -11,7 +11,6 @@ interface DashboardChartMessage {
   chartType: ChartType
   data: ChartData
   options?: ChartOptions
-  optionRaw?: any
   theme?: {
     colors?: string[]
     textColor?: string
@@ -82,7 +81,6 @@ export default () => {
         createChartElement(payload.chartType, {
           data: payload.data,
           options: payload.options,
-          optionRaw: payload.optionRaw,
           themeColors: payload.theme?.colors,
           textColor: payload.theme?.textColor,
           lineColor: payload.theme?.lineColor,
@@ -178,7 +176,6 @@ export default () => {
         elementId: string
         data: ChartData
         options?: ChartOptions
-        optionRaw?: any
         theme?: { colors?: string[]; textColor?: string; lineColor?: string }
       } | undefined
 
@@ -192,7 +189,7 @@ export default () => {
                 ...el,
                 data: payload.data,
                 options: payload.options || el.options,
-                optionRaw: payload.optionRaw ?? el.optionRaw,
+                optionRaw: undefined,
                 themeColors: payload.theme?.colors || el.themeColors,
                 textColor: payload.theme?.textColor || el.textColor,
                 lineColor: payload.theme?.lineColor || el.lineColor,

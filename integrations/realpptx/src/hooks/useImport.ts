@@ -2,6 +2,7 @@ import { ref } from 'vue'
 import { storeToRefs } from 'pinia'
 import { parse, type Shape, type Element, type ChartItem, type BaseElement } from 'pptxtojson'
 import { nanoid } from 'nanoid'
+import tinycolor from 'tinycolor2'
 import { useSlidesStore } from '@/store'
 import { decrypt } from '@/utils/crypto'
 import { type ShapePoolItem, SHAPE_LIST, SHAPE_PATH_FORMULAS } from '@/configs/shapes'
@@ -16,6 +17,8 @@ import type {
   TableCell,
   ChartType,
   SlideBackground,
+  LineStyleType,
+  PPTElementOutline,
   PPTShapeElement,
   PPTLineElement,
   PPTImageElement,
@@ -25,10 +28,179 @@ import type {
   Gradient,
 } from '@/types/slides'
 
-const convertFontSizePtToPx = (html: string, ratio: number) => {
-  return html.replace(/font-size:\s*([\d.]+)pt/g, (match, p1) => {
-    return `font-size: ${(parseFloat(p1) * ratio).toFixed(1)}px`
+const PPTX_PT_TO_PX_RATIO = 96 / 72
+const DEFAULT_VIEWPORT_SIZE = 1000
+
+const normalizeFontSizeToPx = (html: string, ratio: number) => {
+  if (!html) return html
+
+  const pxScale = ratio / PPTX_PT_TO_PX_RATIO
+
+  return html.replace(/font-size:\s*([\d.]+)\s*(pt|px)?/gi, (match, p1, unitRaw) => {
+    const size = parseFloat(p1)
+    if (!Number.isFinite(size)) return match
+
+    const unit = (unitRaw || '').toLowerCase()
+    const scaled = unit === 'pt' ? size * ratio : size * pxScale
+    return `font-size: ${scaled.toFixed(1)}px`
   })
+}
+
+const parseFontSizeToPx = (value: string, ratio: number) => {
+  const raw = value.trim()
+  if (!raw) return ''
+  const match = raw.match(/^([\d.]+)\s*(pt|px)?$/i)
+  if (!match) return ''
+
+  const size = parseFloat(match[1])
+  if (!Number.isFinite(size)) return ''
+
+  const unit = (match[2] || 'px').toLowerCase()
+  const scaled = unit === 'pt' ? size * ratio : size * (ratio / PPTX_PT_TO_PX_RATIO)
+  return `${scaled.toFixed(1)}px`
+}
+
+const normalizeColorInput = (value: string) => {
+  const raw = value.trim()
+  if (!raw) return ''
+  if (/^[0-9a-f]{6}$/i.test(raw)) return `#${raw}`
+  if (/^[0-9a-f]{3}$/i.test(raw)) return `#${raw}`
+  if (/^[0-9a-f]{8}$/i.test(raw)) return `#${raw}`
+  if (/^[0-9a-f]{4}$/i.test(raw)) return `#${raw}`
+  return raw
+}
+
+const parseHexColor = (value: string) => {
+  const raw = value.trim()
+  const match = raw.match(/^#?([0-9a-f]{3,4}|[0-9a-f]{6}|[0-9a-f]{8})$/i)
+  if (!match) return null
+
+  const hex = match[1].toLowerCase()
+  const expand = (c: string) => c + c
+
+  const rgb = hex.length === 3 || hex.length === 4
+    ? [expand(hex[0]), expand(hex[1]), expand(hex[2])]
+    : [hex.slice(0, 2), hex.slice(2, 4), hex.slice(4, 6)]
+
+  const alphaHex = hex.length === 4
+    ? expand(hex[3])
+    : (hex.length === 8 ? hex.slice(6, 8) : 'ff')
+
+  const r = parseInt(rgb[0], 16)
+  const g = parseInt(rgb[1], 16)
+  const b = parseInt(rgb[2], 16)
+  const a = parseInt(alphaHex, 16) / 255
+
+  if (![r, g, b, a].every(n => Number.isFinite(n))) return null
+
+  return { r, g, b, a }
+}
+
+const toRgbaString = (rgba: { r: number; g: number; b: number; a: number }) => {
+  const alpha = Number(rgba.a.toFixed(4))
+  return `rgba(${rgba.r}, ${rgba.g}, ${rgba.b}, ${alpha})`
+}
+
+const normalizeCssColorInput = (value: string) => {
+  const normalized = normalizeColorInput(value)
+  const parsed = parseHexColor(normalized)
+  if (parsed && parsed.a < 1) return toRgbaString(parsed)
+  return normalized
+}
+
+const toFiniteNumber = (value: unknown) => {
+  const n = typeof value === 'number' ? value : Number(value)
+  return Number.isFinite(n) ? n : null
+}
+
+const toLineStyleType = (value: unknown): LineStyleType => {
+  if (value === 'dashed' || value === 'dotted' || value === 'solid') return value
+  return 'solid'
+}
+
+const resolveSchemeColor = (value: string, themeColors: string[]) => {
+  const key = value.trim().toLowerCase()
+  const accentMatch = key.match(/^accent([1-6])$/)
+  if (accentMatch) {
+    const index = Number(accentMatch[1]) - 1
+    const c = themeColors[index]
+    return c ? normalizeColorInput(c) : ''
+  }
+  if (key === 'hlink') return '#0563C1'
+  if (key === 'folhlink') return '#954F72'
+  if (key === 'tx1' || key === 'dk1' || key === 'dk2') return '#000000'
+  if (key === 'bg1' || key === 'lt1' || key === 'lt2') return '#FFFFFF'
+  return ''
+}
+
+const resolveColor = (value: string, themeColors: string[], fallback: string) => {
+  const scheme = resolveSchemeColor(value, themeColors)
+  const normalized = normalizeCssColorInput(scheme || value)
+  const c = tinycolor(normalized)
+  if (c.isValid()) return c.getAlpha() < 1 ? c.toRgbString() : c.toHexString()
+
+  const fallbackNormalized = normalizeCssColorInput(fallback)
+  const fc = tinycolor(fallbackNormalized)
+  if (!fc.isValid()) return ''
+  return fc.getAlpha() < 1 ? fc.toRgbString() : fc.toHexString()
+}
+
+const buildOutline = (value: { borderWidth?: unknown; borderColor?: unknown; borderType?: unknown }, ratio: number, themeColors: string[]): PPTElementOutline | undefined => {
+  const widthRaw = toFiniteNumber(value.borderWidth)
+  if (!widthRaw || widthRaw <= 0) return undefined
+
+  const colorInput = typeof value.borderColor === 'string' ? value.borderColor : ''
+  const color = resolveColor(colorInput, themeColors, '')
+  if (!color) return undefined
+
+  const c = tinycolor(color)
+  if (!c.isValid() || c.getAlpha() === 0) return undefined
+
+  const style = toLineStyleType(value.borderType)
+  return {
+    color,
+    width: +((widthRaw * ratio).toFixed(2)),
+    style,
+  }
+}
+
+const sanitizeFontFamily = (value: string, fallback: string) => {
+  const raw = value.trim()
+  if (!raw) return fallback
+  const first = raw.split(',')[0]?.trim() || ''
+  const cleaned = first
+    .replace(/^['"]+|['"]+$/g, '')
+    .replace(/['"]/g, '')
+    .trim()
+
+  const lower = cleaned.toLowerCase()
+  if (!cleaned) return fallback
+  if (lower.startsWith('+')) return fallback
+  if (['inherit', 'initial', 'unset', 'sans-serif', 'serif', 'monospace', 'system-ui'].includes(lower)) return fallback
+  return cleaned
+}
+
+const extractTextDefaults = (html: string) => {
+  if (!html) return { fontFamily: '', color: '', fontSize: '' }
+  const doc = new DOMParser().parseFromString(html, 'text/html')
+  const nodes = Array.from(doc.body.querySelectorAll<HTMLElement>('*'))
+  let fontFamily = ''
+  let color = ''
+  let fontSize = ''
+
+  for (const node of nodes) {
+    if (!fontFamily && node.style.fontFamily) fontFamily = node.style.fontFamily
+    if (!color && node.style.color) color = node.style.color
+    if (!fontSize && node.style.fontSize) fontSize = node.style.fontSize
+    if (fontFamily && color && fontSize) break
+  }
+
+  if (!fontSize) {
+    const match = html.match(/font-size:\s*([\d.]+px)/i)
+    if (match) fontSize = match[1]
+  }
+
+  return { fontFamily, color, fontSize }
 }
 
 export default () => {
@@ -142,7 +314,7 @@ export default () => {
     }
   }
 
-  const parseLineElement = (el: Shape, ratio: number) => {
+  const parseLineElement = (el: Shape, ratio: number, themeColors: string[]) => {
     let start: [number, number] = [0, 0]
     let end: [number, number] = [0, 0]
 
@@ -171,8 +343,8 @@ export default () => {
       top: el.top,
       start,
       end,
-      style: el.borderType,
-      color: el.borderColor,
+      style: toLineStyleType(el.borderType),
+      color: resolveColor(el.borderColor, themeColors, el.borderColor),
       points: ['', /straightConnector/.test(el.shapType) ? 'arrow' : '']
     }
     if (el.rotate) {
@@ -275,13 +447,25 @@ export default () => {
         return
       }
 
-      let ratio = 96 / 72
       const width = json.size.width
+      const height = json.size.height
+      if (!Number.isFinite(width) || width <= 0 || !Number.isFinite(height) || height <= 0) {
+        exporting.value = false
+        message.error('无法正确读取 / 解析该文件')
+        return
+      }
+      slidesStore.setViewportRatio(height / width)
+
+      let ratio = PPTX_PT_TO_PX_RATIO
       
-      if (fixedViewport) ratio = 1000 / width
+      if (fixedViewport) {
+        slidesStore.setViewportSize(DEFAULT_VIEWPORT_SIZE)
+        ratio = DEFAULT_VIEWPORT_SIZE / width
+      }
       else slidesStore.setViewportSize(width * ratio)
 
-      slidesStore.setTheme({ themeColors: json.themeColors })
+      const pptxThemeColors = (json.themeColors || []).map(c => normalizeColorInput(c) || c)
+      slidesStore.setTheme({ themeColors: pptxThemeColors })
 
       const slides: Slide[] = []
       for (const item of json.slides) {
@@ -304,6 +488,7 @@ export default () => {
               colors: value.colors.map(item => ({
                 ...item,
                 pos: parseInt(item.pos),
+                color: resolveColor(item.color, pptxThemeColors, '#000000'),
               })),
               rotate: value.rot + 90,
             },
@@ -312,7 +497,7 @@ export default () => {
         else {
           background = {
             type: 'solid',
-            color: value || '#fff',
+            color: resolveColor(value || '#fff', pptxThemeColors, '#fff'),
           }
         }
 
@@ -338,32 +523,45 @@ export default () => {
             el.top = el.top * ratio
   
             if (el.type === 'text') {
-              const textEl: PPTTextElement = {
-                type: 'text',
-                id: nanoid(10),
-                width: el.width,
-                height: el.height,
+              const vAlignMap: Record<string, 'top' | 'middle' | 'bottom'> = {
+                mid: 'middle',
+                down: 'bottom',
+                up: 'top',
+              }
+
+              const content = normalizeFontSizeToPx(el.content, ratio)
+              const defaults = extractTextDefaults(content)
+              const fallbackFontName = theme.value.fontName || 'Arial'
+              const fallbackColor = theme.value.fontColor || '#333'
+
+               const textEl: PPTTextElement = {
+                 type: 'text',
+                 id: nanoid(10),
+                 width: el.width,
+                 height: el.height,
                 left: el.left,
                 top: el.top,
                 rotate: el.rotate,
-                defaultFontName: theme.value.fontName,
-                defaultColor: theme.value.fontColor,
-                content: convertFontSizePtToPx(el.content, ratio),
-                lineHeight: 1,
-                outline: {
-                  color: el.borderColor,
-                  width: +(el.borderWidth * ratio).toFixed(2),
-                  style: el.borderType,
-                },
-                fill: el.fill.type === 'color' ? el.fill.value : '',
-                vertical: el.isVertical,
-              }
-              if (el.shadow) {
-                textEl.shadow = {
-                  h: el.shadow.h * ratio,
-                  v: el.shadow.v * ratio,
+                defaultFontName: sanitizeFontFamily(defaults.fontFamily || fallbackFontName, fallbackFontName),
+                defaultColor: resolveColor(defaults.color || fallbackColor, pptxThemeColors, fallbackColor),
+                defaultFontSize: defaults.fontSize || undefined,
+                content,
+                padding: 0,
+                 lineHeight: 1,
+                 paragraphSpace: 0,
+                 valign: vAlignMap[el.vAlign] || 'top',
+                 autoResize: false,
+                 fill: el.fill.type === 'color' ? resolveColor(el.fill.value, pptxThemeColors, '') : '',
+                 vertical: el.isVertical,
+               }
+               const outline = buildOutline({ borderWidth: el.borderWidth, borderColor: el.borderColor, borderType: el.borderType }, ratio, pptxThemeColors)
+               if (outline) textEl.outline = outline
+               if (el.shadow) {
+                 textEl.shadow = {
+                   h: el.shadow.h * ratio,
+                   v: el.shadow.v * ratio,
                   blur: el.shadow.blur * ratio,
-                  color: el.shadow.color,
+                  color: resolveColor(el.shadow.color, pptxThemeColors, el.shadow.color),
                 }
               }
               slide.elements.push(textEl)
@@ -378,21 +576,16 @@ export default () => {
                 left: el.left,
                 top: el.top,
                 fixedRatio: true,
-                rotate: el.rotate,
-                flipH: el.isFlipH,
-                flipV: el.isFlipV,
-              }
-              if (el.borderWidth) {
-                element.outline = {
-                  color: el.borderColor,
-                  width: +(el.borderWidth * ratio).toFixed(2),
-                  style: el.borderType,
-                }
-              }
-              const clipShapeTypes = ['roundRect', 'ellipse', 'triangle', 'rhombus', 'pentagon', 'hexagon', 'heptagon', 'octagon', 'parallelogram', 'trapezoid']
-              if (el.rect) {
-                element.clip = {
-                  shape: (el.geom && clipShapeTypes.includes(el.geom)) ? el.geom : 'rect',
+                 rotate: el.rotate,
+                 flipH: el.isFlipH,
+                 flipV: el.isFlipV,
+               }
+               const outline = buildOutline({ borderWidth: el.borderWidth, borderColor: el.borderColor, borderType: el.borderType }, ratio, pptxThemeColors)
+               if (outline) element.outline = outline
+               const clipShapeTypes = ['roundRect', 'ellipse', 'triangle', 'rhombus', 'pentagon', 'hexagon', 'heptagon', 'octagon', 'parallelogram', 'trapezoid']
+               if (el.rect) {
+                 element.clip = {
+                   shape: (el.geom && clipShapeTypes.includes(el.geom)) ? el.geom : 'rect',
                   range: [
                     [
                       el.rect.l || 0,
@@ -457,7 +650,7 @@ export default () => {
             }
             else if (el.type === 'shape') {
               if (el.shapType === 'line' || /Connector/.test(el.shapType)) {
-                const lineElement = parseLineElement(el, ratio)
+                const lineElement = parseLineElement(el, ratio, pptxThemeColors)
                 slide.elements.push(lineElement)
               }
               else {
@@ -474,48 +667,56 @@ export default () => {
                   colors: el.fill.value.colors.map(item => ({
                     ...item,
                     pos: parseInt(item.pos),
+                    color: resolveColor(item.color, pptxThemeColors, '#000000'),
                   })),
                   rotate: el.fill.value.rot,
                 } : undefined
 
                 const pattern: string | undefined = el.fill?.type === 'image' ? el.fill.value.picBase64 : undefined
 
-                const fill = el.fill?.type === 'color' ? el.fill.value : ''
+                const fill = el.fill?.type === 'color' ? resolveColor(el.fill.value, pptxThemeColors, '') : ''
+
+                const textContent = normalizeFontSizeToPx(el.content, ratio)
+                const textDefaults = extractTextDefaults(textContent)
+                const fallbackFontName = theme.value.fontName || 'Arial'
+                const fallbackColor = theme.value.fontColor || '#333'
                 
-                const element: PPTShapeElement = {
-                  type: 'shape',
-                  id: nanoid(10),
-                  width: el.width,
-                  height: el.height,
+                 const element: PPTShapeElement = {
+                   type: 'shape',
+                   id: nanoid(10),
+                   width: el.width,
+                   height: el.height,
                   left: el.left,
                   top: el.top,
                   viewBox: [200, 200],
                   path: 'M 0 0 L 200 0 L 200 200 L 0 200 Z',
                   fill,
                   gradient,
-                  pattern,
-                  fixedRatio: false,
-                  rotate: el.rotate,
-                  outline: {
-                    color: el.borderColor,
-                    width: +(el.borderWidth * ratio).toFixed(2),
-                    style: el.borderType,
-                  },
-                  text: {
-                    content: convertFontSizePtToPx(el.content, ratio),
-                    defaultFontName: theme.value.fontName,
-                    defaultColor: theme.value.fontColor,
-                    align: vAlignMap[el.vAlign] || 'middle',
-                  },
-                  flipH: el.isFlipH,
-                  flipV: el.isFlipV,
-                }
-                if (el.shadow) {
-                  element.shadow = {
-                    h: el.shadow.h * ratio,
-                    v: el.shadow.v * ratio,
+                   pattern,
+                   fixedRatio: false,
+                   rotate: el.rotate,
+                   text: {
+                     content: textContent,
+                     defaultFontName: sanitizeFontFamily(textDefaults.fontFamily || fallbackFontName, fallbackFontName),
+                     defaultColor: resolveColor(textDefaults.color || fallbackColor, pptxThemeColors, fallbackColor),
+                     defaultFontSize: textDefaults.fontSize || undefined,
+                     align: vAlignMap[el.vAlign] || 'middle',
+                     padding: 0,
+                     lineHeight: 1,
+                     paragraphSpace: 0,
+                     clip: true,
+                   },
+                   flipH: el.isFlipH,
+                   flipV: el.isFlipV,
+                 }
+                 const outline = buildOutline({ borderWidth: el.borderWidth, borderColor: el.borderColor, borderType: el.borderType }, ratio, pptxThemeColors)
+                 if (outline) element.outline = outline
+                 if (el.shadow) {
+                   element.shadow = {
+                     h: el.shadow.h * ratio,
+                     v: el.shadow.v * ratio,
                     blur: el.shadow.blur * ratio,
-                    color: el.shadow.color,
+                    color: resolveColor(el.shadow.color, pptxThemeColors, el.shadow.color),
                   }
                 }
     
@@ -571,9 +772,21 @@ export default () => {
               const row = el.data.length
               const col = el.data[0].length
   
+              const fallbackFontName = theme.value.fontName || 'Arial'
+              const fallbackColor = theme.value.fontColor || '#333'
+              const scaledRowHeights = Array.isArray(el.rowHeights)
+                ? el.rowHeights.map(item => {
+                    const n = toFiniteNumber(item)
+                    return n && n > 0 ? +((n * ratio).toFixed(2)) : 0
+                  })
+                : []
+              const rowHeights = scaledRowHeights.length === row && scaledRowHeights.every(item => item > 0)
+                ? scaledRowHeights
+                : undefined
+
               const style: TableCellStyle = {
-                fontname: theme.value.fontName,
-                color: theme.value.fontColor,
+                fontname: fallbackFontName,
+                color: fallbackColor,
               }
               const data: TableCell[][] = []
               for (let i = 0; i < row; i++) {
@@ -582,13 +795,13 @@ export default () => {
                   const cellData = el.data[i][j]
 
                   let textDiv: HTMLDivElement | null = document.createElement('div')
-                  textDiv.innerHTML = cellData.text
+                  textDiv.innerHTML = normalizeFontSizeToPx(cellData.text, PPTX_PT_TO_PX_RATIO)
                   const p = textDiv.querySelector('p')
                   const align = p?.style.textAlign || 'left'
-
+ 
                   const span = textDiv.querySelector('span')
-                  const fontsize = span?.style.fontSize ? (parseInt(span?.style.fontSize) * ratio).toFixed(1) + 'px' : ''
-                  const fontname = span?.style.fontFamily || ''
+                  const fontsize = span?.style.fontSize ? parseFontSizeToPx(span.style.fontSize, ratio) : ''
+                  const fontname = sanitizeFontFamily(span?.style.fontFamily || '', fallbackFontName)
                   const color = span?.style.color || cellData.fontColor
 
                   rowCells.push({
@@ -601,9 +814,9 @@ export default () => {
                       align: ['left', 'right', 'center'].includes(align) ? (align as 'left' | 'right' | 'center') : 'left',
                       fontsize,
                       fontname,
-                      color,
+                      color: resolveColor(color || fallbackColor, pptxThemeColors, fallbackColor),
                       bold: cellData.fontBold,
-                      backcolor: cellData.fillColor,
+                      backcolor: resolveColor(cellData.fillColor || '', pptxThemeColors, ''),
                     },
                   })
                   textDiv = null
@@ -611,8 +824,16 @@ export default () => {
                 data.push(rowCells)
               }
   
-              const allWidth = el.colWidths.reduce((a, b) => a + b, 0)
-              const colWidths: number[] = el.colWidths.map(item => item / allWidth)
+              const widthValues = Array.isArray(el.colWidths) && el.colWidths.length === col
+                ? el.colWidths.map(item => {
+                    const n = toFiniteNumber(item)
+                    return n && n > 0 ? n : 0
+                  })
+                : []
+              const allWidth = widthValues.reduce((a, b) => a + b, 0)
+              const colWidths: number[] = allWidth > 0
+                ? widthValues.map(item => item / allWidth)
+                : new Array(col).fill(1 / col)
 
               const firstCell = el.data[0][0]
               const border = firstCell.borders.top ||
@@ -626,23 +847,27 @@ export default () => {
               const borderWidth = border?.borderWidth || 0
               const borderStyle = border?.borderType || 'solid'
               const borderColor = border?.borderColor || '#eeece1'
+              const outline = buildOutline({ borderWidth, borderColor, borderType: borderStyle }, ratio, pptxThemeColors) || {
+                width: 0,
+                style: 'solid',
+                color: 'transparent',
+              }
+              const cellMinHeight = rowHeights?.length ? Math.min(...rowHeights) : (scaledRowHeights[0] || 36)
+              const height = rowHeights?.length ? rowHeights.reduce((sum, item) => sum + item, 0) : el.height
   
               slide.elements.push({
                 type: 'table',
                 id: nanoid(10),
                 width: el.width,
-                height: el.height,
+                height,
                 left: el.left,
                 top: el.top,
                 colWidths,
+                rowHeights,
                 rotate: 0,
                 data,
-                outline: {
-                  width: +(borderWidth * ratio || 2).toFixed(2),
-                  style: borderStyle,
-                  color: borderColor,
-                },
-                cellMinHeight: el.rowHeights[0] ? el.rowHeights[0] * ratio : 36,
+                outline,
+                cellMinHeight,
               })
             }
             else if (el.type === 'chart') {
@@ -709,7 +934,7 @@ export default () => {
                 left: el.left,
                 top: el.top,
                 rotate: 0,
-                themeColors: el.colors.length ? el.colors : theme.value.themeColors,
+                themeColors: (el.colors.length ? el.colors : theme.value.themeColors).map(c => resolveColor(c, pptxThemeColors, c)),
                 textColor: theme.value.fontColor,
                 data: {
                   labels,

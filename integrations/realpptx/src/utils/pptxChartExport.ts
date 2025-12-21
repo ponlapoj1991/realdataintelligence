@@ -5,6 +5,14 @@ import type { PPTChartElement } from '@/types/slides'
 export type FormatColorResult = { alpha: number; color: string }
 export type FormatColorFn = (color: string) => FormatColorResult
 
+export type ChartExportPatchInfo = {
+  labels: string[]
+  legends: string[]
+  alignedSeries: number[][]
+  seriesPalette: string[]
+  dataColors: string[]
+}
+
 export function addChartElementToSlide(params: {
   pptx: pptxgen
   pptxSlide: any
@@ -12,7 +20,7 @@ export function addChartElementToSlide(params: {
   ratioPx2Inch: number
   ratioPx2Pt: number
   formatColor: FormatColorFn
-}) {
+}): ChartExportPatchInfo | null {
   const { pptx, pptxSlide, el, ratioPx2Inch, ratioPx2Pt, formatColor } = params
 
   const stripUndefinedDeep = (value: any): any => {
@@ -88,6 +96,14 @@ export function addChartElementToSlide(params: {
     })
   }
 
+  const alignSeriesToLabels = (input: number[][], targetLen: number) => {
+    return input.map(row => {
+      const values = (Array.isArray(row) ? row : []).slice(0, targetLen).map(v => roundFixed(asFiniteNumber(v, 0), 2))
+      while (values.length < targetLen) values.push(0)
+      return values
+    })
+  }
+
   // Normalize & validate chart payload first to avoid invalid OOXML (NaN/undefined/null)
   const labels = normalizeLabels(el.data?.labels || [])
   const series = normalizeSeries(el.data?.series || [])
@@ -96,7 +112,9 @@ export function addChartElementToSlide(params: {
     : []
   const legends = makeUniqueNames(legendsRaw.length ? legendsRaw : series.map((_, idx) => `Series ${idx + 1}`), 'Series')
 
-  if (!series.length) return
+  if (!series.length) return null
+
+  const alignedSeries = alignSeriesToLabels(series, labels.length)
 
   const normalizeHexInput = (input: string) => {
     if (!input) return '#000000'
@@ -143,7 +161,7 @@ export function addChartElementToSlide(params: {
     return dataColors[dataColors.length - 1] || '000000'
   }
 
-  const pointCount = Math.max(labels.length, series[0]?.length || 0)
+  const pointCount = labels.length
 
   const isPieLike = el.chartType === 'pie' || el.chartType === 'ring'
   const isBarLike = el.chartType === 'bar' || el.chartType === 'column'
@@ -158,8 +176,19 @@ export function addChartElementToSlide(params: {
   const scaleFontPx = (px: number) => Math.max(6, Math.round(px * fontScale))
   const pxToPt = (px: number) => px / ratioPx2Pt
 
-  const axisTextColor = toPptxHex(el.options?.axisLabelColor || el.textColor || '#000000')
-  const gridColor = toPptxHex(el.options?.axisGridColor || el.lineColor || '#D9D9D9')
+  const opt = (el.options || {}) as any
+  const fontFace =
+    opt.legendFontFamily ||
+    opt.dataLabelFontFamily ||
+    opt.axisLabelFontFamilyX ||
+    opt.axisLabelFontFamilyYLeft ||
+    opt.axisLabelFontFamilyYRight ||
+    'Arial'
+
+  const catAxisTextColor = toPptxHex(opt.axisLabelColorX || el.options?.axisLabelColor || el.textColor || '#000000')
+  const valAxisTextColor = toPptxHex(opt.axisLabelColorYLeft || el.options?.axisLabelColor || el.textColor || '#000000')
+  const valAxisTextColorRight = toPptxHex(opt.axisLabelColorYRight || opt.axisLabelColorYLeft || el.options?.axisLabelColor || el.textColor || '#000000')
+  const gridColor = toPptxHex(opt.axisGridColorYLeft || el.options?.axisGridColor || el.lineColor || '#D9D9D9')
 
   const defaultOrientation = el.chartType === 'column' ? 'vertical' : el.chartType === 'bar' ? 'horizontal' : undefined
   const resolvedOrientation = el.options?.orientation || defaultOrientation
@@ -200,18 +229,20 @@ export function addChartElementToSlide(params: {
   }
 
   const showDataLabels = el.options?.showDataLabels !== false
-  const dataLabelFontSizePx = scaleFontPx(el.options?.dataLabelFontSize ?? 12)
-  const dataLabelColor = toPptxHex(el.options?.dataLabelColor || axisTextColor)
+  const dataLabelFontSizePx = scaleFontPx(el.options?.dataLabelFontSize ?? 11)
+  const dataLabelColor = toPptxHex(el.options?.dataLabelColor || valAxisTextColor)
   const dataLabelBold = el.options?.dataLabelFontWeight === 'bold'
 
-  const axisFontSizePx = scaleFontPx(el.options?.axisLabelFontSize ?? 12)
+  const catAxisFontSizePx = scaleFontPx(opt.axisLabelFontSizeX ?? el.options?.axisLabelFontSize ?? 10)
+  const valAxisFontSizePx = scaleFontPx(opt.axisLabelFontSizeYLeft ?? el.options?.axisLabelFontSize ?? 10)
+  const axisBold = dataLabelBold
 
   const x = roundFixed(clampNonNegative(el.left) / ratioPx2Inch, 4)
   const y = roundFixed(clampNonNegative(el.top) / ratioPx2Inch, 4)
   const w = roundFixed(clampNonNegative(el.width) / ratioPx2Inch, 4)
   const h = roundFixed(clampNonNegative(el.height) / ratioPx2Inch, 4)
-  if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(w) || !Number.isFinite(h)) return
-  if (w <= 0 || h <= 0) return
+  if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(w) || !Number.isFinite(h)) return null
+  if (w <= 0 || h <= 0) return null
 
   const options: pptxgen.IChartOpts = {
     x,
@@ -241,10 +272,28 @@ export function addChartElementToSlide(params: {
   }
 
   // Axis text
-  options.catAxisLabelColor = axisTextColor
-  options.valAxisLabelColor = axisTextColor
-  options.catAxisLabelFontSize = pxToPt(axisFontSizePx)
-  options.valAxisLabelFontSize = pxToPt(axisFontSizePx)
+  options.fontFace = fontFace
+  options.catAxisLabelColor = catAxisTextColor
+  options.valAxisLabelColor = valAxisTextColor
+  options.catAxisLabelFontSize = pxToPt(catAxisFontSizePx)
+  options.valAxisLabelFontSize = pxToPt(valAxisFontSizePx)
+  options.catAxisLabelFontBold = axisBold
+  options.valAxisLabelFontBold = axisBold
+  options.catAxisLabelFontFace = fontFace
+  options.valAxisLabelFontFace = fontFace
+  options.catAxisMinorTickMark = 'none'
+  options.valAxisMinorTickMark = 'none'
+
+  const rotate = (typeof opt.axisLabelSlantX === 'number' && Number.isFinite(opt.axisLabelSlantX))
+    ? opt.axisLabelSlantX
+    : (typeof el.options?.axisLabelSlant === 'number' && Number.isFinite(el.options.axisLabelSlant))
+      ? el.options.axisLabelSlant
+      : undefined
+  if (typeof rotate === 'number') options.catAxisLabelRotate = rotate
+
+  const axisRange = el.options?.axisRange
+  if (typeof axisRange?.yLeftMin === 'number' && Number.isFinite(axisRange.yLeftMin)) options.valAxisMinVal = axisRange.yLeftMin
+  if (typeof axisRange?.yLeftMax === 'number' && Number.isFinite(axisRange.yLeftMax)) options.valAxisMaxVal = axisRange.yLeftMax
 
   // Gridlines (match on-screen defaults)
   if (el.options?.axisGridShow === false) {
@@ -278,23 +327,34 @@ export function addChartElementToSlide(params: {
   if (shouldShowLegend) {
     options.showLegend = true
     options.legendPos = mapLegendPos(el.options?.legendPosition)
-    options.legendColor = toPptxHex(el.options?.legendFontColor || axisTextColor)
+    options.legendColor = toPptxHex(el.options?.legendFontColor || valAxisTextColor)
     options.legendFontSize = pxToPt(scaleFontPx(el.options?.legendFontSize ?? 12))
+    options.legendFontFace = fontFace
   }
 
   // Data labels
-  if (['bar', 'column', 'line', 'area', 'pie', 'ring'].includes(el.chartType)) {
+  if (['bar', 'column', 'line', 'area', 'pie', 'ring', 'combo'].includes(el.chartType)) {
+    const resolveDataLabelFormatCode = (mode?: string) => {
+      if (mode === 'number') return '#,##0'
+      if (mode === 'accounting') return '#,##0.00'
+      if (mode === 'compact') return '[>=1000000000]0.0,,,"B";[>=1000000]0.0,,"M";[>=1000]0.0,"K";0'
+      return undefined
+    }
+
     options.dataLabelColor = dataLabelColor
     options.dataLabelFontSize = pxToPt(dataLabelFontSizePx)
     options.dataLabelFontBold = dataLabelBold
+    options.dataLabelFontFace = fontFace
 
     if (el.chartType === 'bar' || el.chartType === 'column') {
       options.showValue = showDataLabels
+      if (showDataLabels) options.dataLabelFormatCode = resolveDataLabelFormatCode(el.options?.dataLabelValueFormat)
       const mapped = mapDataLabelPosForBar(el.options?.dataLabelPosition)
       if (mapped) options.dataLabelPosition = mapped
     }
     else if (el.chartType === 'line' || el.chartType === 'area') {
       options.showValue = showDataLabels
+      if (showDataLabels) options.dataLabelFormatCode = resolveDataLabelFormatCode(el.options?.dataLabelValueFormat)
       const mapped = mapDataLabelPosForLine(el.options?.dataLabelPosition)
       if (mapped) options.dataLabelPosition = mapped
       if (el.options?.lineSmooth) options.lineSmooth = true
@@ -302,15 +362,23 @@ export function addChartElementToSlide(params: {
     else if (isPieLike) {
       const showPercent = showDataLabels && !!el.options?.dataLabelShowPercent
       options.showPercent = showPercent
-      options.showValue = showDataLabels && !showPercent
+      options.showValue = showDataLabels
+      ;(options as any).showLeaderLines = showDataLabels
 
       const decimals = el.options?.dataLabelPercentDecimals
       if (showPercent && typeof decimals === 'number') {
         options.dataLabelFormatCode = `0.${'0'.repeat(Math.max(0, decimals))}%`
       }
+      else if (showDataLabels) {
+        options.dataLabelFormatCode = resolveDataLabelFormatCode(el.options?.dataLabelValueFormat)
+      }
 
       const mapped = mapDataLabelPosForPie(el.options?.dataLabelPosition)
       if (mapped) options.dataLabelPosition = mapped
+    }
+    else if (el.chartType === 'combo') {
+      options.showValue = showDataLabels
+      if (showDataLabels) options.dataLabelFormatCode = resolveDataLabelFormatCode(el.options?.dataLabelValueFormat)
     }
   }
 
@@ -319,12 +387,12 @@ export function addChartElementToSlide(params: {
   if (isScatter) {
     const xValues = (series[0] || []).map(v => roundFixed(asFiniteNumber(v, 0), 2))
     const ySeries = series.slice(1)
-    if (!xValues.length || !ySeries.length) return
+    if (!xValues.length || !ySeries.length) return null
 
     let minLen = xValues.length
     const yValuesList = ySeries.map((row) => (row || []).map(v => roundFixed(asFiniteNumber(v, 0), 2)))
     for (const row of yValuesList) minLen = Math.min(minLen, row.length)
-    if (minLen <= 0) return
+    if (minLen <= 0) return null
 
     chartData.push({ name: 'X', values: xValues.slice(0, minLen) })
     for (let i = 0; i < ySeries.length; i++) {
@@ -346,7 +414,7 @@ export function addChartElementToSlide(params: {
     const targetLen = normalizedLabels.length
 
     for (let i = 0; i < series.length; i++) {
-      const values = (series[i] || []).slice(0, targetLen).map(v => roundFixed(asFiniteNumber(v, 0), 2))
+      const values = (alignedSeries[i] || []).slice(0, targetLen).map(v => roundFixed(asFiniteNumber(v, 0), 2))
       while (values.length < targetLen) values.push(0)
       chartData.push({
         name: legends?.[i] || `Series ${i + 1}`,
@@ -357,49 +425,57 @@ export function addChartElementToSlide(params: {
   }
 
   // Type / special options
+  const buildPatchInfo = (): ChartExportPatchInfo => ({
+    labels,
+    legends,
+    alignedSeries,
+    seriesPalette: fallbackPalette.slice(0, Math.max(1, alignedSeries.length)),
+    dataColors: dataColors.slice(),
+  })
+
   if (el.chartType === 'bar' || el.chartType === 'column') {
     options.barDir = resolvedBarDir
     if (el.options?.percentStack) options.barGrouping = 'percentStacked'
     else if (el.options?.stack) options.barGrouping = 'stacked'
     pptxSlide.addChart(pptx.ChartType.bar, stripUndefinedDeep(chartData), stripUndefinedDeep(options))
-    return
+    return buildPatchInfo()
   }
 
   if (el.chartType === 'line') {
     pptxSlide.addChart(pptx.ChartType.line, stripUndefinedDeep(chartData), stripUndefinedDeep(options))
-    return
+    return buildPatchInfo()
   }
 
   if (el.chartType === 'area') {
     if (el.options?.percentStack) options.barGrouping = 'percentStacked'
     else if (el.options?.stack) options.barGrouping = 'stacked'
     pptxSlide.addChart(pptx.ChartType.area, stripUndefinedDeep(chartData), stripUndefinedDeep(options))
-    return
+    return buildPatchInfo()
   }
 
   if (el.chartType === 'radar') {
     pptxSlide.addChart(pptx.ChartType.radar, stripUndefinedDeep(chartData), stripUndefinedDeep(options))
-    return
+    return buildPatchInfo()
   }
 
   if (el.chartType === 'scatter') {
     options.lineSize = 0
     pptxSlide.addChart(pptx.ChartType.scatter, stripUndefinedDeep(chartData), stripUndefinedDeep(options))
-    return
+    return buildPatchInfo()
   }
 
   if (el.chartType === 'pie') {
     if (typeof el.options?.pieStartAngle === 'number') options.firstSliceAng = el.options.pieStartAngle
     pptxSlide.addChart(pptx.ChartType.pie, stripUndefinedDeep(chartData), stripUndefinedDeep(options))
-    return
+    return buildPatchInfo()
   }
 
   if (el.chartType === 'ring') {
-    const holeSize = Math.max(0, Math.min(90, Math.round(el.options?.pieInnerRadius ?? 40)))
+    const holeSize = Math.max(0, Math.min(90, Math.round(el.options?.pieInnerRadius ?? 75)))
     options.holeSize = holeSize
     if (typeof el.options?.pieStartAngle === 'number') options.firstSliceAng = el.options.pieStartAngle
     pptxSlide.addChart(pptx.ChartType.doughnut, stripUndefinedDeep(chartData), stripUndefinedDeep(options))
-    return
+    return buildPatchInfo()
   }
 
   if (el.chartType === 'combo') {
@@ -409,54 +485,193 @@ export function addChartElementToSlide(params: {
         ? el.options.seriesTypes
         : series.map(() => 'bar')
 
-    const barData: any[] = []
-    const lineData: any[] = []
-    const areaData: any[] = []
-    const barColorIndex: number[] = []
-    const lineColorIndex: number[] = []
-    const areaColorIndex: number[] = []
+    const yAxisIndexes = (() => {
+      const fromOptions = Array.isArray(el.options?.yAxisIndexes) ? el.options.yAxisIndexes : undefined
+      if (fromOptions && fromOptions.length === alignedSeries.length) return fromOptions.map(v => (v === 1 ? 1 : 0))
+      return alignedSeries.map(() => 0)
+    })()
 
-    for (let i = 0; i < series.length; i++) {
+    const useSecondary = yAxisIndexes.some(v => v === 1) && opt.axisShowYRight !== false
+
+    const barData: any[] = []
+    const barSecondaryData: any[] = []
+    const lineData: any[] = []
+    const lineSecondaryData: any[] = []
+    const areaData: any[] = []
+    const areaSecondaryData: any[] = []
+    const barColorIndex: number[] = []
+    const barSecondaryColorIndex: number[] = []
+    const lineColorIndex: number[] = []
+    const lineSecondaryColorIndex: number[] = []
+    const areaColorIndex: number[] = []
+    const areaSecondaryColorIndex: number[] = []
+
+    const resolveSeriesColor = (seriesIndex: number) => {
+      if (!fallbackPalette.length) return '000000'
+      return fallbackPalette[seriesIndex % fallbackPalette.length] || fallbackPalette[0] || '000000'
+    }
+
+    const buildSeriesColors = (seriesIndexes: number[]) => {
+      return seriesIndexes.map(resolveSeriesColor)
+    }
+
+    for (let i = 0; i < alignedSeries.length; i++) {
       const seriesType = seriesTypes[i] || 'bar'
       const obj = {
         name: legends[i] || `Series ${i + 1}`,
         labels,
-        values: series[i],
+        values: alignedSeries[i],
       }
+
+      const onSecondary = useSecondary && yAxisIndexes[i] === 1
       if (seriesType === 'line') {
-        lineData.push(obj)
-        lineColorIndex.push(i)
+        ;(onSecondary ? lineSecondaryData : lineData).push(obj)
+        ;(onSecondary ? lineSecondaryColorIndex : lineColorIndex).push(i)
       }
       else if (seriesType === 'area') {
-        areaData.push(obj)
-        areaColorIndex.push(i)
+        ;(onSecondary ? areaSecondaryData : areaData).push(obj)
+        ;(onSecondary ? areaSecondaryColorIndex : areaColorIndex).push(i)
       }
       else {
-        barData.push(obj)
-        barColorIndex.push(i)
+        ;(onSecondary ? barSecondaryData : barData).push(obj)
+        ;(onSecondary ? barSecondaryColorIndex : barColorIndex).push(i)
       }
     }
 
-    // Preserve colors in the same order as the library concatenates data: bar, then line, then area
-    const concatOrderColors: string[] = []
-    for (const idx of barColorIndex) concatOrderColors.push(fallbackPalette[idx % fallbackPalette.length] || fallbackPalette[0] || '000000')
-    for (const idx of lineColorIndex) concatOrderColors.push(fallbackPalette[idx % fallbackPalette.length] || fallbackPalette[0] || '000000')
-    for (const idx of areaColorIndex) concatOrderColors.push(fallbackPalette[idx % fallbackPalette.length] || fallbackPalette[0] || '000000')
-    options.chartColors = concatOrderColors.length ? concatOrderColors : fallbackPalette.slice(0, Math.max(1, series.length))
+    const shouldUseBarPerPointColors = dataColors.length > 1 && (barData.length + barSecondaryData.length) === 1
+    const barPerPointColors = shouldUseBarPerPointColors
+      ? Array.from({ length: labels.length }, (_, idx) => resolveDataPointColor(idx))
+      : []
 
     const multi: any[] = []
-    if (barData.length) multi.push({ type: pptx.ChartType.bar, data: barData })
-    if (lineData.length) multi.push({ type: pptx.ChartType.line, data: lineData })
-    if (areaData.length) multi.push({ type: pptx.ChartType.area, data: areaData })
+
+    const mappedBarLabelPos = mapDataLabelPosForBar(el.options?.dataLabelPosition)
+    const mappedLineLabelPos = mapDataLabelPosForLine(el.options?.dataLabelPosition)
+    const comboLabelFormatCode = (() => {
+      if (el.options?.dataLabelValueFormat === 'number') return '#,##0'
+      if (el.options?.dataLabelValueFormat === 'accounting') return '#,##0.00'
+      if (el.options?.dataLabelValueFormat === 'compact') return '[>=1000000000]0.0,,,"B";[>=1000000]0.0,,"M";[>=1000]0.0,"K";0'
+      return undefined
+    })()
+
+    if (barData.length) {
+      multi.push({
+        type: pptx.ChartType.bar,
+        data: barData,
+        options: {
+          ...(mappedBarLabelPos ? { dataLabelPosition: mappedBarLabelPos } : {}),
+          ...(comboLabelFormatCode ? { dataLabelFormatCode: comboLabelFormatCode } : {}),
+          showValue: showDataLabels,
+          chartColors: (shouldUseBarPerPointColors && barData.length === 1) ? barPerPointColors : buildSeriesColors(barColorIndex),
+        },
+      })
+    }
+    if (barSecondaryData.length) {
+      multi.push({
+        type: pptx.ChartType.bar,
+        data: barSecondaryData,
+        options: {
+          secondaryValAxis: true,
+          secondaryCatAxis: true,
+          ...(mappedBarLabelPos ? { dataLabelPosition: mappedBarLabelPos } : {}),
+          ...(comboLabelFormatCode ? { dataLabelFormatCode: comboLabelFormatCode } : {}),
+          showValue: showDataLabels,
+          chartColors: (shouldUseBarPerPointColors && barSecondaryData.length === 1) ? barPerPointColors : buildSeriesColors(barSecondaryColorIndex),
+        },
+      })
+    }
+    if (lineData.length) {
+      multi.push({
+        type: pptx.ChartType.line,
+        data: lineData,
+        options: {
+          chartColors: buildSeriesColors(lineColorIndex),
+          ...(mappedLineLabelPos ? { dataLabelPosition: mappedLineLabelPos } : {}),
+          ...(comboLabelFormatCode ? { dataLabelFormatCode: comboLabelFormatCode } : {}),
+          showValue: showDataLabels,
+          ...(lineData.length > 1 ? { lineDataSymbol: 'none' } : {}),
+        },
+      })
+    }
+    if (lineSecondaryData.length) {
+      multi.push({
+        type: pptx.ChartType.line,
+        data: lineSecondaryData,
+        options: {
+          secondaryValAxis: true,
+          secondaryCatAxis: true,
+          chartColors: buildSeriesColors(lineSecondaryColorIndex),
+          ...(mappedLineLabelPos ? { dataLabelPosition: mappedLineLabelPos } : {}),
+          ...(comboLabelFormatCode ? { dataLabelFormatCode: comboLabelFormatCode } : {}),
+          showValue: showDataLabels,
+          ...(lineSecondaryData.length > 1 ? { lineDataSymbol: 'none' } : {}),
+        },
+      })
+    }
+    if (areaData.length) {
+      multi.push({
+        type: pptx.ChartType.area,
+        data: areaData,
+        options: {
+          chartColors: buildSeriesColors(areaColorIndex),
+          ...(mappedLineLabelPos ? { dataLabelPosition: mappedLineLabelPos } : {}),
+          ...(comboLabelFormatCode ? { dataLabelFormatCode: comboLabelFormatCode } : {}),
+          showValue: showDataLabels,
+        },
+      })
+    }
+    if (areaSecondaryData.length) {
+      multi.push({
+        type: pptx.ChartType.area,
+        data: areaSecondaryData,
+        options: {
+          secondaryValAxis: true,
+          secondaryCatAxis: true,
+          chartColors: buildSeriesColors(areaSecondaryColorIndex),
+          ...(mappedLineLabelPos ? { dataLabelPosition: mappedLineLabelPos } : {}),
+          ...(comboLabelFormatCode ? { dataLabelFormatCode: comboLabelFormatCode } : {}),
+          showValue: showDataLabels,
+        },
+      })
+    }
 
     options.barDir = 'col'
     if (el.options?.percentStack) options.barGrouping = 'percentStacked'
     else if (el.options?.stack) options.barGrouping = 'stacked'
 
-    ;(pptxSlide as any).addChart(stripUndefinedDeep(multi) as any, stripUndefinedDeep(options))
-    return
+    if (useSecondary) {
+      options.valAxes = [
+        {
+          valAxisLabelColor: valAxisTextColor,
+          valAxisLabelFontBold: axisBold,
+          valAxisLabelFontFace: fontFace,
+          valAxisLabelFontSize: pxToPt(valAxisFontSizePx),
+          valAxisMinorTickMark: 'none',
+          valAxisMinVal: (typeof axisRange?.yLeftMin === 'number' && Number.isFinite(axisRange.yLeftMin)) ? axisRange.yLeftMin : undefined,
+          valAxisMaxVal: (typeof axisRange?.yLeftMax === 'number' && Number.isFinite(axisRange.yLeftMax)) ? axisRange.yLeftMax : undefined,
+        },
+        {
+          valAxisLabelColor: valAxisTextColorRight,
+          valAxisLabelFontBold: axisBold,
+          valAxisLabelFontFace: fontFace,
+          valAxisLabelFontSize: pxToPt(valAxisFontSizePx),
+          valAxisMinorTickMark: 'none',
+          valAxisMinVal: (typeof axisRange?.yRightMin === 'number' && Number.isFinite(axisRange.yRightMin)) ? axisRange.yRightMin : undefined,
+          valAxisMaxVal: (typeof axisRange?.yRightMax === 'number' && Number.isFinite(axisRange.yRightMax)) ? axisRange.yRightMax : undefined,
+        },
+      ]
+
+      options.catAxes = [
+        {},
+        { catAxisHidden: true },
+      ]
+    }
+
+    ;(pptxSlide as any).addChart(stripUndefinedDeep(multi) as any, undefined as any, stripUndefinedDeep(options))
+    return buildPatchInfo()
   }
 
   // Fallback
   pptxSlide.addChart(pptx.ChartType.bar, stripUndefinedDeep(chartData), stripUndefinedDeep(options))
+  return buildPatchInfo()
 }

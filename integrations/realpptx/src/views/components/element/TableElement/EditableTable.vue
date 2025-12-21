@@ -23,10 +23,10 @@
       :style="`--themeColor: ${theme?.color}; --subThemeColor1: ${subThemeColor[0]}; --subThemeColor2: ${subThemeColor[1]}`"
     >
       <colgroup>
-        <col span="1" v-for="(width, index) in colSizeList" :key="index" :width="width">
+        <col span="1" v-for="(width, index) in colSizeList" :key="index" :style="{ width: width + 'px' }">
       </colgroup>
       <tbody>
-        <tr v-for="(rowCells, rowIndex) in tableCells" :key="rowIndex" :style="{ height: cellMinHeight + 'px' }">
+        <tr v-for="(rowCells, rowIndex) in tableCells" :key="rowIndex" :style="{ height: getRowHeight(rowIndex) + 'px' }">
           <td 
             class="cell"
             :class="{
@@ -53,12 +53,12 @@
               v-if="activedCell === `${rowIndex}_${colIndex}`"
               class="cell-text" 
               :class="{ 'active': activedCell === `${rowIndex}_${colIndex}` }"
-              :style="{ minHeight: (cellMinHeight - 4) + 'px' }"
+              :style="getCellTextBoxStyle(rowIndex, colIndex)"
               :value="cell.text"
               @updateValue="value => handleInput(value, rowIndex, colIndex)"
               @insertExcelData="value => insertExcelData(value, rowIndex, colIndex)"
             />
-            <div v-else class="cell-text" :style="{ minHeight: (cellMinHeight - 4) + 'px' }" v-html="formatText(cell.text)" />
+            <div v-else class="cell-text" :style="getCellTextBoxStyle(rowIndex, colIndex)" v-html="formatText(cell.text)" />
           </td>
         </tr>
       </tbody>
@@ -67,7 +67,7 @@
 </template>
 
 <script lang="ts" setup>
-import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, onUnmounted, ref, watch, type CSSProperties } from 'vue'
 import { debounce, isEqual } from 'lodash'
 import { storeToRefs } from 'pinia'
 import { nanoid } from 'nanoid'
@@ -86,6 +86,7 @@ const props = withDefaults(defineProps<{
   width: number
   cellMinHeight: number
   colWidths: number[]
+  rowHeights?: number[]
   outline: PPTElementOutline
   theme?: TableTheme
   editable?: boolean
@@ -127,6 +128,34 @@ watch([
 ], () => {
   colSizeList.value = props.colWidths.map(item => item * props.width)
 }, { immediate: true })
+
+const getRowHeight = (rowIndex: number) => {
+  const height = props.rowHeights?.[rowIndex]
+  return typeof height === 'number' && height > 0 ? height : props.cellMinHeight
+}
+
+const getCellHeight = (rowIndex: number, colIndex: number) => {
+  const cell = props.data[rowIndex]?.[colIndex]
+  const span = Math.max(1, cell?.rowspan || 1)
+  let height = 0
+  for (let i = 0; i < span; i++) height += getRowHeight(rowIndex + i)
+  return height || getRowHeight(rowIndex)
+}
+
+const getCellTextBoxStyle = (rowIndex: number, colIndex: number): CSSProperties => {
+  const borderInset = Math.max(0, (props.outline.width || 0) * 2)
+  const height = Math.max(0, getCellHeight(rowIndex, colIndex) - borderInset)
+  if (props.rowHeights?.length) {
+    return {
+      height: height + 'px',
+      overflow: 'hidden',
+      padding: '2px',
+      lineHeight: 1.2,
+      boxSizing: 'border-box',
+    }
+  }
+  return { minHeight: height + 'px' }
+}
 
 // 清除全部单元格的选中状态
 // 表格处于不可编辑状态时也需要清除

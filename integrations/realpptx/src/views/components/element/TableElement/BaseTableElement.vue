@@ -5,6 +5,7 @@
       top: elementInfo.top + 'px',
       left: elementInfo.left + 'px',
       width: elementInfo.width + 'px',
+      height: elementInfo.height + 'px',
     }"
   >
     <div
@@ -17,6 +18,7 @@
           :width="elementInfo.width"
           :cellMinHeight="elementInfo.cellMinHeight"
           :colWidths="elementInfo.colWidths"
+          :rowHeights="elementInfo.rowHeights"
           :outline="elementInfo.outline"
           :theme="elementInfo.theme"
         />

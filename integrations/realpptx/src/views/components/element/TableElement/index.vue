@@ -7,6 +7,7 @@
       top: elementInfo.top + 'px',
       left: elementInfo.left + 'px',
       width: elementInfo.width + 'px',
+      height: elementInfo.rowHeights?.length ? elementInfo.height + 'px' : undefined,
     }"
   >
     <div
@@ -23,6 +24,7 @@
           :width="elementInfo.width"
           :cellMinHeight="elementInfo.cellMinHeight"
           :colWidths="elementInfo.colWidths"
+          :rowHeights="elementInfo.rowHeights"
           :outline="elementInfo.outline"
           :theme="elementInfo.theme"
           :editable="editable"
@@ -110,6 +112,7 @@ watch(isScaling, () => {
 })
 
 const updateTableElementHeight = (entries: ResizeObserverEntry[]) => {
+  if (props.elementInfo.rowHeights?.length) return
   const contentRect = entries[0].contentRect
   if (!elementRef.value) return
 
@@ -129,7 +132,7 @@ const updateTableElementHeight = (entries: ResizeObserverEntry[]) => {
 const resizeObserver = new ResizeObserver(updateTableElementHeight)
 
 onMounted(() => {
-  if (elementRef.value) resizeObserver.observe(elementRef.value)
+  if (!props.elementInfo.rowHeights?.length && elementRef.value) resizeObserver.observe(elementRef.value)
 })
 onUnmounted(() => {
   if (elementRef.value) resizeObserver.unobserve(elementRef.value)

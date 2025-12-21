@@ -147,7 +147,7 @@ const normalizeLineLabelPosition = (pos: ChartOptionPayload['dataLabelPosition']
   return (pos || 'top') as 'top' | 'inside'
 }
 
-export const getChartOption = ({
+const getChartOptionLegacy = ({
   type,
   data,
   themeColors,
@@ -719,4 +719,8 @@ export const getChartOption = ({
   }
 
   return null
+}
+
+export const getChartOption = (payload: ChartOptionPayload): EChartOption | null => {
+  return getChartOptionLegacy(payload)
 }

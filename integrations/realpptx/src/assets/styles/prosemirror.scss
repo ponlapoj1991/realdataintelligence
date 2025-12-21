@@ -1,7 +1,7 @@
 .ProseMirror, .ProseMirror-static {
   outline: 0;
   border: 0;
-  font-size: 16px;
+  font-size: var(--defaultFontSize, 16px);
   word-break: break-word;
   white-space: normal;
 

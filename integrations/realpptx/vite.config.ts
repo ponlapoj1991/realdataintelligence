@@ -3,6 +3,8 @@ import { fileURLToPath, URL } from 'node:url'
 import { defineConfig } from 'vite'
 import vue from '@vitejs/plugin-vue'
 
+const sharedPath = fileURLToPath(new URL('../../shared', import.meta.url))
+
 // https://vitejs.dev/config/
 export default defineConfig({
   base: '',
@@ -12,6 +14,9 @@ export default defineConfig({
   server: {
     host: '127.0.0.1',
     port: 5173,
+    fs: {
+      allow: [sharedPath],
+    },
     proxy: {
       '/api': {
         target: 'https://server.pptist.cn',
@@ -32,7 +37,8 @@ export default defineConfig({
   },
   resolve: {
     alias: {
-      '@': fileURLToPath(new URL('./src', import.meta.url))
+      '@': fileURLToPath(new URL('./src', import.meta.url)),
+      '@shared': sharedPath,
     }
   }
 })

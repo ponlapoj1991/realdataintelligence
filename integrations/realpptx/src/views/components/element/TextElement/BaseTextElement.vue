@@ -16,7 +16,14 @@
         class="element-content"
         :style="{
           width: elementInfo.vertical ? 'auto' : elementInfo.width + 'px',
-          height: elementInfo.vertical ? elementInfo.height + 'px' : 'auto',
+          height: (elementInfo.vertical || elementInfo.autoResize === false) ? elementInfo.height + 'px' : 'auto',
+          padding: (elementInfo.padding ?? 10) + 'px',
+          display: elementInfo.autoResize === false ? 'flex' : undefined,
+          flexDirection: elementInfo.autoResize === false ? 'column' : undefined,
+          justifyContent: elementInfo.autoResize === false
+            ? (elementInfo.valign === 'bottom' ? 'flex-end' : (elementInfo.valign === 'middle' ? 'center' : 'flex-start'))
+            : undefined,
+          overflow: elementInfo.autoResize === false ? 'hidden' : undefined,
           backgroundColor: elementInfo.fill,
           opacity: elementInfo.opacity,
           textShadow: shadowStyle,
@@ -37,6 +44,7 @@
           :class="{ 'thumbnail': target === 'thumbnail' }"
           :style="{
             '--paragraphSpace': `${elementInfo.paragraphSpace === undefined ? 5 : elementInfo.paragraphSpace}px`,
+            '--defaultFontSize': elementInfo.defaultFontSize || undefined,
           }"
           v-html="elementInfo.content"
         ></div>

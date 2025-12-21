@@ -57,7 +57,17 @@
           </g>
         </svg>
 
-        <div class="shape-text" :class="text.align">
+        <div
+          class="shape-text"
+          :class="text.align"
+          :style="{
+            padding: (text.padding ?? 10) + 'px',
+            lineHeight: text.lineHeight ?? 1.2,
+            overflow: text.clip ? 'hidden' : undefined,
+            '--paragraphSpace': text.paragraphSpace === undefined ? undefined : `${text.paragraphSpace}px`,
+            '--defaultFontSize': text.defaultFontSize || undefined,
+          }"
+        >
           <div class="ProseMirror-static" v-html="text.content"></div>
         </div>
       </div>
@@ -133,8 +143,6 @@ const text = computed<ShapeText>(() => {
 .shape-text {
   display: flex;
   flex-direction: column;
-  padding: 10px;
-  line-height: 1.2;
   word-break: break-word;
   @include absolute-0();
 
