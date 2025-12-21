@@ -41,7 +41,7 @@
 </template>
 
 <script lang="ts" setup>
-import { computed, ref, watch } from 'vue'
+import { computed, ref, watch, type CSSProperties } from 'vue'
 import type { PPTElementOutline, TableCell, TableTheme } from '@/types/slides'
 import { getTextStyle, formatText } from './utils'
 import useHideCells from './useHideCells'
@@ -83,7 +83,7 @@ const getCellHeight = (rowIndex: number, colIndex: number) => {
   return height || getRowHeight(rowIndex)
 }
 
-const getCellTextBoxStyle = (rowIndex: number, colIndex: number) => {
+const getCellTextBoxStyle = (rowIndex: number, colIndex: number): CSSProperties => {
   const borderInset = Math.max(0, (props.outline.width || 0) * 2)
   const height = Math.max(0, getCellHeight(rowIndex, colIndex) - borderInset)
   if (props.rowHeights?.length) {

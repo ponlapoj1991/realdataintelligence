@@ -67,7 +67,7 @@
 </template>
 
 <script lang="ts" setup>
-import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, onUnmounted, ref, watch, type CSSProperties } from 'vue'
 import { debounce, isEqual } from 'lodash'
 import { storeToRefs } from 'pinia'
 import { nanoid } from 'nanoid'
@@ -142,7 +142,7 @@ const getCellHeight = (rowIndex: number, colIndex: number) => {
   return height || getRowHeight(rowIndex)
 }
 
-const getCellTextBoxStyle = (rowIndex: number, colIndex: number) => {
+const getCellTextBoxStyle = (rowIndex: number, colIndex: number): CSSProperties => {
   const borderInset = Math.max(0, (props.outline.width || 0) * 2)
   const height = Math.max(0, getCellHeight(rowIndex, colIndex) - borderInset)
   if (props.rowHeights?.length) {
