@@ -28,17 +28,21 @@ import type {
   Gradient,
 } from '@/types/slides'
 
+const PPTX_PT_TO_PX_RATIO = 96 / 72
+const DEFAULT_VIEWPORT_SIZE = 1000
+
 const normalizeFontSizeToPx = (html: string, ratio: number) => {
   if (!html) return html
+
+  const pxScale = ratio / PPTX_PT_TO_PX_RATIO
 
   return html.replace(/font-size:\s*([\d.]+)\s*(pt|px)?/gi, (match, p1, unitRaw) => {
     const size = parseFloat(p1)
     if (!Number.isFinite(size)) return match
 
     const unit = (unitRaw || '').toLowerCase()
-    if (unit === 'px') return match
-
-    return `font-size: ${(size * ratio).toFixed(1)}px`
+    const scaled = unit === 'pt' ? size * ratio : size * pxScale
+    return `font-size: ${scaled.toFixed(1)}px`
   })
 }
 
@@ -52,8 +56,7 @@ const parseFontSizeToPx = (value: string, ratio: number) => {
   if (!Number.isFinite(size)) return ''
 
   const unit = (match[2] || 'px').toLowerCase()
-  const baseRatio = 96 / 72
-  const scaled = unit === 'pt' ? size * ratio : size * (ratio / baseRatio)
+  const scaled = unit === 'pt' ? size * ratio : size * (ratio / PPTX_PT_TO_PX_RATIO)
   return `${scaled.toFixed(1)}px`
 }
 
@@ -444,10 +447,21 @@ export default () => {
         return
       }
 
-      let ratio = 96 / 72
       const width = json.size.width
+      const height = json.size.height
+      if (!Number.isFinite(width) || width <= 0 || !Number.isFinite(height) || height <= 0) {
+        exporting.value = false
+        message.error('无法正确读取 / 解析该文件')
+        return
+      }
+      slidesStore.setViewportRatio(height / width)
+
+      let ratio = PPTX_PT_TO_PX_RATIO
       
-      if (fixedViewport) ratio = 1000 / width
+      if (fixedViewport) {
+        slidesStore.setViewportSize(DEFAULT_VIEWPORT_SIZE)
+        ratio = DEFAULT_VIEWPORT_SIZE / width
+      }
       else slidesStore.setViewportSize(width * ratio)
 
       const pptxThemeColors = (json.themeColors || []).map(c => normalizeColorInput(c) || c)
@@ -781,7 +795,7 @@ export default () => {
                   const cellData = el.data[i][j]
 
                   let textDiv: HTMLDivElement | null = document.createElement('div')
-                  textDiv.innerHTML = normalizeFontSizeToPx(cellData.text, ratio)
+                  textDiv.innerHTML = normalizeFontSizeToPx(cellData.text, PPTX_PT_TO_PX_RATIO)
                   const p = textDiv.querySelector('p')
                   const align = p?.style.textAlign || 'left'
  
