@@ -75,6 +75,7 @@ export interface SharedChartOptions {
   dataLabelFontWeight?: 'normal' | 'bold'
   dataLabelColor?: string
   dataLabelValueFormat?: ValueFormatMode
+  dataLabelShowCategoryName?: boolean
   dataLabelShowPercent?: boolean
   dataLabelPercentDecimals?: number
   dataLabelPercentPlacement?: PercentPlacement

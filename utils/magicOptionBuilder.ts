@@ -126,46 +126,47 @@ export const buildMagicEchartsOption = (payload: MagicChartPayload | null, colSp
   };
 
   const legendEnabled = options?.legendEnabled !== false;
-  // Legend Scaling
-  let legendPosition = options?.legendPosition || 'bottom';
-  // Force bottom or scrollable legend for compact mode if it was left/right (too wide)
-  if (isCompact && (legendPosition === 'left' || legendPosition === 'right')) {
-      legendPosition = 'bottom';
-  }
+  const legendPosition = options?.legendPosition || 'bottom';
 
-  const legend =
-    !legendEnabled || data.series.length <= 1
-      ? undefined
-      : {
-          type: isCompact ? 'scroll' : 'plain', // Use scroll for compact
-          textStyle: {
-            fontSize: typeof options?.legendFontSize === 'number' ? (isCompact ? Math.max(9, options.legendFontSize - 2) : options.legendFontSize) : baseFontSize,
-            ...(options?.legendFontFamily ? { fontFamily: options.legendFontFamily } : {}),
-            ...(options?.legendFontColor
-              ? { color: options.legendFontColor }
-              : textColor
-                ? { color: textColor }
-                : {}),
-          },
-          orient: legendPosition === 'left' || legendPosition === 'right' ? 'vertical' : 'horizontal',
-          top:
-            legendPosition === 'top'
-              ? (isCompact ? 0 : 10)
-              : legendPosition === 'left' || legendPosition === 'right'
-                ? 'middle'
-                : undefined,
-          bottom: legendPosition === 'bottom' ? (isCompact ? 0 : 10) : undefined,
-          left:
-            legendPosition === 'left'
-              ? (isCompact ? 0 : 10)
-              : legendPosition === 'top' || legendPosition === 'bottom'
-                ? options?.legendAlign || 'center'
-                : undefined,
-          right: legendPosition === 'right' ? (isCompact ? 0 : 10) : undefined,
-          itemWidth: isCompact ? 15 : 25,
-          itemHeight: isCompact ? 10 : 14,
-          padding: isCompact ? 2 : 5
-        };
+  const buildLegendBase = () => {
+    if (!legendEnabled) return undefined;
+    return {
+      type: isCompact ? 'scroll' : 'plain',
+      textStyle: {
+        fontSize:
+          typeof options?.legendFontSize === 'number'
+            ? (isCompact ? Math.max(1, options.legendFontSize - 2) : Math.max(1, options.legendFontSize))
+            : baseFontSize,
+        ...(options?.legendFontFamily ? { fontFamily: options.legendFontFamily } : {}),
+        ...(options?.legendFontColor
+          ? { color: options.legendFontColor }
+          : textColor
+            ? { color: textColor }
+            : {}),
+      },
+      orient: legendPosition === 'left' || legendPosition === 'right' ? 'vertical' : 'horizontal',
+      top:
+        legendPosition === 'top'
+          ? (isCompact ? 0 : 10)
+          : legendPosition === 'left' || legendPosition === 'right'
+            ? 'middle'
+            : undefined,
+      bottom: legendPosition === 'bottom' ? (isCompact ? 0 : 10) : undefined,
+      left:
+        legendPosition === 'left'
+          ? (isCompact ? 0 : 10)
+          : legendPosition === 'top' || legendPosition === 'bottom'
+            ? options?.legendAlign || 'center'
+            : undefined,
+      right: legendPosition === 'right' ? (isCompact ? 0 : 10) : undefined,
+      itemWidth: isCompact ? 15 : 25,
+      itemHeight: isCompact ? 10 : 14,
+      padding: isCompact ? 2 : 5,
+    } as any;
+  };
+
+  const legendBase = buildLegendBase();
+  const legend = !legendBase || data.series.length <= 1 ? undefined : legendBase;
 
   if (type === 'kpi') {
     const raw = data.series?.[0]?.[0];
@@ -242,11 +243,18 @@ export const buildMagicEchartsOption = (payload: MagicChartPayload | null, colSp
       triggerEvent: true,
     };
 
-    const seriesTotals = data.series.map((s) => s.reduce((sum, v) => sum + (Number(v) || 0), 0));
+    if (options?.percentStack) {
+      valueAxis.axisLabel = {
+        ...(valueAxis.axisLabel ?? {}),
+        formatter: (v: any) => `${Math.round((Number(v) || 0) * 100)}%`,
+      };
+    }
+
+    const seriesTotals = data.series.map((s) => s.reduce((sum, v) => sum + getNumericValue(v), 0));
     const stackedIndexTotals =
       options?.stack || options?.percentStack
         ? data.labels.map((_, i) =>
-            data.series.reduce((sum, s) => sum + (Number(s[i]) || 0), 0)
+            data.series.reduce((sum, s) => sum + getNumericValue(s[i]), 0)
           )
         : [];
 
@@ -258,8 +266,11 @@ export const buildMagicEchartsOption = (payload: MagicChartPayload | null, colSp
           ...(options?.dataLabelFontFamily ? { fontFamily: options.dataLabelFontFamily } : {}),
           ...(options?.dataLabelFontWeight ? { fontWeight: options.dataLabelFontWeight } : {}),
           ...(options?.dataLabelColor ? { color: options.dataLabelColor } : {}),
-          formatter: (params: any) =>
-            formatNumericText(getNumericValue(params?.value), options?.dataLabelValueFormat),
+          formatter: (params: any) => {
+            const n = getNumericValue(params?.value);
+            if (options?.percentStack) return formatPercentText(n, options?.dataLabelPercentDecimals ?? 0);
+            return formatNumericText(n, options?.dataLabelValueFormat);
+          },
         }
       : undefined;
 
@@ -303,7 +314,7 @@ export const buildMagicEchartsOption = (payload: MagicChartPayload | null, colSp
                   let percent: number | null = null;
 
                   if (options?.percentStack) {
-                    percent = n; // already 0..1
+                    return formatPercentText(n, options?.dataLabelPercentDecimals ?? 0);
                   } else if (options?.stack) {
                     const total = stackedIndexTotals[params?.dataIndex] || 0;
                     percent = total > 0 ? n / total : null;
@@ -337,11 +348,11 @@ export const buildMagicEchartsOption = (payload: MagicChartPayload | null, colSp
   }
 
   if (type === 'line') {
-    const seriesTotals = data.series.map((s) => s.reduce((sum, v) => sum + (Number(v) || 0), 0));
+    const seriesTotals = data.series.map((s) => s.reduce((sum, v) => sum + getNumericValue(v), 0));
     const stackedIndexTotals =
       options?.stack || options?.percentStack
         ? data.labels.map((_, i) =>
-            data.series.reduce((sum, s) => sum + (Number(s[i]) || 0), 0)
+            data.series.reduce((sum, s) => sum + getNumericValue(s[i]), 0)
           )
         : [];
 
@@ -353,13 +364,41 @@ export const buildMagicEchartsOption = (payload: MagicChartPayload | null, colSp
           ...(options?.dataLabelFontFamily ? { fontFamily: options.dataLabelFontFamily } : {}),
           ...(options?.dataLabelFontWeight ? { fontWeight: options.dataLabelFontWeight } : {}),
           ...(options?.dataLabelColor ? { color: options.dataLabelColor } : {}),
-          formatter: (params: any) =>
-            formatNumericText(getNumericValue(params?.value), options?.dataLabelValueFormat),
+          formatter: (params: any) => {
+            const n = getNumericValue(params?.value);
+            if (options?.percentStack) return formatPercentText(n, options?.dataLabelPercentDecimals ?? 0);
+            return formatNumericText(n, options?.dataLabelValueFormat);
+          },
         }
       : undefined;
 
     // Support per-point colors from categoryConfig for single series
     const usePointColors = data.dataColors?.length && data.series.length === 1;
+
+    const yAxisObj = applyAxisVisibility(
+      {
+        type: 'value',
+        name: options?.axisTitle?.yLeft,
+        min: yLeftMin ?? (options?.percentStack ? 0 : undefined),
+        max: yLeftMax ?? (options?.percentStack ? 1 : undefined),
+        axisLine: buildAxisLine(textColor),
+        axisLabel: buildAxisLabel({
+          fontSize: options?.axisLabelFontSizeYLeft,
+          fontFamily: options?.axisLabelFontFamilyYLeft,
+          color: options?.axisLabelColorYLeft,
+        }),
+        splitLine: buildSplitLine({ show: options?.axisGridShowYLeft, color: options?.axisGridColorYLeft }),
+        triggerEvent: true,
+      },
+      options?.axisShowYLeft
+    );
+
+    if (options?.percentStack && yAxisObj?.axisLabel) {
+      yAxisObj.axisLabel = {
+        ...yAxisObj.axisLabel,
+        formatter: (v: any) => `${Math.round((Number(v) || 0) * 100)}%`,
+      };
+    }
 
     return {
       ...animationSettings,
@@ -385,23 +424,7 @@ export const buildMagicEchartsOption = (payload: MagicChartPayload | null, colSp
         },
         options?.axisShowX
       ),
-      yAxis: applyAxisVisibility(
-        {
-          type: 'value',
-          name: options?.axisTitle?.yLeft,
-          min: yLeftMin ?? (options?.percentStack ? 0 : undefined),
-          max: yLeftMax ?? (options?.percentStack ? 1 : undefined),
-          axisLine: buildAxisLine(textColor),
-          axisLabel: buildAxisLabel({
-            fontSize: options?.axisLabelFontSizeYLeft,
-            fontFamily: options?.axisLabelFontFamilyYLeft,
-            color: options?.axisLabelColorYLeft,
-          }),
-          splitLine: buildSplitLine({ show: options?.axisGridShowYLeft, color: options?.axisGridColorYLeft }),
-          triggerEvent: true,
-        },
-        options?.axisShowYLeft
-      ),
+      yAxis: yAxisObj,
       series: data.series.map((s, idx) => {
         const label =
           seriesLabelBase && options?.dataLabelShowPercent
@@ -412,7 +435,7 @@ export const buildMagicEchartsOption = (payload: MagicChartPayload | null, colSp
                   let percent: number | null = null;
 
                   if (options?.percentStack) {
-                    percent = n;
+                    return formatPercentText(n, options?.dataLabelPercentDecimals ?? 0);
                   } else if (options?.stack) {
                     const total = stackedIndexTotals[params?.dataIndex] || 0;
                     percent = total > 0 ? n / total : null;
@@ -456,11 +479,11 @@ export const buildMagicEchartsOption = (payload: MagicChartPayload | null, colSp
   }
 
   if (type === 'area') {
-    const seriesTotals = data.series.map((s) => s.reduce((sum, v) => sum + (Number(v) || 0), 0));
+    const seriesTotals = data.series.map((s) => s.reduce((sum, v) => sum + getNumericValue(v), 0));
     const stackedIndexTotals =
       options?.stack || options?.percentStack
         ? data.labels.map((_, i) =>
-            data.series.reduce((sum, s) => sum + (Number(s[i]) || 0), 0)
+            data.series.reduce((sum, s) => sum + getNumericValue(s[i]), 0)
           )
         : [];
 
@@ -472,13 +495,41 @@ export const buildMagicEchartsOption = (payload: MagicChartPayload | null, colSp
           ...(options?.dataLabelFontFamily ? { fontFamily: options.dataLabelFontFamily } : {}),
           ...(options?.dataLabelFontWeight ? { fontWeight: options.dataLabelFontWeight } : {}),
           ...(options?.dataLabelColor ? { color: options.dataLabelColor } : {}),
-          formatter: (params: any) =>
-            formatNumericText(getNumericValue(params?.value), options?.dataLabelValueFormat),
+          formatter: (params: any) => {
+            const n = getNumericValue(params?.value);
+            if (options?.percentStack) return formatPercentText(n, options?.dataLabelPercentDecimals ?? 0);
+            return formatNumericText(n, options?.dataLabelValueFormat);
+          },
         }
       : undefined;
 
     // Support per-point colors from categoryConfig for single series
     const usePointColors = data.dataColors?.length && data.series.length === 1;
+
+    const yAxisObj = applyAxisVisibility(
+      {
+        type: 'value',
+        name: options?.axisTitle?.yLeft,
+        min: yLeftMin ?? (options?.percentStack ? 0 : undefined),
+        max: yLeftMax ?? (options?.percentStack ? 1 : undefined),
+        axisLine: buildAxisLine(textColor),
+        axisLabel: buildAxisLabel({
+          fontSize: options?.axisLabelFontSizeYLeft,
+          fontFamily: options?.axisLabelFontFamilyYLeft,
+          color: options?.axisLabelColorYLeft,
+        }),
+        splitLine: buildSplitLine({ show: options?.axisGridShowYLeft, color: options?.axisGridColorYLeft }),
+        triggerEvent: true,
+      },
+      options?.axisShowYLeft
+    );
+
+    if (options?.percentStack && yAxisObj?.axisLabel) {
+      yAxisObj.axisLabel = {
+        ...yAxisObj.axisLabel,
+        formatter: (v: any) => `${Math.round((Number(v) || 0) * 100)}%`,
+      };
+    }
 
     return {
       ...animationSettings,
@@ -504,23 +555,7 @@ export const buildMagicEchartsOption = (payload: MagicChartPayload | null, colSp
         },
         options?.axisShowX
       ),
-      yAxis: applyAxisVisibility(
-        {
-          type: 'value',
-          name: options?.axisTitle?.yLeft,
-          min: yLeftMin ?? (options?.percentStack ? 0 : undefined),
-          max: yLeftMax ?? (options?.percentStack ? 1 : undefined),
-          axisLine: buildAxisLine(textColor),
-          axisLabel: buildAxisLabel({
-            fontSize: options?.axisLabelFontSizeYLeft,
-            fontFamily: options?.axisLabelFontFamilyYLeft,
-            color: options?.axisLabelColorYLeft,
-          }),
-          splitLine: buildSplitLine({ show: options?.axisGridShowYLeft, color: options?.axisGridColorYLeft }),
-          triggerEvent: true,
-        },
-        options?.axisShowYLeft
-      ),
+      yAxis: yAxisObj,
       series: data.series.map((s, idx) => {
         const label =
           seriesLabelBase && options?.dataLabelShowPercent
@@ -531,7 +566,7 @@ export const buildMagicEchartsOption = (payload: MagicChartPayload | null, colSp
                   let percent: number | null = null;
 
                   if (options?.percentStack) {
-                    percent = n;
+                    return formatPercentText(n, options?.dataLabelPercentDecimals ?? 0);
                   } else if (options?.stack) {
                     const total = stackedIndexTotals[params?.dataIndex] || 0;
                     percent = total > 0 ? n / total : null;
@@ -579,7 +614,7 @@ export const buildMagicEchartsOption = (payload: MagicChartPayload | null, colSp
   if (type === 'pie' || type === 'ring') {
     const isRing = type === 'ring';
     const seriesData = data.series[0]?.map((v, idx) => ({
-      value: v,
+      value: typeof v === 'object' ? (v as any)?.value : v,
       name: data.labels[idx],
       itemStyle: {
         color: (data.dataColors && data.dataColors[idx]) || themeColors[idx % themeColors.length],
@@ -601,13 +636,15 @@ export const buildMagicEchartsOption = (payload: MagicChartPayload | null, colSp
     const formatter = (params: any) => {
       const raw = typeof params.value === 'object' ? params.value?.value : params.value;
       const val = typeof raw === 'number' ? raw : Number(raw) || 0;
-      const base = formatNumericText(val, options?.dataLabelValueFormat);
-      if (!options?.dataLabelShowPercent) return base;
+      const baseValue = formatNumericText(val, options?.dataLabelValueFormat);
+      const withName =
+        options?.dataLabelShowCategoryName && params?.name ? `${params.name}: ${baseValue}` : baseValue;
+      if (!options?.dataLabelShowPercent) return withName;
       const percent = typeof params.percent === 'number' ? params.percent : 0;
       const percentText = `${percent.toFixed(options?.dataLabelPercentDecimals ?? 1)}%`;
       return options?.dataLabelPercentPlacement === 'prefix'
-        ? `${percentText} ${base}`.trim()
-        : `${base} (${percentText})`;
+        ? `${percentText} ${withName}`.trim()
+        : `${withName} (${percentText})`;
     };
 
     const pieLabel = options?.showDataLabels
@@ -622,22 +659,33 @@ export const buildMagicEchartsOption = (payload: MagicChartPayload | null, colSp
         }
       : undefined;
 
-    const pieLegend =
-      legendEnabled === false
-        ? undefined
-        : {
-            ...(legend ?? { bottom: 10, left: 'center' }),
-            data: data.labels,
-          };
+    const pieLegend = legendBase
+      ? {
+          ...legendBase,
+          data: data.labels,
+        }
+      : undefined;
 
     const labelPos = resolvePieLabelPosition(options?.dataLabelPosition);
     const outerRadius = labelPos === 'outside' ? '60%' : '70%';
-    const centerY =
-      pieLegend && (options?.legendPosition === 'bottom' || !options?.legendPosition) ? '45%' : '50%';
+    const centerY = pieLegend
+      ? legendPosition === 'bottom'
+        ? '45%'
+        : legendPosition === 'top'
+          ? '55%'
+          : '50%'
+      : '50%';
+    const centerX = pieLegend
+      ? legendPosition === 'left'
+        ? '60%'
+        : legendPosition === 'right'
+          ? '40%'
+          : '50%'
+      : '50%';
 
     return {
       ...animationSettings,
-      color: themeColors,
+      color: data.dataColors?.length ? data.dataColors : themeColors,
       legend: pieLegend,
       series: [
         {
@@ -645,7 +693,7 @@ export const buildMagicEchartsOption = (payload: MagicChartPayload | null, colSp
           radius: isRing
             ? [clampInner(options?.pieInnerRadius, 40), outerRadius]
             : outerRadius,
-          center: ['50%', centerY],
+          center: [centerX, centerY],
           startAngle: options?.pieStartAngle ?? 0,
           avoidLabelOverlap: true,
           labelLayout: { hideOverlap: true },
@@ -745,11 +793,11 @@ export const buildMagicEchartsOption = (payload: MagicChartPayload | null, colSp
     const usePointColorsForSingleBarSeries =
       !!(data.dataColors?.length) && resolvedTypes.filter((t) => t === 'bar').length === 1;
 
-    const seriesTotals = data.series.map((s) => s.reduce((sum, v) => sum + (Number(v) || 0), 0));
+    const seriesTotals = data.series.map((s) => s.reduce((sum, v) => sum + getNumericValue(v), 0));
     const stackedIndexTotals =
       options?.stack || options?.percentStack
         ? data.labels.map((_, i) =>
-            data.series.reduce((sum, s) => sum + (Number(s[i]) || 0), 0)
+            data.series.reduce((sum, s) => sum + getNumericValue(s[i]), 0)
           )
         : [];
 
@@ -761,8 +809,11 @@ export const buildMagicEchartsOption = (payload: MagicChartPayload | null, colSp
           ...(options?.dataLabelFontFamily ? { fontFamily: options.dataLabelFontFamily } : {}),
           ...(options?.dataLabelFontWeight ? { fontWeight: options.dataLabelFontWeight } : {}),
           ...(options?.dataLabelColor ? { color: options.dataLabelColor } : {}),
-          formatter: (params: any) =>
-            formatNumericText(getNumericValue(params?.value), options?.dataLabelValueFormat),
+          formatter: (params: any) => {
+            const n = getNumericValue(params?.value);
+            if (options?.percentStack) return formatPercentText(n, options?.dataLabelPercentDecimals ?? 0);
+            return formatNumericText(n, options?.dataLabelValueFormat);
+          },
         }
       : undefined;
 
@@ -774,10 +825,59 @@ export const buildMagicEchartsOption = (payload: MagicChartPayload | null, colSp
           ...(options?.dataLabelFontFamily ? { fontFamily: options.dataLabelFontFamily } : {}),
           ...(options?.dataLabelFontWeight ? { fontWeight: options.dataLabelFontWeight } : {}),
           ...(options?.dataLabelColor ? { color: options.dataLabelColor } : {}),
-          formatter: (params: any) =>
-            formatNumericText(getNumericValue(params?.value), options?.dataLabelValueFormat),
+          formatter: (params: any) => {
+            const n = getNumericValue(params?.value);
+            if (options?.percentStack) return formatPercentText(n, options?.dataLabelPercentDecimals ?? 0);
+            return formatNumericText(n, options?.dataLabelValueFormat);
+          },
         }
       : undefined;
+
+    const yAxisLeft = applyAxisVisibility(
+      {
+        type: 'value',
+        name: options?.axisTitle?.yLeft,
+        min: yLeftMin ?? (options?.percentStack ? 0 : undefined),
+        max: yLeftMax ?? (options?.percentStack ? 1 : undefined),
+        axisLine: buildAxisLine(textColor),
+        axisLabel: buildAxisLabel({
+          fontSize: options?.axisLabelFontSizeYLeft,
+          fontFamily: options?.axisLabelFontFamilyYLeft,
+          color: options?.axisLabelColorYLeft,
+        }),
+        splitLine: buildSplitLine({ show: options?.axisGridShowYLeft, color: options?.axisGridColorYLeft }),
+        triggerEvent: true,
+      },
+      options?.axisShowYLeft
+    );
+
+    if (options?.percentStack && yAxisLeft?.axisLabel) {
+      yAxisLeft.axisLabel = {
+        ...yAxisLeft.axisLabel,
+        formatter: (v: any) => `${Math.round((Number(v) || 0) * 100)}%`,
+      };
+    }
+
+    const yAxisRight = applyAxisVisibility(
+      {
+        type: 'value',
+        name: options?.axisTitle?.yRight,
+        min: yRightMin,
+        max: yRightMax,
+        axisLine: buildAxisLine(textColor),
+        axisLabel: buildAxisLabel({
+          fontSize: options?.axisLabelFontSizeYRight,
+          fontFamily: options?.axisLabelFontFamilyYRight,
+          color: options?.axisLabelColorYRight,
+        }),
+        splitLine: buildSplitLine({
+          show: options?.axisGridShowYRight ?? false,
+          color: options?.axisGridColorYRight,
+        }),
+        triggerEvent: true,
+      },
+      options?.axisShowYRight
+    );
 
     return {
       ...animationSettings,
@@ -803,45 +903,7 @@ export const buildMagicEchartsOption = (payload: MagicChartPayload | null, colSp
         },
         options?.axisShowX
       ),
-      yAxis: [
-        applyAxisVisibility(
-          {
-            type: 'value',
-            name: options?.axisTitle?.yLeft,
-            min: yLeftMin ?? (options?.percentStack ? 0 : undefined),
-            max: yLeftMax ?? (options?.percentStack ? 1 : undefined),
-            axisLine: buildAxisLine(textColor),
-            axisLabel: buildAxisLabel({
-              fontSize: options?.axisLabelFontSizeYLeft,
-              fontFamily: options?.axisLabelFontFamilyYLeft,
-              color: options?.axisLabelColorYLeft,
-            }),
-            splitLine: buildSplitLine({ show: options?.axisGridShowYLeft, color: options?.axisGridColorYLeft }),
-            triggerEvent: true,
-          },
-          options?.axisShowYLeft
-        ),
-        applyAxisVisibility(
-          {
-            type: 'value',
-            name: options?.axisTitle?.yRight,
-            min: yRightMin,
-            max: yRightMax,
-            axisLine: buildAxisLine(textColor),
-            axisLabel: buildAxisLabel({
-              fontSize: options?.axisLabelFontSizeYRight,
-              fontFamily: options?.axisLabelFontFamilyYRight,
-              color: options?.axisLabelColorYRight,
-            }),
-            splitLine: buildSplitLine({
-              show: options?.axisGridShowYRight ?? false,
-              color: options?.axisGridColorYRight,
-            }),
-            triggerEvent: true,
-          },
-          options?.axisShowYRight
-        ),
-      ],
+      yAxis: [yAxisLeft, yAxisRight],
       series: data.series.map((s, idx) => {
         const t = resolvedTypes[idx];
 
@@ -855,7 +917,7 @@ export const buildMagicEchartsOption = (payload: MagicChartPayload | null, colSp
                   let percent: number | null = null;
 
                   if (options?.percentStack) {
-                    percent = n; // already 0..1
+                    return formatPercentText(n, options?.dataLabelPercentDecimals ?? 0);
                   } else if (options?.stack) {
                     const total = stackedIndexTotals[params?.dataIndex] || 0;
                     percent = total > 0 ? n / total : null;
@@ -897,6 +959,9 @@ export const buildMagicEchartsOption = (payload: MagicChartPayload | null, colSp
               color: perSeriesLabel.color || textColor,
               formatter: (params: any) => {
                 const n = getNumericValue(params?.value);
+                if (options?.percentStack) {
+                  return formatPercentText(n, perSeriesLabel.percentDecimals ?? options?.dataLabelPercentDecimals ?? 0);
+                }
                 let percent: number | null = null;
                 if (perSeriesLabel.showPercent) {
                   if (options?.percentStack) {

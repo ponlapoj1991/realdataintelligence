@@ -535,7 +535,11 @@ const MagicWidgetRenderer: React.FC<MagicWidgetRendererProps> = ({
 
     const option = payload.optionRaw ?? buildMagicEchartsOption(payload, widget.colSpan || 2, isEditing);
     if (!option) return;
-    chart.setOption(option as any, { notMerge: true, lazyUpdate: true } as any);
+    try {
+      chart.setOption(option as any, { notMerge: true, lazyUpdate: true } as any);
+    } catch (e) {
+      console.error('[MagicWidgetRenderer] setOption failed:', e);
+    }
   }, [payload, isInView, widget.colSpan, isEditing]);
 
   // Click binding (doesn't need to re-init chart)

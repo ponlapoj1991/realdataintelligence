@@ -85,6 +85,7 @@ const createDefaultDataLabels = (): DataLabelConfig => ({
   fontFamily: undefined,
   color: '#000000',
   valueFormat: 'auto',
+  showCategoryName: false,
   showPercent: false,
   percentPlacement: 'suffix',
   percentDecimals: 1
@@ -583,6 +584,16 @@ const [sortSeriesId, setSortSeriesId] = useState('');
       setYMeasure(initialWidget.yMeasure || 'sum');
       setYMeasureCol(initialWidget.yMeasureCol || '');
 
+      // Pie/Donut (edit-mode persistence)
+      setInnerRadius(
+        typeof initialWidget.innerRadius === 'number'
+          ? initialWidget.innerRadius
+          : initialWidget.type === 'donut'
+            ? 50
+            : 0
+      );
+      setStartAngle(typeof initialWidget.startAngle === 'number' ? initialWidget.startAngle : 0);
+
       // Line/Area styling
       setCurveType(initialWidget.curveType || (initialWidget.type === 'smooth-line' ? 'monotone' : 'linear'));
       setStrokeWidth(typeof initialWidget.strokeWidth === 'number' ? initialWidget.strokeWidth : 2);
@@ -646,6 +657,8 @@ const [sortSeriesId, setSortSeriesId] = useState('');
     return sorted.map(({ __total, ...rest }) => rest);
   };
 
+  const supports = useMemo(() => (type ? getChartSupports(type) : null), [type]);
+
   // Get all unique categories from data
   const allCategories = useMemo(() => {
     if (!dimension || data.length === 0) return [];
@@ -656,6 +669,19 @@ const [sortSeriesId, setSortSeriesId] = useState('');
     });
     return Array.from(unique).sort();
   }, [dimension, data]);
+
+  const stackKeys = useMemo(() => {
+    if (!supports?.stackBy) return [];
+    if (!stackBy) return [];
+    if (data.length === 0) return [];
+    const unique = new Set<string>();
+    data.forEach((row) => {
+      const raw = row[stackBy];
+      const s = String(raw ?? '(Other)').trim();
+      unique.add(s || '(Empty)');
+    });
+    return Array.from(unique).sort((a, b) => a.localeCompare(b));
+  }, [supports?.stackBy, stackBy, data]);
 
   const kpiCategories = useMemo(() => {
     if (type !== 'kpi') return [];
@@ -930,7 +956,6 @@ const [sortSeriesId, setSortSeriesId] = useState('');
     setShowTypeSelector(false);
   };
 
-  const supports = type ? getChartSupports(type) : null;
   const columnProfiles = useMemo(() => buildColumnProfiles(data), [data]);
   const showMajorControl = useMemo(() => {
     if (!type || !dimension) return false;
@@ -1583,6 +1608,66 @@ const [sortSeriesId, setSortSeriesId] = useState('');
                     </Section>
                   )}
 
+                  {/* Stack colors (for stacked charts) */}
+                  {supports?.stackBy && !!stackBy && stackKeys.length > 0 && (
+                    <Section
+                      title="Stack Colors"
+                      icon={<Palette className="w-4 h-4 text-gray-600" />}
+                      isOpen={openSections.has('stack-colors')}
+                      onToggle={() => toggleSection('stack-colors')}
+                    >
+                      <div className="space-y-2">
+                        {stackKeys.map((key, idx) => {
+                          const fallback =
+                            chartTheme.palette[idx % chartTheme.palette.length] ||
+                            COLORS[idx % COLORS.length] ||
+                            '#3B82F6';
+                          const color = categoryConfig[key]?.color || fallback;
+                          return (
+                            <div key={key} className="flex items-center gap-2">
+                              <button
+                                type="button"
+                                className="w-6 h-6 rounded border border-gray-300"
+                                style={{ backgroundColor: color }}
+                                onClick={() => setCategoryModal({ isOpen: true, category: key })}
+                                aria-label={`Edit ${key}`}
+                              />
+                              <div className="flex-1 min-w-0">
+                                <div className="text-xs font-medium text-gray-800 truncate">{key}</div>
+                              </div>
+                              <input
+                                type="color"
+                                value={color}
+                                onChange={(e) => {
+                                  const next = e.target.value;
+                                  setCategoryConfig((prev) => ({
+                                    ...prev,
+                                    [key]: { ...(prev[key] || {}), color: next },
+                                  }));
+                                }}
+                                className="w-10 h-8 border border-gray-300 rounded cursor-pointer"
+                                style={{ outline: 'none' }}
+                              />
+                              <input
+                                type="text"
+                                value={color}
+                                onChange={(e) => {
+                                  const next = e.target.value;
+                                  setCategoryConfig((prev) => ({
+                                    ...prev,
+                                    [key]: { ...(prev[key] || {}), color: next },
+                                  }));
+                                }}
+                                className="w-28 px-2 py-1.5 border border-gray-300 rounded text-xs font-mono"
+                                style={{ outline: 'none' }}
+                              />
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </Section>
+                  )}
+
                   <Section
                     title="Titles"
                     icon={<TypeIcon className="w-4 h-4 text-gray-600" />}
@@ -1752,6 +1837,21 @@ const [sortSeriesId, setSortSeriesId] = useState('');
                               </select>
                             </div>
 
+                            {supports?.pie && (
+                              <div className="col-span-2">
+                                <label className="flex items-center text-sm">
+                                  <input
+                                    type="checkbox"
+                                    checked={dataLabels.showCategoryName ?? false}
+                                    onChange={(e) => setDataLabels({ ...dataLabels, showCategoryName: e.target.checked })}
+                                    className="mr-2"
+                                    style={{ outline: 'none' }}
+                                  />
+                                  Category Name
+                                </label>
+                              </div>
+                            )}
+
                             <div>
                               <label className="block text-xs font-medium text-gray-700 mb-1">Font Size: {dataLabels.fontSize}px</label>
                               <input
@@ -1902,8 +2002,8 @@ const [sortSeriesId, setSortSeriesId] = useState('');
                               <label className="block text-xs font-medium text-gray-700 mb-1">Font Size: {legend.fontSize}px</label>
                               <input
                                 type="range"
-                                min="8"
-                                max="16"
+                                min="1"
+                                max="24"
                                 value={legend.fontSize}
                                 onChange={(e) => setLegend({ ...legend, fontSize: parseInt(e.target.value) })}
                                 className="w-full"
