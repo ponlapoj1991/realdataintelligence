@@ -45,6 +45,7 @@ export interface DashboardChartInsertPayload {
     dataLabelFontFamily?: string;
     dataLabelColor?: string;
     dataLabelValueFormat?: 'auto' | 'text' | 'number' | 'compact' | 'accounting';
+    dataLabelShowCategoryName?: boolean;
     dataLabelShowPercent?: boolean;
     dataLabelPercentDecimals?: number;
     dataLabelPercentPlacement?: 'prefix' | 'suffix';
@@ -292,6 +293,7 @@ export const buildDashboardChartPayload = (
         dataLabelFontFamily: widget.dataLabels?.fontFamily,
         dataLabelColor: widget.dataLabels?.color,
         dataLabelValueFormat: widget.dataLabels?.valueFormat,
+        dataLabelShowCategoryName: widget.dataLabels?.showCategoryName,
         dataLabelShowPercent: widget.dataLabels?.showPercent,
         dataLabelPercentDecimals: widget.dataLabels?.percentDecimals,
         dataLabelPercentPlacement: widget.dataLabels?.percentPlacement,
@@ -441,6 +443,7 @@ export const buildDashboardChartPayload = (
       dataLabelFontFamily: widget.dataLabels?.fontFamily,
       dataLabelColor: widget.dataLabels?.color,
       dataLabelValueFormat: widget.dataLabels?.valueFormat,
+      dataLabelShowCategoryName: widget.dataLabels?.showCategoryName,
       dataLabelShowPercent: widget.dataLabels?.showPercent,
       dataLabelPercentDecimals: widget.dataLabels?.percentDecimals,
       dataLabelPercentPlacement: widget.dataLabels?.percentPlacement,

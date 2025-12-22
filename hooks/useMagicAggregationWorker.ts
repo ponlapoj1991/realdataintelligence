@@ -65,7 +65,11 @@ export function useMagicAggregationWorker(rows: RawRow[], theme?: ChartTheme): M
         const pending = pendingRef.current.get(msg.requestId)
         if (!pending) return
         pendingRef.current.delete(msg.requestId)
-        if (pending.rowsVersion !== msg.rowsVersion) return
+        if (pending.rowsVersion !== msg.rowsVersion) {
+          // Avoid leaving callers hanging if rows were updated mid-flight
+          pending.resolve(null)
+          return
+        }
         pending.resolve(msg.payload)
         return
       }

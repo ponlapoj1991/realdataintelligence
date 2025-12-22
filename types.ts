@@ -185,6 +185,7 @@ export interface DataLabelConfig {
   fontFamily?: string;
   color: string;
   valueFormat?: 'auto' | 'text' | 'number' | 'compact' | 'accounting';
+  showCategoryName?: boolean;
   showPercent?: boolean;
   percentPlacement?: 'prefix' | 'suffix';
   percentDecimals?: number;

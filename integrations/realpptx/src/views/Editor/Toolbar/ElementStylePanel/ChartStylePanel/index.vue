@@ -206,7 +206,7 @@
       </div>
       <div class="row">
         <div class="label">Font size</div>
-        <input class="input" type="number" min="8" max="24" v-model.number="legendFontSize" @change="updateOptions({ legendFontSize })" />
+        <input class="input" type="number" min="1" max="24" v-model.number="legendFontSize" @change="updateOptions({ legendFontSize })" />
       </div>
       <div class="row">
         <div class="label">Color</div>
@@ -536,7 +536,10 @@ watch(handleElement, () => {
   legendAlign.value = 'left'
   legendFontSize.value = undefined
   legendFontColor.value = undefined
-  legendEnabled.value = el.data.series.length > 1
+  legendEnabled.value =
+    (el.chartType === 'pie' || el.chartType === 'ring')
+      ? el.data.labels.length > 1
+      : el.data.series.length > 1
 
   axisLabelFontSize.value = undefined
   axisLabelColor.value = undefined

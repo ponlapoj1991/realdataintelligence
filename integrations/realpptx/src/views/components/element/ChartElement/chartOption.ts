@@ -34,8 +34,11 @@ export interface ChartOptionPayload {
   dataLabelFontSize?: number
   dataLabelFontWeight?: 'normal' | 'bold'
   dataLabelColor?: string
+  dataLabelValueFormat?: 'auto' | 'text' | 'number' | 'compact' | 'accounting'
+  dataLabelShowCategoryName?: boolean
   dataLabelShowPercent?: boolean
   dataLabelPercentDecimals?: number
+  dataLabelPercentPlacement?: 'prefix' | 'suffix'
 
   // Legend
   legendEnabled?: boolean
@@ -56,6 +59,34 @@ export interface ChartOptionPayload {
   // Pie/Ring
   pieInnerRadius?: number
   pieStartAngle?: number
+}
+
+const formatNumericText = (
+  value: number,
+  mode?: 'auto' | 'text' | 'number' | 'compact' | 'accounting'
+) => {
+  if (!Number.isFinite(value)) return '0'
+  switch (mode) {
+    case 'text':
+      return String(value)
+    case 'number':
+      return new Intl.NumberFormat(undefined, { maximumFractionDigits: 0 }).format(value)
+    case 'compact':
+      return new Intl.NumberFormat(undefined, {
+        notation: 'compact',
+        compactDisplay: 'short',
+        maximumFractionDigits: 1,
+      }).format(value)
+    case 'accounting':
+      return new Intl.NumberFormat(undefined, {
+        useGrouping: true,
+        minimumFractionDigits: 0,
+        maximumFractionDigits: 2,
+      }).format(value)
+    case 'auto':
+    default:
+      return String(value)
+  }
 }
 
 const buildColoredSeriesData = (values: number[], colors?: string[], fallback?: string[]) => {
@@ -97,8 +128,11 @@ const buildPieLabel = ({
   dataLabelFontSize,
   dataLabelFontWeight,
   dataLabelColor,
+  dataLabelValueFormat,
+  dataLabelShowCategoryName,
   dataLabelShowPercent,
   dataLabelPercentDecimals,
+  dataLabelPercentPlacement,
   textColor,
 }: {
   showDataLabels?: boolean
@@ -106,26 +140,31 @@ const buildPieLabel = ({
   dataLabelFontSize?: number
   dataLabelFontWeight?: 'normal' | 'bold'
   dataLabelColor?: string
+  dataLabelValueFormat?: ChartOptionPayload['dataLabelValueFormat']
+  dataLabelShowCategoryName?: boolean
   dataLabelShowPercent?: boolean
   dataLabelPercentDecimals?: number
+  dataLabelPercentPlacement?: ChartOptionPayload['dataLabelPercentPlacement']
   textColor?: string
 }) => {
-  const formatter = dataLabelShowPercent
-    ? (params: any) => {
-      if (params.seriesType === 'pie' || params.seriesType === 'ring') {
-        const percent = typeof params.percent === 'number' ? params.percent : 0
-        return `${percent.toFixed(dataLabelPercentDecimals ?? 0)}%`
-      }
-      return params.value
-    }
-    : undefined
+  const formatter = (params: any) => {
+    const raw = typeof params.value === 'object' ? params.value?.value : params.value
+    const val = typeof raw === 'number' ? raw : Number(raw) || 0
+    const baseValue = formatNumericText(val, dataLabelValueFormat)
+    const withName = dataLabelShowCategoryName && params?.name ? `${params.name}: ${baseValue}` : baseValue
+    if (!dataLabelShowPercent) return withName
+    const percent = typeof params.percent === 'number' ? params.percent : 0
+    const percentText = `${percent.toFixed(dataLabelPercentDecimals ?? 0)}%`
+    const placement = dataLabelPercentPlacement || 'suffix'
+    return placement === 'prefix' ? `${percentText} ${withName}`.trim() : `${withName} (${percentText})`
+  }
   return {
     show: showDataLabels !== false,
     position: dataLabelPosition || 'outside',
     ...(dataLabelFontSize ? { fontSize: dataLabelFontSize } : {}),
     ...(dataLabelFontWeight ? { fontWeight: dataLabelFontWeight } : {}),
     ...(dataLabelColor ? { color: dataLabelColor } : textColor ? { color: textColor } : {}),
-    ...(formatter ? { formatter } : {}),
+    ...(showDataLabels !== false ? { formatter } : {}),
   }
 }
 
@@ -169,8 +208,11 @@ const getChartOptionLegacy = ({
   dataLabelFontSize,
   dataLabelFontWeight,
   dataLabelColor,
+  dataLabelValueFormat,
+  dataLabelShowCategoryName,
   dataLabelShowPercent,
   dataLabelPercentDecimals,
+  dataLabelPercentPlacement,
   // legend
   legendEnabled,
   legendPosition,
@@ -198,7 +240,8 @@ const getChartOptionLegacy = ({
     let sum = 0
     for (const s of data.series) {
       const val = s[i]
-      if (typeof val === 'number') sum += val
+      const numeric = typeof val === 'object' ? (val as any)?.value : val
+      if (typeof numeric === 'number') sum += numeric
     }
     categoryTotals[i] = sum
   }
@@ -207,7 +250,12 @@ const getChartOptionLegacy = ({
     // If show percent is OFF, just return value
     if (!dataLabelShowPercent) {
       const val = params.value
-      return typeof val === 'object' ? val.value : val
+      const numericVal = typeof val === 'object' ? (val as any)?.value : val
+      if (percentStack || subType === 'percentStacked') {
+        const ratio = typeof numericVal === 'number' ? numericVal : (Number(numericVal) || 0)
+        return `${(ratio * 100).toFixed(dataLabelPercentDecimals ?? 0)}%`
+      }
+      return typeof val === 'object' ? (val as any)?.value : val
     }
 
     // If Pie/Ring/Radar (ECharts handles percent for Pie usually, but let's be explicit)
@@ -221,7 +269,7 @@ const getChartOptionLegacy = ({
     if (params.componentType === 'series' && (params.seriesType === 'bar' || params.seriesType === 'line')) {
       const idx = params.dataIndex
       const val = params.value
-      const numericVal = typeof val === 'object' ? val.value : val
+      const numericVal = typeof val === 'object' ? (val as any)?.value : val
 
       const total = categoryTotals[idx]
       if (total === 0) return '0%'
@@ -263,12 +311,15 @@ const getChartOptionLegacy = ({
     legendPos === 'top' || legendPos === 'bottom'
       ? { align: legendAlign || 'left' }
       : {}
-  const legend = legendEnabled !== false && data.series.length > 1
+  const shouldShowLegend =
+    legendEnabled !== false &&
+    ((type === 'pie' || type === 'ring') ? (data.labels?.length || 0) > 1 : data.series.length > 1)
+  const legend = shouldShowLegend
     ? {
-      ...legendLayout,
-      textStyle: legendTextStyle,
-      ...legendAlignProps,
-    }
+        ...legendLayout,
+        textStyle: legendTextStyle,
+        ...legendAlignProps,
+      }
     : undefined
 
   const palette = data.seriesColors && data.seriesColors.length ? data.seriesColors : themeColors
@@ -299,7 +350,9 @@ const getChartOptionLegacy = ({
     const valueAxis = {
       type: 'value' as const,
       axisLine,
-      axisLabel,
+      axisLabel: (percentStack || subType === 'percentStacked')
+        ? { ...axisLabel, formatter: (v: any) => `${Math.round((Number(v) || 0) * 100)}%` }
+        : axisLabel,
       splitLine,
       name: axisTitle?.yLeft,
       min: (percentStack || subType === 'percentStacked') ? 0 : axisRange?.yLeftMin,
@@ -411,8 +464,11 @@ const getChartOptionLegacy = ({
       dataLabelFontSize,
       dataLabelFontWeight,
       dataLabelColor,
+      dataLabelValueFormat,
+      dataLabelShowCategoryName,
       dataLabelShowPercent,
       dataLabelPercentDecimals,
+      dataLabelPercentPlacement,
       textColor,
     })
     const inner = pieInnerRadius !== undefined ? clampPercent(pieInnerRadius, 0) : undefined
@@ -456,8 +512,11 @@ const getChartOptionLegacy = ({
       dataLabelFontSize,
       dataLabelFontWeight,
       dataLabelColor,
+      dataLabelValueFormat,
+      dataLabelShowCategoryName,
       dataLabelShowPercent,
       dataLabelPercentDecimals,
+      dataLabelPercentPlacement,
       textColor,
     })
     const inner = clampPercent(pieInnerRadius, 40)
@@ -513,7 +572,9 @@ const getChartOptionLegacy = ({
       yAxis: {
         type: 'value',
         axisLine,
-        axisLabel,
+        axisLabel: (percentStack || subType === 'percentStacked')
+          ? { ...axisLabel, formatter: (v: any) => `${Math.round((Number(v) || 0) * 100)}%` }
+          : axisLabel,
         splitLine,
         name: axisTitle?.yLeft,
         min: axisRange?.yLeftMin ?? ((percentStack || subType === 'percentStacked') ? 0 : undefined),
@@ -624,7 +685,9 @@ const getChartOptionLegacy = ({
         type: 'value' as const,
         name: axisTitle?.yLeft,
         axisLine,
-        axisLabel,
+        axisLabel: percentStack
+          ? { ...axisLabel, formatter: (v: any) => `${Math.round((Number(v) || 0) * 100)}%` }
+          : axisLabel,
         splitLine,
         min: axisRange?.yLeftMin ?? (percentStack ? 0 : undefined),
         max: axisRange?.yLeftMax ?? (percentStack ? 1 : undefined),
@@ -644,7 +707,9 @@ const getChartOptionLegacy = ({
       type: 'value' as const,
       name: axisTitle?.yLeft,
       axisLine,
-      axisLabel,
+      axisLabel: percentStack
+        ? { ...axisLabel, formatter: (v: any) => `${Math.round((Number(v) || 0) * 100)}%` }
+        : axisLabel,
       splitLine,
       min: axisRange?.yLeftMin ?? (percentStack ? 0 : undefined),
       max: axisRange?.yLeftMax ?? (percentStack ? 1 : undefined),

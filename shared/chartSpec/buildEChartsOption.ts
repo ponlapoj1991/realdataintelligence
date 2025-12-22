@@ -114,10 +114,7 @@ export const buildEChartsOption = (payload: SharedChartPayload | null, colSpan: 
   };
 
   const legendEnabled = options?.legendEnabled !== false;
-  let legendPosition = options?.legendPosition || 'bottom';
-  if (isCompact && (legendPosition === 'left' || legendPosition === 'right')) {
-      legendPosition = 'bottom';
-  }
+  const legendPosition = options?.legendPosition || 'bottom';
 
   const legend =
     !legendEnabled || data.series.length <= 1
@@ -125,7 +122,10 @@ export const buildEChartsOption = (payload: SharedChartPayload | null, colSpan: 
       : {
           type: isCompact ? 'scroll' : 'plain',
           textStyle: {
-            fontSize: typeof options?.legendFontSize === 'number' ? (isCompact ? Math.max(9, options.legendFontSize - 2) : options.legendFontSize) : baseFontSize,
+            fontSize:
+              typeof options?.legendFontSize === 'number'
+                ? (isCompact ? Math.max(1, options.legendFontSize - 2) : Math.max(1, options.legendFontSize))
+                : baseFontSize,
             ...(options?.legendFontFamily ? { fontFamily: options.legendFontFamily } : {}),
             ...(options?.legendFontColor
               ? { color: options.legendFontColor }
@@ -226,6 +226,13 @@ export const buildEChartsOption = (payload: SharedChartPayload | null, colSpan: 
       triggerEvent: true,
     };
 
+    if (options?.percentStack) {
+      valueAxis.axisLabel = {
+        ...(valueAxis.axisLabel ?? {}),
+        formatter: (v: any) => `${Math.round((Number(v) || 0) * 100)}%`,
+      };
+    }
+
     const seriesTotals = data.series.map((s) => s.reduce<number>((sum, v) => sum + getNumericValue(v), 0));
     const stackedIndexTotals: number[] =
       options?.stack || options?.percentStack
@@ -242,8 +249,11 @@ export const buildEChartsOption = (payload: SharedChartPayload | null, colSpan: 
           ...(options?.dataLabelFontFamily ? { fontFamily: options.dataLabelFontFamily } : {}),
           ...(options?.dataLabelFontWeight ? { fontWeight: options.dataLabelFontWeight } : {}),
           ...(options?.dataLabelColor ? { color: options.dataLabelColor } : {}),
-          formatter: (params: any) =>
-            formatNumericText(getNumericValue(params?.value), options?.dataLabelValueFormat),
+          formatter: (params: any) => {
+            const n = getNumericValue(params?.value);
+            if (options?.percentStack) return formatPercentText(n, options?.dataLabelPercentDecimals ?? 0);
+            return formatNumericText(n, options?.dataLabelValueFormat);
+          },
         }
       : undefined;
 
@@ -287,7 +297,7 @@ export const buildEChartsOption = (payload: SharedChartPayload | null, colSpan: 
                   let percent: number | null = null;
 
                   if (options?.percentStack) {
-                    percent = n;
+                    return formatPercentText(n, options?.dataLabelPercentDecimals ?? 0);
                   } else if (options?.stack) {
                     const total = stackedIndexTotals[params?.dataIndex] || 0;
                     percent = total > 0 ? n / total : null;
@@ -337,11 +347,39 @@ export const buildEChartsOption = (payload: SharedChartPayload | null, colSpan: 
           ...(options?.dataLabelFontFamily ? { fontFamily: options.dataLabelFontFamily } : {}),
           ...(options?.dataLabelFontWeight ? { fontWeight: options.dataLabelFontWeight } : {}),
           ...(options?.dataLabelColor ? { color: options.dataLabelColor } : {}),
-          formatter: (params: any) =>
-            formatNumericText(getNumericValue(params?.value), options?.dataLabelValueFormat),
+          formatter: (params: any) => {
+            const n = getNumericValue(params?.value);
+            if (options?.percentStack) return formatPercentText(n, options?.dataLabelPercentDecimals ?? 0);
+            return formatNumericText(n, options?.dataLabelValueFormat);
+          },
         }
       : undefined;
     const usePointColors = data.dataColors?.length && data.series.length === 1;
+
+    const yAxisObj = applyAxisVisibility(
+      {
+        type: 'value',
+        name: options?.axisTitle?.yLeft,
+        min: yLeftMin ?? (options?.percentStack ? 0 : undefined),
+        max: yLeftMax ?? (options?.percentStack ? 1 : undefined),
+        axisLine: buildAxisLine(textColor),
+        axisLabel: buildAxisLabel({
+          fontSize: options?.axisLabelFontSizeYLeft,
+          fontFamily: options?.axisLabelFontFamilyYLeft,
+          color: options?.axisLabelColorYLeft,
+        }),
+        splitLine: buildSplitLine({ show: options?.axisGridShowYLeft, color: options?.axisGridColorYLeft }),
+        triggerEvent: true,
+      },
+      options?.axisShowYLeft
+    );
+
+    if (options?.percentStack && yAxisObj?.axisLabel) {
+      yAxisObj.axisLabel = {
+        ...yAxisObj.axisLabel,
+        formatter: (v: any) => `${Math.round((Number(v) || 0) * 100)}%`,
+      };
+    }
 
     return {
       ...animationSettings,
@@ -367,23 +405,7 @@ export const buildEChartsOption = (payload: SharedChartPayload | null, colSpan: 
         },
         options?.axisShowX
       ),
-      yAxis: applyAxisVisibility(
-        {
-          type: 'value',
-          name: options?.axisTitle?.yLeft,
-          min: yLeftMin ?? (options?.percentStack ? 0 : undefined),
-          max: yLeftMax ?? (options?.percentStack ? 1 : undefined),
-          axisLine: buildAxisLine(textColor),
-          axisLabel: buildAxisLabel({
-            fontSize: options?.axisLabelFontSizeYLeft,
-            fontFamily: options?.axisLabelFontFamilyYLeft,
-            color: options?.axisLabelColorYLeft,
-          }),
-          splitLine: buildSplitLine({ show: options?.axisGridShowYLeft, color: options?.axisGridColorYLeft }),
-          triggerEvent: true,
-        },
-        options?.axisShowYLeft
-      ),
+      yAxis: yAxisObj,
       series: data.series.map((s, idx) => {
         const label =
           seriesLabelBase && options?.dataLabelShowPercent
@@ -394,7 +416,7 @@ export const buildEChartsOption = (payload: SharedChartPayload | null, colSpan: 
                   let percent: number | null = null;
 
                   if (options?.percentStack) {
-                    percent = n;
+                    return formatPercentText(n, options?.dataLabelPercentDecimals ?? 0);
                   } else if (options?.stack) {
                     const total = stackedIndexTotals[params?.dataIndex] || 0;
                     percent = total > 0 ? n / total : null;
@@ -453,12 +475,40 @@ export const buildEChartsOption = (payload: SharedChartPayload | null, colSpan: 
           ...(options?.dataLabelFontFamily ? { fontFamily: options.dataLabelFontFamily } : {}),
           ...(options?.dataLabelFontWeight ? { fontWeight: options.dataLabelFontWeight } : {}),
           ...(options?.dataLabelColor ? { color: options.dataLabelColor } : {}),
-          formatter: (params: any) =>
-            formatNumericText(getNumericValue(params?.value), options?.dataLabelValueFormat),
+          formatter: (params: any) => {
+            const n = getNumericValue(params?.value);
+            if (options?.percentStack) return formatPercentText(n, options?.dataLabelPercentDecimals ?? 0);
+            return formatNumericText(n, options?.dataLabelValueFormat);
+          },
         }
       : undefined;
 
     const usePointColors = data.dataColors?.length && data.series.length === 1;
+
+    const yAxisObj = applyAxisVisibility(
+      {
+        type: 'value',
+        name: options?.axisTitle?.yLeft,
+        min: yLeftMin ?? (options?.percentStack ? 0 : undefined),
+        max: yLeftMax ?? (options?.percentStack ? 1 : undefined),
+        axisLine: buildAxisLine(textColor),
+        axisLabel: buildAxisLabel({
+          fontSize: options?.axisLabelFontSizeYLeft,
+          fontFamily: options?.axisLabelFontFamilyYLeft,
+          color: options?.axisLabelColorYLeft,
+        }),
+        splitLine: buildSplitLine({ show: options?.axisGridShowYLeft, color: options?.axisGridColorYLeft }),
+        triggerEvent: true,
+      },
+      options?.axisShowYLeft
+    );
+
+    if (options?.percentStack && yAxisObj?.axisLabel) {
+      yAxisObj.axisLabel = {
+        ...yAxisObj.axisLabel,
+        formatter: (v: any) => `${Math.round((Number(v) || 0) * 100)}%`,
+      };
+    }
 
     return {
       ...animationSettings,
@@ -484,23 +534,7 @@ export const buildEChartsOption = (payload: SharedChartPayload | null, colSpan: 
         },
         options?.axisShowX
       ),
-      yAxis: applyAxisVisibility(
-        {
-          type: 'value',
-          name: options?.axisTitle?.yLeft,
-          min: yLeftMin ?? (options?.percentStack ? 0 : undefined),
-          max: yLeftMax ?? (options?.percentStack ? 1 : undefined),
-          axisLine: buildAxisLine(textColor),
-          axisLabel: buildAxisLabel({
-            fontSize: options?.axisLabelFontSizeYLeft,
-            fontFamily: options?.axisLabelFontFamilyYLeft,
-            color: options?.axisLabelColorYLeft,
-          }),
-          splitLine: buildSplitLine({ show: options?.axisGridShowYLeft, color: options?.axisGridColorYLeft }),
-          triggerEvent: true,
-        },
-        options?.axisShowYLeft
-      ),
+      yAxis: yAxisObj,
       series: data.series.map((s, idx) => {
         const label =
           seriesLabelBase && options?.dataLabelShowPercent
@@ -511,7 +545,7 @@ export const buildEChartsOption = (payload: SharedChartPayload | null, colSpan: 
                   let percent: number | null = null;
 
                   if (options?.percentStack) {
-                    percent = n;
+                    return formatPercentText(n, options?.dataLabelPercentDecimals ?? 0);
                   } else if (options?.stack) {
                     const total = stackedIndexTotals[params?.dataIndex] || 0;
                     percent = total > 0 ? n / total : null;
@@ -558,7 +592,7 @@ export const buildEChartsOption = (payload: SharedChartPayload | null, colSpan: 
   if (type === 'pie' || type === 'ring') {
     const isRing = type === 'ring';
     const seriesData = data.series[0]?.map((v, idx) => ({
-      value: v,
+      value: typeof v === 'object' ? (v as any)?.value : v,
       name: data.labels[idx],
       itemStyle: {
         color: (data.dataColors && data.dataColors[idx]) || themeColors[idx % themeColors.length],
@@ -580,13 +614,15 @@ export const buildEChartsOption = (payload: SharedChartPayload | null, colSpan: 
     const formatter = (params: any) => {
       const raw = typeof params.value === 'object' ? params.value?.value : params.value;
       const val = typeof raw === 'number' ? raw : Number(raw) || 0;
-      const base = formatNumericText(val, options?.dataLabelValueFormat);
-      if (!options?.dataLabelShowPercent) return base;
+      const baseValue = formatNumericText(val, options?.dataLabelValueFormat);
+      const withName =
+        options?.dataLabelShowCategoryName && params?.name ? `${params.name}: ${baseValue}` : baseValue;
+      if (!options?.dataLabelShowPercent) return withName;
       const percent = typeof params.percent === 'number' ? params.percent : 0;
       const percentText = `${percent.toFixed(options?.dataLabelPercentDecimals ?? 1)}%`;
       return options?.dataLabelPercentPlacement === 'prefix'
-        ? `${percentText} ${base}`.trim()
-        : `${base} (${percentText})`;
+        ? `${percentText} ${withName}`.trim()
+        : `${withName} (${percentText})`;
     };
 
     const pieLabel = options?.showDataLabels
@@ -601,22 +637,63 @@ export const buildEChartsOption = (payload: SharedChartPayload | null, colSpan: 
         }
       : undefined;
 
-    const pieLegend =
-      legendEnabled === false
-        ? undefined
-        : {
-            ...(legend ?? { bottom: 10, left: 'center' }),
-            data: data.labels,
-          };
+    const pieLegend = !legendEnabled
+      ? undefined
+      : {
+          type: isCompact ? 'scroll' : 'plain',
+          textStyle: {
+            fontSize:
+              typeof options?.legendFontSize === 'number'
+                ? (isCompact ? Math.max(1, options.legendFontSize - 2) : Math.max(1, options.legendFontSize))
+                : baseFontSize,
+            ...(options?.legendFontFamily ? { fontFamily: options.legendFontFamily } : {}),
+            ...(options?.legendFontColor
+              ? { color: options.legendFontColor }
+              : textColor
+                ? { color: textColor }
+                : {}),
+          },
+          orient: legendPosition === 'left' || legendPosition === 'right' ? 'vertical' : 'horizontal',
+          top:
+            legendPosition === 'top'
+              ? (isCompact ? 0 : 10)
+              : legendPosition === 'left' || legendPosition === 'right'
+                ? 'middle'
+                : undefined,
+          bottom: legendPosition === 'bottom' ? (isCompact ? 0 : 10) : undefined,
+          left:
+            legendPosition === 'left'
+              ? (isCompact ? 0 : 10)
+              : legendPosition === 'top' || legendPosition === 'bottom'
+                ? options?.legendAlign || 'center'
+                : undefined,
+          right: legendPosition === 'right' ? (isCompact ? 0 : 10) : undefined,
+          itemWidth: isCompact ? 15 : 25,
+          itemHeight: isCompact ? 10 : 14,
+          padding: isCompact ? 2 : 5,
+          data: data.labels,
+        };
 
     const labelPos = resolvePieLabelPosition(options?.dataLabelPosition);
     const outerRadius = labelPos === 'outside' ? '60%' : '70%';
-    const centerY =
-      pieLegend && (options?.legendPosition === 'bottom' || !options?.legendPosition) ? '45%' : '50%';
+    const centerY = pieLegend
+      ? legendPosition === 'bottom'
+        ? '45%'
+        : legendPosition === 'top'
+          ? '55%'
+          : '50%'
+      : '50%';
+    const centerX = pieLegend
+      ? legendPosition === 'left'
+        ? '60%'
+        : legendPosition === 'right'
+          ? '40%'
+          : '50%'
+      : '50%';
 
     return {
       ...animationSettings,
-      color: themeColors,
+      color: data.dataColors?.length ? data.dataColors : themeColors,
       legend: pieLegend,
       series: [
         {
@@ -624,7 +701,7 @@ export const buildEChartsOption = (payload: SharedChartPayload | null, colSpan: 
           radius: isRing
             ? [clampInner(options?.pieInnerRadius, 40), outerRadius]
             : outerRadius,
-          center: ['50%', centerY],
+          center: [centerX, centerY],
           startAngle: options?.pieStartAngle ?? 0,
           avoidLabelOverlap: true,
           labelLayout: { hideOverlap: true },
