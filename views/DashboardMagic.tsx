@@ -31,6 +31,7 @@ import {
   setActiveMagicDashboard,
   setMagicDashboardDataSource,
   updateMagicDashboardWidgets,
+  updateMagicDashboardGlobalFilters,
   renameMagicDashboard,
 } from '../utils/dashboards';
 import { ensureDataSources } from '../utils/dataSources';
@@ -203,6 +204,10 @@ const DashboardMagic: React.FC<DashboardMagicProps> = ({ project, onUpdateProjec
   const editingDashboard: ProjectDashboard | undefined =
     dashboards.find((d) => d.id === (selectedDashboardId || normalizedProject.activeMagicDashboardId)) || activeDashboard;
 
+  useEffect(() => {
+    setFilters(editingDashboard?.globalFilters || []);
+  }, [editingDashboard?.id]);
+
   // --- Data Logic (Moved from Analytics.tsx) ---
   const { rows: baseData, availableColumns } = useMemo(
     () => resolveDashboardBaseData(normalizedProject, editingDashboard ?? null),
@@ -245,7 +250,7 @@ const DashboardMagic: React.FC<DashboardMagicProps> = ({ project, onUpdateProjec
     return baseData.filter(row => filters.every(f => matchesFilterCondition(row, f)));
   }, [baseData, filters, matchesFilterCondition]);
 
-  const magicAggWorker = useMagicAggregationWorker(filteredData, REALPPTX_CHART_THEME);
+  const magicAggWorker = useMagicAggregationWorker(baseData, REALPPTX_CHART_THEME);
 
   const persistProject = useCallback(
     async (updated: Project) => {
@@ -253,6 +258,15 @@ const DashboardMagic: React.FC<DashboardMagicProps> = ({ project, onUpdateProjec
       await saveProject(updated);
     },
     [onUpdateProject]
+  );
+
+  const persistGlobalFilters = useCallback(
+    async (nextFilters: DashboardFilter[]) => {
+      if (!editingDashboard) return;
+      const updated = updateMagicDashboardGlobalFilters(normalizedProject, editingDashboard.id, nextFilters);
+      await persistProject(updated);
+    },
+    [editingDashboard, normalizedProject, persistProject]
   );
 
   // --- Filter Actions ---
@@ -289,16 +303,28 @@ const DashboardMagic: React.FC<DashboardMagicProps> = ({ project, onUpdateProjec
       endValue,
       dataType
     };
-    setFilters([...filters, newFilter]);
+    setFilters((prev) => {
+      const next = [...prev, newFilter];
+      void persistGlobalFilters(next);
+      return next;
+    });
     setNewFilterCol('');
   };
 
   const removeFilter = (id: string) => {
-    setFilters(filters.filter(f => f.id !== id));
+    setFilters((prev) => {
+      const next = prev.filter(f => f.id !== id);
+      void persistGlobalFilters(next);
+      return next;
+    });
   };
 
   const updateFilterValue = (id: string, val: string, field: 'value' | 'endValue' = 'value') => {
-    setFilters(filters.map(f => f.id === id ? { ...f, [field]: val } : f));
+    setFilters((prev) => {
+      const next = prev.map(f => f.id === id ? { ...f, [field]: val } : f);
+      void persistGlobalFilters(next);
+      return next;
+    });
   };
 
   const getUniqueValues = (col: string) => {
@@ -1213,8 +1239,8 @@ const DashboardMagic: React.FC<DashboardMagicProps> = ({ project, onUpdateProjec
                             <div className="flex-1 min-h-0 relative">
                               <MagicWidgetRenderer
                                 widget={w}
-                                data={filteredData}
-                                filters={w.filters}
+                                data={baseData}
+                                globalFilters={filters}
                                 theme={REALPPTX_CHART_THEME}
                                 isEditing={!isPresentationMode}
                                 isInteracting={!!draggedWidget || !!resizing}

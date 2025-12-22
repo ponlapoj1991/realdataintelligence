@@ -233,6 +233,16 @@ const SeriesConfigModal: React.FC<{
   const [yAxis, setYAxis] = useState<'left' | 'right'>(series?.yAxis || 'left');
   const [color, setColor] = useState(series?.color || COLORS[0]);
 
+  useEffect(() => {
+    if (!isOpen) return;
+    setLabel(series?.label || '');
+    setType(series?.type || 'bar');
+    setMeasure(series?.measure || 'count');
+    setMeasureCol(series?.measureCol || '');
+    setYAxis(series?.yAxis || 'left');
+    setColor(series?.color || COLORS[0]);
+  }, [isOpen, series]);
+
   const needsColumn = measure === 'sum' || measure === 'avg';
 
   if (!isOpen) return null;
@@ -796,15 +806,14 @@ const [sortSeriesId, setSortSeriesId] = useState('');
   };
 
   const handleSaveSeries = (newSeries: SeriesConfig) => {
-    const existing = series.find(s => s.id === newSeries.id);
-    if (existing) {
-      setSeries(series.map(s => s.id === newSeries.id ? newSeries : s));
-    } else {
-      setSeries([...series, newSeries]);
-      if (!sortSeriesId) {
-        setSortSeriesId(newSeries.id);
+    setSeries((prev) => {
+      const existing = prev.find(s => s.id === newSeries.id);
+      if (existing) {
+        return prev.map(s => s.id === newSeries.id ? newSeries : s);
       }
-    }
+      return [...prev, newSeries];
+    });
+    setSortSeriesId((prev) => prev || newSeries.id);
   };
 
   const handleSeriesChange = (id: string, changes: Partial<SeriesConfig>) => {

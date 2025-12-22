@@ -5,6 +5,7 @@ const now = () => Date.now();
 const normalizeDashboard = (dashboard: ProjectDashboard): ProjectDashboard => ({
   ...dashboard,
   widgets: dashboard.widgets || [],
+  globalFilters: dashboard.globalFilters || [],
   createdAt: dashboard.createdAt || now(),
   updatedAt: dashboard.updatedAt || now(),
 });
@@ -14,6 +15,7 @@ const createDashboard = (name: string, dataSourceId?: string, widgets: Dashboard
   name: name?.trim() || 'Untitled Dashboard',
   description: '',
   widgets,
+  globalFilters: [],
   dataSourceId,
   createdAt: now(),
   updatedAt: now(),
@@ -249,6 +251,22 @@ export const updateMagicDashboardWidgets = (
   const { project: normalized } = ensureMagicDashboards(project);
   const dashboards = (normalized.magicDashboards || []).map((d) =>
     d.id === dashboardId ? { ...d, widgets, updatedAt: now() } : d
+  );
+  return {
+    ...normalized,
+    magicDashboards: dashboards,
+    lastModified: now(),
+  };
+};
+
+export const updateMagicDashboardGlobalFilters = (
+  project: Project,
+  dashboardId: string,
+  globalFilters: ProjectDashboard['globalFilters']
+): Project => {
+  const { project: normalized } = ensureMagicDashboards(project);
+  const dashboards = (normalized.magicDashboards || []).map((d) =>
+    d.id === dashboardId ? { ...d, globalFilters: globalFilters || [], updatedAt: now() } : d
   );
   return {
     ...normalized,

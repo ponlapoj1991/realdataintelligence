@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState, useCallback } from 'react';
+import React, { useEffect, useMemo, useRef, useState, useCallback } from 'react';
 import * as echarts from 'echarts/core';
 import {
   BarChart,
@@ -13,10 +13,9 @@ import {
   DatasetComponent,
 } from 'echarts/components';
 import { SVGRenderer } from 'echarts/renderers';
-import { DashboardWidget, RawRow } from '../types';
+import { DashboardFilter, DashboardWidget, RawRow } from '../types';
 import { ChartTheme, CLASSIC_ANALYTICS_THEME } from '../constants/chartTheme';
 import { buildMagicEchartsOption } from '../utils/magicOptionBuilder';
-import { applyWidgetFilters } from '../utils/widgetData';
 import { buildMagicChartPayload, MagicChartPayload } from '../utils/magicChartPayload';
 import type { MagicAggregationWorkerClient } from '../hooks/useMagicAggregationWorker';
 
@@ -35,7 +34,10 @@ echarts.use([
 interface MagicWidgetRendererProps {
   widget: DashboardWidget;
   data: RawRow[];
-  filters?: any[];
+  /** Legacy: additional filters to apply without mutating the widget */
+  filters?: DashboardFilter[];
+  /** Global (Dashboard-level) filters applied to all widgets */
+  globalFilters?: DashboardFilter[];
   theme?: ChartTheme;
   onValueClick?: (value: string, widget: DashboardWidget) => void;
   /** Disable animation during editing to prevent distracting re-renders */
@@ -46,6 +48,22 @@ interface MagicWidgetRendererProps {
   eager?: boolean;
   workerClient?: MagicAggregationWorkerClient;
 }
+
+const mergeDashboardFilters = (...lists: Array<DashboardFilter[] | undefined>) => {
+  const seen = new Set<string>();
+  const merged: DashboardFilter[] = [];
+  for (const list of lists) {
+    if (!list || list.length === 0) continue;
+    for (const f of list) {
+      if (!f || !f.column) continue;
+      const key = `${f.column}|${f.dataType || ''}|${f.value || ''}|${f.endValue || ''}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      merged.push(f);
+    }
+  }
+  return merged.length ? merged : undefined;
+};
 
 const buildOption = (payload: MagicChartPayload | null) => {
   if (!payload) return null;
@@ -336,6 +354,7 @@ const MagicWidgetRenderer: React.FC<MagicWidgetRendererProps> = ({
   widget,
   data,
   filters,
+  globalFilters,
   theme,
   onValueClick,
   isEditing = false,
@@ -353,6 +372,12 @@ const MagicWidgetRenderer: React.FC<MagicWidgetRendererProps> = ({
   const [payload, setPayload] = useState<MagicChartPayload | null>(null);
   const [didCompute, setDidCompute] = useState(false);
   const isKpiWidget = widget.type === 'kpi';
+
+  const resolvedWidget = useMemo(() => {
+    const mergedFilters = mergeDashboardFilters(widget.filters, filters, globalFilters);
+    if (!mergedFilters) return widget;
+    return { ...widget, filters: mergedFilters };
+  }, [widget, filters, globalFilters]);
 
   const cancelDispose = useCallback(() => {
     if (disposeTimerRef.current) {
@@ -403,12 +428,12 @@ const MagicWidgetRenderer: React.FC<MagicWidgetRendererProps> = ({
 
     let cancelled = false;
     const run = async () => {
-      if (cancelled) return;
+        if (cancelled) return;
       try {
         if (isEditing) setDidCompute(false);
         const next = workerClient?.isSupported
-          ? await workerClient.requestPayload({ widget, filters, theme: activeTheme })
-          : buildMagicChartPayload(widget, applyWidgetFilters(data, filters), { theme: activeTheme });
+          ? await workerClient.requestPayload({ widget: resolvedWidget, theme: activeTheme })
+          : buildMagicChartPayload(resolvedWidget, data, { theme: activeTheme });
         if (cancelled) return;
         setPayload(next);
         setDidCompute(true);
@@ -442,7 +467,7 @@ const MagicWidgetRenderer: React.FC<MagicWidgetRendererProps> = ({
         else window.clearTimeout(handle);
       }
     };
-  }, [isInView, isInteracting, widget, data, filters, activeTheme, workerClient, isEditing, isKpiWidget, eager]);
+  }, [isInView, isInteracting, resolvedWidget, data, activeTheme, workerClient, isEditing, isKpiWidget, eager]);
 
   // Init chart only when visible
   useEffect(() => {

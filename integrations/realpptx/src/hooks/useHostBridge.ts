@@ -138,7 +138,7 @@ export default () => {
           const color = payload.options?.dataLabelColor || themeAccent
 
           const safeText = escapeHtml(text)
-          const content = `<p style="text-align:center;"><span style="font-size:${fontSize}px; font-weight:${fontWeight}; color:${color};${fontFamily ? ` font-family:${fontFamily};` : ''}">${safeText}</span></p>`
+          const content = `<p style="text-align:center;"><span style="font-weight:${fontWeight};${fontFamily ? ` font-family:${fontFamily};` : ''}">${safeText}</span></p>`
 
           const slideW = slidesStore.viewportSize
           const slideH = slidesStore.viewportSize * slidesStore.viewportRatio
@@ -165,6 +165,11 @@ export default () => {
               valign: 'middle',
               defaultColor: color,
               defaultFontSize: `${fontSize}px`,
+              ...(fontFamily ? { defaultFontName: fontFamily } : {}),
+              name: payload.meta?.widgetTitle,
+              widgetId: payload.meta?.widgetId,
+              dashboardId: payload.meta?.sourceDashboardId,
+              dashboardWidgetKind: 'kpi',
             },
           })
         }
@@ -285,6 +290,35 @@ export default () => {
                 themeColors: payload.theme?.colors || el.themeColors,
                 textColor: payload.theme?.textColor || el.textColor,
                 lineColor: payload.theme?.lineColor || el.lineColor,
+              }
+            }
+            return el
+          }),
+        }))
+        slidesStore.setSlides(slides)
+      }
+    }
+
+    // Automation Report: Handle updated KPI text from Dashboard
+    if (event.data?.type === 'update-kpi-text') {
+      const payload = event.data?.payload as {
+        elementId: string
+        content: string
+        defaultColor?: string
+        defaultFontName?: string
+      } | undefined
+
+      if (payload?.elementId && typeof payload.content === 'string') {
+        const slides = slidesStore.slides.map(slide => ({
+          ...slide,
+          elements: slide.elements.map(el => {
+            if (el.id === payload.elementId && el.type === 'text') {
+              return {
+                ...el,
+                content: payload.content,
+                ...(payload.defaultColor ? { defaultColor: payload.defaultColor } : {}),
+                ...(payload.defaultFontName ? { defaultFontName: payload.defaultFontName } : {}),
+                dashboardWidgetKind: 'kpi',
               }
             }
             return el

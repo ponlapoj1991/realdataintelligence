@@ -136,6 +136,10 @@ interface PPTBaseElement {
   rotate: number
   link?: PPTElementLink
   name?: string
+  // Automation Report: Link to Dashboard widget for updates
+  widgetId?: string
+  dashboardId?: string
+  dashboardWidgetKind?: 'kpi'
 }
 
 

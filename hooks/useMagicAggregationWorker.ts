@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useCallback, useState } from 'react'
-import type { DashboardWidget, RawRow } from '../types'
+import type { DashboardFilter, DashboardWidget, RawRow } from '../types'
 import type { ChartTheme } from '../constants/chartTheme'
 import type { MagicChartPayload } from '../utils/magicChartPayload'
 
@@ -23,7 +23,7 @@ export interface MagicAggregationWorkerClient {
   isSupported: boolean
   requestPayload: (params: {
     widget: DashboardWidget
-    filters?: any[]
+    filters?: DashboardFilter[]
     theme?: ChartTheme
   }) => Promise<MagicChartPayload | null>
 }
