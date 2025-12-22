@@ -3,7 +3,6 @@
 import type { DashboardFilter, DashboardWidget, RawRow } from '../types'
 import type { ChartTheme } from '../constants/chartTheme'
 import { buildMagicChartPayload, type MagicChartPayload } from '../utils/magicChartPayload'
-import { buildMagicEchartsOption } from '../utils/magicOptionBuilder'
 
 type SetRowsMessage = {
   type: 'setRows'
@@ -71,9 +70,6 @@ self.onmessage = (event: MessageEvent<WorkerMessage>) => {
       const mergedFilters = mergeDashboardFilters(msg.widget.filters, msg.filters)
       const mergedWidget = mergedFilters ? { ...msg.widget, filters: mergedFilters } : msg.widget
       const payload = buildMagicChartPayload(mergedWidget, rows, { theme: msg.theme })
-      if (payload && payload.type !== 'kpi') {
-        payload.optionRaw = buildMagicEchartsOption(payload, mergedWidget.colSpan || 2, !!msg.isEditing)
-      }
       self.postMessage({
         type: 'payload',
         requestId: msg.requestId,
