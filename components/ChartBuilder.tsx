@@ -657,6 +657,8 @@ const [sortSeriesId, setSortSeriesId] = useState('');
     return sorted.map(({ __total, ...rest }) => rest);
   };
 
+  const supports = useMemo(() => (type ? getChartSupports(type) : null), [type]);
+
   // Get all unique categories from data
   const allCategories = useMemo(() => {
     if (!dimension || data.length === 0) return [];
@@ -954,7 +956,6 @@ const [sortSeriesId, setSortSeriesId] = useState('');
     setShowTypeSelector(false);
   };
 
-  const supports = type ? getChartSupports(type) : null;
   const columnProfiles = useMemo(() => buildColumnProfiles(data), [data]);
   const showMajorControl = useMemo(() => {
     if (!type || !dimension) return false;
