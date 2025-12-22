@@ -42,6 +42,8 @@ interface MagicWidgetRendererProps {
   isEditing?: boolean;
   /** UI is being dragged/resized; defer heavy work until it stops */
   isInteracting?: boolean;
+  /** Force render immediately (ChartBuilder preview) */
+  eager?: boolean;
   workerClient?: MagicAggregationWorkerClient;
 }
 
@@ -338,6 +340,7 @@ const MagicWidgetRenderer: React.FC<MagicWidgetRendererProps> = ({
   onValueClick,
   isEditing = false,
   isInteracting = false,
+  eager = false,
   workerClient,
 }) => {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -371,7 +374,7 @@ const MagicWidgetRenderer: React.FC<MagicWidgetRendererProps> = ({
 
   // IntersectionObserver: lazy init + dispose when out-of-view
   useEffect(() => {
-    if (isKpiWidget) {
+    if (isKpiWidget || eager) {
       setIsInView(true);
       return;
     }
@@ -391,11 +394,11 @@ const MagicWidgetRenderer: React.FC<MagicWidgetRendererProps> = ({
     return () => {
       observer.disconnect();
     };
-  }, [isKpiWidget]);
+  }, [isKpiWidget, eager]);
 
   // Build payload (heavy): run only when visible and not interacting
   useEffect(() => {
-    if (!isInView && !isKpiWidget) return;
+    if (!isInView && !isKpiWidget && !eager) return;
     if (isInteracting) return;
 
     let cancelled = false;
@@ -425,7 +428,7 @@ const MagicWidgetRenderer: React.FC<MagicWidgetRendererProps> = ({
     let handle: number | null = null;
 
     if (isEditing) {
-      handle = window.setTimeout(() => void run(), 120);
+      handle = window.setTimeout(() => void run(), eager ? 0 : 120);
     } else if (ric) {
       handle = ric(() => void run(), { timeout: 800 });
     } else {
@@ -439,7 +442,7 @@ const MagicWidgetRenderer: React.FC<MagicWidgetRendererProps> = ({
         else window.clearTimeout(handle);
       }
     };
-  }, [isInView, isInteracting, widget, data, filters, activeTheme, workerClient, isEditing, isKpiWidget]);
+  }, [isInView, isInteracting, widget, data, filters, activeTheme, workerClient, isEditing, isKpiWidget, eager]);
 
   // Init chart only when visible
   useEffect(() => {
@@ -545,27 +548,77 @@ const MagicWidgetRenderer: React.FC<MagicWidgetRendererProps> = ({
   }
 
   if (payload?.type === 'kpi') {
-    const value = payload.data?.series?.[0]?.[0] ?? 0;
-    const formatter = new Intl.NumberFormat(undefined, {
-      notation: widget.valueFormat === 'compact' ? 'compact' : 'standard',
-      maximumFractionDigits: widget.valueFormat === 'percent' ? 2 : 2,
-    });
+    const getNumericValue = (raw: any) => {
+      if (raw === null || raw === undefined) return 0;
+      if (typeof raw === 'number') return Number.isFinite(raw) ? raw : 0;
+      if (typeof raw === 'object' && (raw as any).value !== undefined) {
+        const n = Number((raw as any).value);
+        return Number.isFinite(n) ? n : 0;
+      }
+      const n = Number(raw);
+      return Number.isFinite(n) ? n : 0;
+    };
+
+    const formatKpiValue = (
+      value: number,
+      mode?: 'auto' | 'text' | 'number' | 'compact' | 'accounting'
+    ) => {
+      if (!Number.isFinite(value)) return '0';
+      switch (mode) {
+        case 'text':
+          return String(value);
+        case 'number':
+          return new Intl.NumberFormat(undefined, { maximumFractionDigits: 0 }).format(value);
+        case 'compact':
+          return new Intl.NumberFormat(undefined, { notation: 'compact', compactDisplay: 'short', maximumFractionDigits: 1 }).format(value);
+        case 'accounting':
+          return new Intl.NumberFormat(undefined, { useGrouping: true, minimumFractionDigits: 0, maximumFractionDigits: 2 }).format(value);
+        case 'auto':
+        default: {
+          const abs = Math.abs(value);
+          if (abs >= 1_000_000) {
+            return new Intl.NumberFormat(undefined, { notation: 'compact', compactDisplay: 'short', maximumFractionDigits: 1 }).format(value);
+          }
+          if (Number.isInteger(value)) {
+            return new Intl.NumberFormat(undefined, { maximumFractionDigits: 0 }).format(value);
+          }
+          return new Intl.NumberFormat(undefined, { useGrouping: true, minimumFractionDigits: 0, maximumFractionDigits: 2 }).format(value);
+        }
+      }
+    };
+
+    const raw = payload.data?.series?.[0]?.[0];
+    const value = getNumericValue(raw);
+    const valueFormat = payload.options?.dataLabelValueFormat ?? widget.dataLabels?.valueFormat ?? 'auto';
     const textColor = payload.textColor || '#111827';
     const lineColor = payload.lineColor || '#E5E7EB';
-    const accent = payload.themeColors?.[0] || '#111827';
+    const accentFallback = payload.themeColors?.[0] || widget.color || '#111827';
+    const valueColor = payload.options?.dataLabelColor || widget.dataLabels?.color || accentFallback;
+    const fontFamily = payload.options?.dataLabelFontFamily || widget.dataLabels?.fontFamily;
+    const fontWeight = payload.options?.dataLabelFontWeight || widget.dataLabels?.fontWeight || 'bold';
+    const fontSize = payload.options?.dataLabelFontSize || widget.dataLabels?.fontSize;
     const titleText = widget.chartTitle || widget.title || 'Number';
+    const valueText = formatKpiValue(value, valueFormat);
 
     return (
       <div className="w-full h-full flex items-center justify-center">
         <div
-          className="w-full h-full rounded-xl border bg-white flex flex-col justify-center px-6"
+          className="w-full h-full rounded-xl border bg-white flex flex-col items-center justify-center px-6 text-center"
           style={{ borderColor: lineColor }}
         >
           <div className="text-xs font-semibold tracking-wide uppercase" style={{ color: textColor, opacity: 0.7 }}>
             {titleText}
           </div>
-          <div className="mt-2 text-4xl font-bold tabular-nums" style={{ color: accent }}>
-            {formatter.format(value)}
+          <div
+            className="mt-2 tabular-nums leading-none"
+            style={{
+              color: valueColor,
+              fontSize: typeof fontSize === 'number' ? `${fontSize}px` : 'clamp(36px, 7vw, 88px)',
+              fontWeight,
+              ...(fontFamily ? { fontFamily } : {}),
+            }}
+          >
+            {valueText}
           </div>
           {widget.subtitle ? (
             <div className="mt-1 text-xs" style={{ color: textColor, opacity: 0.65 }}>

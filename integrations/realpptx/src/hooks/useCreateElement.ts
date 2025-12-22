@@ -50,6 +50,7 @@ interface LineElementPosition {
 interface CreateTextData {
   content?: string
   vertical?: boolean
+  autoFocus?: boolean
 }
 
 export default () => {
@@ -197,6 +198,7 @@ export default () => {
     const { left, top, width, height } = position
     const content = data?.content || ''
     const vertical = data?.vertical || false
+    const autoFocus = data?.autoFocus !== false
 
     const id = nanoid(10)
     createElement({
@@ -212,11 +214,14 @@ export default () => {
       defaultColor: theme.value.fontColor,
       vertical,
     }, () => {
-      setTimeout(() => {
-        const editorRef: HTMLElement | null = document.querySelector(`#editable-element-${id} .ProseMirror`)
-        if (editorRef) editorRef.focus()
-      }, 0)
+      if (autoFocus) {
+        setTimeout(() => {
+          const editorRef: HTMLElement | null = document.querySelector(`#editable-element-${id} .ProseMirror`)
+          if (editorRef) editorRef.focus()
+        }, 0)
+      }
     })
+    return id
   }
   
   /**

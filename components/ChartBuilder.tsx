@@ -581,8 +581,10 @@ const [sortSeriesId, setSortSeriesId] = useState('');
       const nextLabels = initialWidget.dataLabels || createDefaultDataLabels();
       if (initialWidget.type === 'kpi' && !initialWidget.dataLabels) {
         nextLabels.enabled = true;
-        nextLabels.fontSize = 42;
+        nextLabels.position = 'center';
+        nextLabels.fontSize = 72;
         nextLabels.fontWeight = 'bold';
+        nextLabels.color = initialWidget.color || CLASSIC_ANALYTICS_THEME.palette[0] || nextLabels.color;
       }
       setDataLabels(nextLabels);
       setXAxis(initialWidget.xAxis || createDefaultAxis({ min: undefined, max: undefined, format: undefined }));
@@ -883,7 +885,15 @@ const [sortSeriesId, setSortSeriesId] = useState('');
     setCategoryGap(20);
     setLegend(createDefaultLegend());
     if (selectedType === 'kpi') {
-      setDataLabels({ ...createDefaultDataLabels(), enabled: true, fontSize: 42, fontWeight: 'bold' });
+      const accent = CLASSIC_ANALYTICS_THEME.palette[0] || '#3B82F6';
+      setDataLabels({
+        ...createDefaultDataLabels(),
+        enabled: true,
+        position: 'center',
+        fontSize: 72,
+        fontWeight: 'bold',
+        color: accent,
+      });
     } else {
       setDataLabels(createDefaultDataLabels());
     }
@@ -1108,6 +1118,7 @@ const [sortSeriesId, setSortSeriesId] = useState('');
                     onValueClick={handlePreviewCategoryClick}
                     theme={chartTheme}
                     isEditing={true}
+                    eager
                   />
                   {/* Interactive overlay for quick access to panels - only show buttons relevant to chart type */}
                   <div className="pointer-events-none absolute inset-0 flex flex-col justify-between">

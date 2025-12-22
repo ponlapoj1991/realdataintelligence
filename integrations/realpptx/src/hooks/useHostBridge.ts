@@ -8,7 +8,7 @@ import { runWhenIdle } from './hostBridge/idle'
 import { applyHostSettingsToSlides, emitPresentationExportToHost, migrateLegacyDraftToHost } from './hostBridge/messages'
 
 interface DashboardChartMessage {
-  chartType: ChartType
+  chartType: ChartType | 'kpi'
   data: ChartData
   options?: ChartOptions
   theme?: {
@@ -24,7 +24,7 @@ interface DashboardChartMessage {
 }
 
 export default () => {
-  const { createImageElement, createChartElement } = useCreateElement()
+  const { createImageElement, createChartElement, createTextElement } = useCreateElement()
   const mainStore = useMainStore()
   const slidesStore = useSlidesStore()
   const { resetSlides } = useSlideHandler()
@@ -78,17 +78,109 @@ export default () => {
     if (event.data?.type === 'insert-dashboard-chart') {
       const payload = event.data?.payload as DashboardChartMessage | undefined
       if (payload?.chartType && payload.data) {
-        createChartElement(payload.chartType, {
-          data: payload.data,
-          options: payload.options,
-          themeColors: payload.theme?.colors,
-          textColor: payload.theme?.textColor,
-          lineColor: payload.theme?.lineColor,
-          name: payload.meta?.widgetTitle,
-          // Automation Report: Store link to Dashboard widget
-          widgetId: payload.meta?.widgetId,
-          dashboardId: payload.meta?.sourceDashboardId,
-        })
+        if (payload.chartType === 'kpi') {
+          const escapeHtml = (input: string) =>
+            input
+              .replace(/&/g, '&amp;')
+              .replace(/</g, '&lt;')
+              .replace(/>/g, '&gt;')
+              .replace(/\"/g, '&quot;')
+              .replace(/'/g, '&#39;')
+
+          const toNumber = (raw: unknown) => {
+            if (raw === null || raw === undefined) return 0
+            if (typeof raw === 'number') return Number.isFinite(raw) ? raw : 0
+            if (typeof raw === 'object' && (raw as any).value !== undefined) {
+              const n = Number((raw as any).value)
+              return Number.isFinite(n) ? n : 0
+            }
+            const n = Number(raw)
+            return Number.isFinite(n) ? n : 0
+          }
+
+          const formatKpiValue = (
+            value: number,
+            mode?: 'auto' | 'text' | 'number' | 'compact' | 'accounting',
+          ) => {
+            if (!Number.isFinite(value)) return '0'
+            switch (mode) {
+              case 'text':
+                return String(value)
+              case 'number':
+                return new Intl.NumberFormat(undefined, { maximumFractionDigits: 0 }).format(value)
+              case 'compact':
+                return new Intl.NumberFormat(undefined, { notation: 'compact', compactDisplay: 'short', maximumFractionDigits: 1 }).format(value)
+              case 'accounting':
+                return new Intl.NumberFormat(undefined, { useGrouping: true, minimumFractionDigits: 0, maximumFractionDigits: 2 }).format(value)
+              case 'auto':
+              default: {
+                const abs = Math.abs(value)
+                if (abs >= 1_000_000) {
+                  return new Intl.NumberFormat(undefined, { notation: 'compact', compactDisplay: 'short', maximumFractionDigits: 1 }).format(value)
+                }
+                if (Number.isInteger(value)) {
+                  return new Intl.NumberFormat(undefined, { maximumFractionDigits: 0 }).format(value)
+                }
+                return new Intl.NumberFormat(undefined, { useGrouping: true, minimumFractionDigits: 0, maximumFractionDigits: 2 }).format(value)
+              }
+            }
+          }
+
+          const raw = payload.data?.series?.[0]?.[0]
+          const value = toNumber(raw)
+          const valueFormat = payload.options?.dataLabelValueFormat
+          const text = formatKpiValue(value, valueFormat)
+          const fontSize = typeof payload.options?.dataLabelFontSize === 'number' ? payload.options.dataLabelFontSize : 72
+          const fontWeight = payload.options?.dataLabelFontWeight || 'bold'
+          const fontFamily = payload.options?.dataLabelFontFamily
+
+          const themeAccent = payload.theme?.colors?.[0] || payload.theme?.textColor || '#111827'
+          const color = payload.options?.dataLabelColor || themeAccent
+
+          const safeText = escapeHtml(text)
+          const content = `<p style="text-align:center;"><span style="font-size:${fontSize}px; font-weight:${fontWeight}; color:${color};${fontFamily ? ` font-family:${fontFamily};` : ''}">${safeText}</span></p>`
+
+          const slideW = slidesStore.viewportSize
+          const slideH = slidesStore.viewportSize * slidesStore.viewportRatio
+          const boxW = Math.min(700, Math.max(260, slideW * 0.7))
+          const boxH = Math.min(260, Math.max(140, slideH * 0.28))
+
+          const id = createTextElement(
+            {
+              left: (slideW - boxW) / 2,
+              top: (slideH - boxH) / 2,
+              width: boxW,
+              height: boxH,
+            },
+            { content, autoFocus: false },
+          )
+
+          slidesStore.updateElement({
+            id,
+            props: {
+              autoResize: false,
+              padding: 0,
+              lineHeight: 1,
+              paragraphSpace: 0,
+              valign: 'middle',
+              defaultColor: color,
+              defaultFontSize: `${fontSize}px`,
+            },
+          })
+        }
+        else {
+          createChartElement(payload.chartType, {
+            data: payload.data,
+            options: payload.options,
+            themeColors: payload.theme?.colors,
+            textColor: payload.theme?.textColor,
+            lineColor: payload.theme?.lineColor,
+            name: payload.meta?.widgetTitle,
+            // Automation Report: Store link to Dashboard widget
+            widgetId: payload.meta?.widgetId,
+            dashboardId: payload.meta?.sourceDashboardId,
+          })
+        }
       }
     }
 
