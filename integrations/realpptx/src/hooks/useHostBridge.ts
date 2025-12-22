@@ -44,7 +44,8 @@ export default () => {
       mainStore.canvasDragged ||
       mainStore.isScaling ||
       !!mainStore.creatingElement ||
-      mainStore.creatingCustomShape
+      mainStore.creatingCustomShape ||
+      mainStore.isTyping
     )
   })
 
@@ -277,25 +278,19 @@ export default () => {
       } | undefined
 
       if (payload?.elementId && payload.data) {
-        // Find the chart element and update it
-        const slides = slidesStore.slides.map(slide => ({
-          ...slide,
-          elements: slide.elements.map(el => {
-            if (el.id === payload.elementId && el.type === 'chart') {
-              return {
-                ...el,
-                data: payload.data,
-                options: payload.options || el.options,
-                optionRaw: undefined,
-                themeColors: payload.theme?.colors || el.themeColors,
-                textColor: payload.theme?.textColor || el.textColor,
-                lineColor: payload.theme?.lineColor || el.lineColor,
-              }
-            }
-            return el
-          }),
-        }))
-        slidesStore.setSlides(slides)
+        const nextProps: any = {
+          data: payload.data,
+          optionRaw: undefined,
+        }
+        if (payload.options) nextProps.options = payload.options
+        if (payload.theme?.colors) nextProps.themeColors = payload.theme.colors
+        if (payload.theme?.textColor) nextProps.textColor = payload.theme.textColor
+        if (payload.theme?.lineColor) nextProps.lineColor = payload.theme.lineColor
+
+        slidesStore.updateElement({
+          id: payload.elementId,
+          props: nextProps,
+        })
       }
     }
 
@@ -309,22 +304,15 @@ export default () => {
       } | undefined
 
       if (payload?.elementId && typeof payload.content === 'string') {
-        const slides = slidesStore.slides.map(slide => ({
-          ...slide,
-          elements: slide.elements.map(el => {
-            if (el.id === payload.elementId && el.type === 'text') {
-              return {
-                ...el,
-                content: payload.content,
-                ...(payload.defaultColor ? { defaultColor: payload.defaultColor } : {}),
-                ...(payload.defaultFontName ? { defaultFontName: payload.defaultFontName } : {}),
-                dashboardWidgetKind: 'kpi' as const,
-              }
-            }
-            return el
-          }),
-        }))
-        slidesStore.setSlides(slides)
+        slidesStore.updateElement({
+          id: payload.elementId,
+          props: {
+            content: payload.content,
+            ...(payload.defaultColor ? { defaultColor: payload.defaultColor } : {}),
+            ...(payload.defaultFontName ? { defaultFontName: payload.defaultFontName } : {}),
+            dashboardWidgetKind: 'kpi' as const,
+          } as any,
+        })
       }
     }
   }
@@ -402,7 +390,7 @@ export default () => {
   }
 
   watch(
-    () => [slidesStore.slides, slidesStore.title, slidesStore.theme, presentationId.value],
+    () => [slidesStore.mutationTick, slidesStore.title, slidesStore.theme, presentationId.value],
     () => {
       if (!presentationId.value) return
       if (applyingHostUpdate.value) return
@@ -411,7 +399,6 @@ export default () => {
       if (isInteracting.value) return
       scheduleAutosave(1200)
     },
-    { deep: true }
   )
 
   watch(

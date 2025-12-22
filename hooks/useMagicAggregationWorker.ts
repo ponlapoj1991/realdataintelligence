@@ -25,6 +25,7 @@ export interface MagicAggregationWorkerClient {
     widget: DashboardWidget
     filters?: DashboardFilter[]
     theme?: ChartTheme
+    isEditing?: boolean
   }) => Promise<MagicChartPayload | null>
 }
 
@@ -106,7 +107,7 @@ export function useMagicAggregationWorker(rows: RawRow[], theme?: ChartTheme): M
   }, [rows, isSupported, ready])
 
   const requestPayload: MagicAggregationWorkerClient['requestPayload'] = useCallback(
-    ({ widget, filters, theme: themeOverride }) => {
+    ({ widget, filters, theme: themeOverride, isEditing }) => {
       if (!isSupported || !workerRef.current) {
         return Promise.resolve(null)
       }
@@ -123,6 +124,7 @@ export function useMagicAggregationWorker(rows: RawRow[], theme?: ChartTheme): M
           widget,
           filters,
           theme: themeOverride ?? theme,
+          isEditing,
         })
       })
     },

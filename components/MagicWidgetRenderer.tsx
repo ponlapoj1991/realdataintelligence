@@ -432,7 +432,7 @@ const MagicWidgetRenderer: React.FC<MagicWidgetRendererProps> = ({
       try {
         if (isEditing) setDidCompute(false);
         const next = workerClient?.isSupported
-          ? await workerClient.requestPayload({ widget: resolvedWidget, theme: activeTheme })
+          ? await workerClient.requestPayload({ widget: resolvedWidget, theme: activeTheme, isEditing })
           : buildMagicChartPayload(resolvedWidget, data, { theme: activeTheme });
         if (cancelled) return;
         setPayload(next);
@@ -501,8 +501,13 @@ const MagicWidgetRenderer: React.FC<MagicWidgetRendererProps> = ({
     const chart = chartRef.current;
 
     if (resizeObserverRef.current) resizeObserverRef.current.disconnect();
+    let resizeRaf: number | null = null;
     resizeObserverRef.current = new ResizeObserver(() => {
-      chart.resize();
+      if (resizeRaf !== null) window.cancelAnimationFrame(resizeRaf);
+      resizeRaf = window.requestAnimationFrame(() => {
+        resizeRaf = null;
+        chart.resize();
+      });
     });
     resizeObserverRef.current.observe(el);
 
@@ -510,6 +515,10 @@ const MagicWidgetRenderer: React.FC<MagicWidgetRendererProps> = ({
       if (resizeObserverRef.current) {
         resizeObserverRef.current.disconnect();
         resizeObserverRef.current = null;
+      }
+      if (resizeRaf !== null) {
+        window.cancelAnimationFrame(resizeRaf);
+        resizeRaf = null;
       }
     };
   }, [isInView, scheduleDispose, cancelDispose, isKpiWidget]);
@@ -524,7 +533,7 @@ const MagicWidgetRenderer: React.FC<MagicWidgetRendererProps> = ({
     // KPI is rendered as a card (no ECharts)
     if (payload.type === 'kpi') return;
 
-    const option = buildMagicEchartsOption(payload, widget.colSpan || 2, isEditing);
+    const option = payload.optionRaw ?? buildMagicEchartsOption(payload, widget.colSpan || 2, isEditing);
     if (!option) return;
     chart.setOption(option as any, { notMerge: true, lazyUpdate: true } as any);
   }, [payload, isInView, widget.colSpan, isEditing]);

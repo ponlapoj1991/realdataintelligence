@@ -209,10 +209,15 @@ const DashboardMagic: React.FC<DashboardMagicProps> = ({ project, onUpdateProjec
   }, [editingDashboard?.id]);
 
   // --- Data Logic (Moved from Analytics.tsx) ---
-  const { rows: baseData, availableColumns } = useMemo(
-    () => resolveDashboardBaseData(normalizedProject, editingDashboard ?? null),
-    [normalizedProject, editingDashboard]
-  );
+  const { rows: baseData, availableColumns } = useMemo(() => {
+    return resolveDashboardBaseData(normalizedProject, editingDashboard ?? null);
+  }, [
+    // Keep base data stable while editing widgets to avoid re-sending huge rows to the worker.
+    normalizedProject.dataSources,
+    normalizedProject.activeDataSourceId,
+    normalizedProject.transformRules,
+    editingDashboard?.dataSourceId,
+  ]);
 
   const columnTypeMap = useMemo(() => {
     const sampleRows = baseData.slice(0, SAMPLE_SIZE);

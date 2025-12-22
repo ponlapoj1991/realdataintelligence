@@ -39,6 +39,7 @@ import { getChartSupports, getDefaultOrientation, validateChartConfig } from '..
 import MagicWidgetRenderer from './MagicWidgetRenderer';
 import { buildColumnProfiles } from '../utils/columnProfiles';
 import { buildFieldErrors, getConstraintsForType, hasBlockingErrors } from '../utils/chartValidation';
+import { useMagicAggregationWorker } from '../hooks/useMagicAggregationWorker';
 
 interface ChartBuilderProps {
   isOpen: boolean;
@@ -404,6 +405,7 @@ const ChartBuilder: React.FC<ChartBuilderProps> = ({
   data,
   chartTheme = CLASSIC_ANALYTICS_THEME
 }) => {
+  const previewWorker = useMagicAggregationWorker(data, chartTheme);
   // UI State
   const [showTypeSelector, setShowTypeSelector] = useState(true); // Show type selector first
   const [activeTab, setActiveTab] = useState<'setup' | 'customize'>('setup');
@@ -1128,6 +1130,7 @@ const [sortSeriesId, setSortSeriesId] = useState('');
                     theme={chartTheme}
                     isEditing={true}
                     eager
+                    workerClient={previewWorker}
                   />
                   {/* Interactive overlay for quick access to panels - only show buttons relevant to chart type */}
                   <div className="pointer-events-none absolute inset-0 flex flex-col justify-between">
