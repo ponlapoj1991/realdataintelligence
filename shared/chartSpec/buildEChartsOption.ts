@@ -23,7 +23,17 @@ export const buildEChartsOption = (payload: SharedChartPayload | null, colSpan: 
 
   const buildAxisLine = (color?: string) => (color ? { lineStyle: { color } } : undefined);
 
-  const buildAxisLabel = (cfg: { fontSize?: number; fontFamily?: string; color?: string; rotate?: number }) => ({
+  type AxisLabelConfig = {
+    color?: string;
+    fontSize: number;
+    fontFamily?: string;
+    rotate?: number;
+    overflow: 'truncate';
+    width?: number;
+    formatter?: (value: any) => string;
+  };
+
+  const buildAxisLabel = (cfg: { fontSize?: number; fontFamily?: string; color?: string; rotate?: number }): AxisLabelConfig => ({
     ...(cfg.color || textColor ? { color: cfg.color ?? textColor } : {}),
     fontSize: typeof cfg.fontSize === 'number' ? (isCompact ? Math.max(8, cfg.fontSize - 2) : cfg.fontSize) : baseFontSize,
     ...(cfg.fontFamily ? { fontFamily: cfg.fontFamily } : {}),
