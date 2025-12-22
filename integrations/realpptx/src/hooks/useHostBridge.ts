@@ -169,7 +169,7 @@ export default () => {
               name: payload.meta?.widgetTitle,
               widgetId: payload.meta?.widgetId,
               dashboardId: payload.meta?.sourceDashboardId,
-              dashboardWidgetKind: 'kpi',
+              dashboardWidgetKind: 'kpi' as const,
             },
           })
         }
@@ -318,7 +318,7 @@ export default () => {
                 content: payload.content,
                 ...(payload.defaultColor ? { defaultColor: payload.defaultColor } : {}),
                 ...(payload.defaultFontName ? { defaultFontName: payload.defaultFontName } : {}),
-                dashboardWidgetKind: 'kpi',
+                dashboardWidgetKind: 'kpi' as const,
               }
             }
             return el
