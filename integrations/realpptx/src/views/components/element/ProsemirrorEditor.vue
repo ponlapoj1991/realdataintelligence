@@ -64,16 +64,22 @@ const handleInput = debounce(function(isHanldeHistory = false) {
   })
 }, 300, { trailing: true })
 
+const typingOff = debounce(function() {
+  mainStore.setTypingState(false)
+}, 450, { trailing: true })
+
 const handleFocus = () => {
   // 多选且按下了ctrl或shift键时，不禁用全局快捷键
   if (!ctrlOrShiftKeyActive.value || activeElementIdList.value.length <= 1) {
     mainStore.setDisableHotkeysState(true)
   }
+  mainStore.setTypingState(false)
   emit('focus')
 }
 
 const handleBlur = () => {
   mainStore.setDisableHotkeysState(false)
+  mainStore.setTypingState(false)
   emit('blur')
 }
 
@@ -94,6 +100,8 @@ const handleKeydown = (editorView: EditorView, e: KeyboardEvent) => {
 
   handleInput(isHanldeHistory)
   handleClick()
+  mainStore.setTypingState(true)
+  typingOff()
 }
 
 // 将富文本内容同步到DOM
@@ -300,6 +308,8 @@ onMounted(() => {
   if (props.autoFocus) editorView.focus()
 })
 onUnmounted(() => {
+  typingOff.cancel()
+  mainStore.setTypingState(false)
   editorView && editorView.destroy()
 })
 

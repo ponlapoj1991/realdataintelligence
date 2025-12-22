@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useCallback, useState } from 'react'
-import type { DashboardWidget, RawRow } from '../types'
+import type { DashboardFilter, DashboardWidget, RawRow } from '../types'
 import type { ChartTheme } from '../constants/chartTheme'
 import type { MagicChartPayload } from '../utils/magicChartPayload'
 
@@ -23,8 +23,9 @@ export interface MagicAggregationWorkerClient {
   isSupported: boolean
   requestPayload: (params: {
     widget: DashboardWidget
-    filters?: any[]
+    filters?: DashboardFilter[]
     theme?: ChartTheme
+    isEditing?: boolean
   }) => Promise<MagicChartPayload | null>
 }
 
@@ -106,7 +107,7 @@ export function useMagicAggregationWorker(rows: RawRow[], theme?: ChartTheme): M
   }, [rows, isSupported, ready])
 
   const requestPayload: MagicAggregationWorkerClient['requestPayload'] = useCallback(
-    ({ widget, filters, theme: themeOverride }) => {
+    ({ widget, filters, theme: themeOverride, isEditing }) => {
       if (!isSupported || !workerRef.current) {
         return Promise.resolve(null)
       }
@@ -123,6 +124,7 @@ export function useMagicAggregationWorker(rows: RawRow[], theme?: ChartTheme): M
           widget,
           filters,
           theme: themeOverride ?? theme,
+          isEditing,
         })
       })
     },

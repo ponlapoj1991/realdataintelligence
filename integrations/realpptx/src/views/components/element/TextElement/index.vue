@@ -185,6 +185,75 @@ const isHandleElement = computed(() => handleElementId.value === props.elementIn
 watch(isHandleElement, () => {
   if (!isHandleElement.value) checkEmptyText()
 })
+
+const isDashboardKpi = computed(() => {
+  return (
+    props.elementInfo.autoResize === false &&
+    props.elementInfo.dashboardWidgetKind === 'kpi' &&
+    !!props.elementInfo.widgetId &&
+    !!props.elementInfo.dashboardId
+  )
+})
+
+const extractPlainText = (html: string) => {
+  return String(html || '')
+    .replace(/<br\s*\/?>/gi, '\n')
+    .replace(/<[^>]+>/g, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
+const parsePx = (value?: string) => {
+  const n = Number(String(value || '').replace('px', '').trim())
+  return Number.isFinite(n) ? n : null
+}
+
+const computeKpiAutoFontPx = () => {
+  const padding = props.elementInfo.padding ?? 0
+  const width = Math.max(1, (props.elementInfo.width || 0) - padding * 2)
+  const height = Math.max(1, (props.elementInfo.height || 0) - padding * 2)
+  const text = extractPlainText(props.elementInfo.content)
+  const len = Math.max(1, text.length)
+  const maxByHeight = height * 0.78
+  const maxByWidth = width / (len * 0.62)
+  const size = Math.min(maxByHeight, maxByWidth)
+  return Math.max(4, Math.min(size, 320))
+}
+
+const applyKpiAutoFit = () => {
+  if (!isDashboardKpi.value) return
+  if (isScaling.value) return
+
+  const nextPx = Math.round(computeKpiAutoFontPx() * 10) / 10
+  const currentPx = parsePx(props.elementInfo.defaultFontSize)
+
+  if (currentPx !== null && Math.abs(currentPx - nextPx) < 0.4) return
+
+  slidesStore.updateElement({
+    id: props.elementInfo.id,
+    props: { defaultFontSize: `${nextPx}px` },
+  })
+}
+
+const applyKpiAutoFitDebounced = debounce(applyKpiAutoFit, 80, { trailing: true })
+
+watch(isScaling, () => {
+  if (handleElementId.value !== props.elementInfo.id) return
+  if (!isScaling.value) {
+    applyKpiAutoFit()
+  }
+})
+
+watch(
+  () => props.elementInfo.content,
+  () => {
+    applyKpiAutoFitDebounced()
+  }
+)
+
+onUnmounted(() => {
+  applyKpiAutoFitDebounced.cancel()
+})
 </script>
 
 <style lang="scss" scoped>

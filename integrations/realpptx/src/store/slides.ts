@@ -26,6 +26,7 @@ export interface SlidesState {
   viewportSize: number
   viewportRatio: number
   templates: SlideTemplate[]
+  mutationTick: number
 }
 
 export const useSlidesStore = defineStore('slides', {
@@ -52,6 +53,7 @@ export const useSlidesStore = defineStore('slides', {
     slideIndex: 0, // 当前页面索引
     viewportSize: 1000, // 可视区域宽度基数
     viewportRatio: 0.5625, // 可视区域比例，默认16:9
+    mutationTick: 0,
     templates: [
       { name: '山河映红', id: 'template_1', cover: './imgs/template_1.webp', origin: '官方制作' },
       { name: '都市蓝调', id: 'template_2', cover: './imgs/template_2.webp', origin: '官方制作' },
@@ -112,13 +114,19 @@ export const useSlidesStore = defineStore('slides', {
   },
 
   actions: {
+    bumpMutationTick() {
+      this.mutationTick += 1
+    },
+
     setTitle(title: string) {
       if (!title) this.title = '未命名演示文稿'
       else this.title = title
+      this.bumpMutationTick()
     },
 
     setTheme(themeProps: Partial<SlideTheme>) {
       this.theme = { ...this.theme, ...themeProps }
+      this.bumpMutationTick()
     },
   
     setViewportSize(size: number) {
@@ -131,6 +139,7 @@ export const useSlidesStore = defineStore('slides', {
   
     setSlides(slides: Slide[]) {
       this.slides = slides
+      this.bumpMutationTick()
     },
   
     setTemplates(templates: SlideTemplate[]) {
@@ -146,11 +155,13 @@ export const useSlidesStore = defineStore('slides', {
       const addIndex = this.slideIndex + 1
       this.slides.splice(addIndex, 0, ...slides)
       this.slideIndex = addIndex
+      this.bumpMutationTick()
     },
   
     updateSlide(props: Partial<Slide>, slideId?: string) {
       const slideIndex = slideId ? this.slides.findIndex(item => item.id === slideId) : this.slideIndex
       this.slides[slideIndex] = { ...this.slides[slideIndex], ...props }
+      this.bumpMutationTick()
     },
   
     removeSlideProps(data: RemovePropData) {
@@ -160,6 +171,7 @@ export const useSlidesStore = defineStore('slides', {
         return slide.id === id ? omit(slide, propName) : slide
       }) as Slide[]
       this.slides = slides
+      this.bumpMutationTick()
     },
   
     deleteSlide(slideId: string | string[]) {
@@ -189,6 +201,7 @@ export const useSlidesStore = defineStore('slides', {
   
       this.slideIndex = newIndex
       this.slides = slides
+      this.bumpMutationTick()
     },
   
     updateSlideIndex(index: number) {
@@ -200,6 +213,7 @@ export const useSlidesStore = defineStore('slides', {
       const currentSlideEls = this.slides[this.slideIndex].elements
       const newEls = [...currentSlideEls, ...elements]
       this.slides[this.slideIndex].elements = newEls
+      this.bumpMutationTick()
     },
 
     deleteElement(elementId: string | string[]) {
@@ -207,18 +221,35 @@ export const useSlidesStore = defineStore('slides', {
       const currentSlideEls = this.slides[this.slideIndex].elements
       const newEls = currentSlideEls.filter(item => !elementIdList.includes(item.id))
       this.slides[this.slideIndex].elements = newEls
+      this.bumpMutationTick()
     },
   
     updateElement(data: UpdateElementData) {
       const { id, props, slideId } = data
       const elIdList = typeof id === 'string' ? [id] : id
 
-      const slideIndex = slideId ? this.slides.findIndex(item => item.id === slideId) : this.slideIndex
-      const slide = this.slides[slideIndex]
-      const elements = slide.elements.map(el => {
-        return elIdList.includes(el.id) ? { ...el, ...props } : el
-      })
-      this.slides[slideIndex].elements = (elements as PPTElement[])
+      const resolveSlideIndex = () => {
+        if (slideId) return this.slides.findIndex(item => item.id === slideId)
+        const current = this.slideIndex
+        const hasInCurrent = this.slides[current]?.elements?.some(el => elIdList.includes(el.id))
+        if (hasInCurrent) return current
+        for (let i = 0; i < this.slides.length; i++) {
+          if (this.slides[i]?.elements?.some(el => elIdList.includes(el.id))) return i
+        }
+        return -1
+      }
+
+      const slideIndex = resolveSlideIndex()
+      if (slideIndex < 0) return
+      const elements = this.slides[slideIndex].elements
+
+      const idSet = new Set(elIdList)
+      for (let i = 0; i < elements.length; i++) {
+        const el = elements[i]
+        if (!idSet.has(el.id)) continue
+        elements[i] = { ...el, ...props } as PPTElement
+      }
+      this.bumpMutationTick()
     },
   
     removeElementProps(data: RemovePropData) {
@@ -227,10 +258,12 @@ export const useSlidesStore = defineStore('slides', {
   
       const slideIndex = this.slideIndex
       const slide = this.slides[slideIndex]
-      const elements = slide.elements.map(el => {
-        return el.id === id ? omit(el, propsNames) : el
-      })
-      this.slides[slideIndex].elements = (elements as PPTElement[])
+      const elements = slide.elements
+      const idx = elements.findIndex(el => el.id === id)
+      if (idx >= 0) {
+        elements[idx] = omit(elements[idx], propsNames) as PPTElement
+        this.bumpMutationTick()
+      }
     },
   },
 })

@@ -196,7 +196,7 @@ const requestInsertDashboard = () => {
 // Automation Report: Request update for all linked charts
 const requestUpdateCharts = () => {
   // Gather all linked charts from all slides
-  const linkedCharts: Array<{ elementId: string; widgetId: string; dashboardId: string }> = []
+  const linkedCharts: Array<{ elementId: string; widgetId: string; dashboardId: string; kind?: 'chart' | 'kpi' }> = []
 
   slidesStore.slides.forEach(slide => {
     slide.elements.forEach(element => {
@@ -205,6 +205,20 @@ const requestUpdateCharts = () => {
           elementId: element.id,
           widgetId: element.widgetId,
           dashboardId: element.dashboardId,
+          kind: 'chart',
+        })
+      }
+      if (
+        element.type === 'text' &&
+        (element as any).dashboardWidgetKind === 'kpi' &&
+        (element as any).widgetId &&
+        (element as any).dashboardId
+      ) {
+        linkedCharts.push({
+          elementId: element.id,
+          widgetId: (element as any).widgetId,
+          dashboardId: (element as any).dashboardId,
+          kind: 'kpi',
         })
       }
     })

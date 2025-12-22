@@ -351,6 +351,8 @@ export interface ProjectDashboard {
   name: string;
   description?: string;
   widgets: DashboardWidget[];
+  /** Dashboard-wide filters (Dashboard Magic) */
+  globalFilters?: DashboardFilter[];
   dataSourceId?: string; // Linked Data Source
   createdAt: number;
   updatedAt: number;

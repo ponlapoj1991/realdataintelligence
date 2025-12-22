@@ -17,6 +17,7 @@ import { saveProject } from '../utils/storage-compat';
 import BuildReports from './BuildReports';
 import { REALPPTX_CHART_THEME } from '../constants/chartTheme';
 import { buildDashboardChartPayload } from '../utils/dashboardChartPayload';
+import { applyWidgetFilters } from '../utils/widgetData';
 
 const hashString = (input: string) => {
   let hash = 5381;
@@ -263,8 +264,9 @@ const ReportBuilder: React.FC<ReportBuilderProps> = ({ project, onUpdateProject 
           dashboardsForInsert.find((dash) => dash.id === selectedDashboardId) || dashboardsForInsert[0];
 
         const { rows: baseRows } = resolveDashboardBaseData(normalizedProject, dashboard ?? null);
+        const rows = applyWidgetFilters(baseRows, dashboard?.globalFilters);
 
-        const payload = buildDashboardChartPayload(widget, baseRows, {
+        const payload = buildDashboardChartPayload(widget, rows, {
           theme: REALPPTX_CHART_THEME,
           sourceDashboardId: dashboard?.id,
         });
@@ -337,6 +339,7 @@ const ReportBuilder: React.FC<ReportBuilderProps> = ({ project, onUpdateProject 
           elementId: string;
           widgetId: string;
           dashboardId: string;
+          kind?: 'chart' | 'kpi';
         }> | undefined;
 
         if (!linkedCharts || linkedCharts.length === 0) {
@@ -355,33 +358,109 @@ const ReportBuilder: React.FC<ReportBuilderProps> = ({ project, onUpdateProject 
 
           // Build fresh payload for this widget
           const { rows: baseRows } = resolveDashboardBaseData(normalizedProject, dashboard);
+          const rows = applyWidgetFilters(baseRows, dashboard.globalFilters);
 
-          const payload = buildDashboardChartPayload(widget, baseRows, {
+          const payload = buildDashboardChartPayload(widget, rows, {
             theme: REALPPTX_CHART_THEME,
             sourceDashboardId: dashboard.id,
           });
 
           if (!payload) return;
 
-          // Send update to RealPPTX
-          iframeWindow?.postMessage(
-            {
-              source: 'realdata-host',
-              type: 'update-chart-data',
-              payload: {
-                elementId: linked.elementId,
-                data: payload.data,
-                options: payload.options,
-                theme: payload.theme,
+          if (linked.kind === 'kpi' || payload.chartType === 'kpi') {
+            const escapeHtml = (input: string) =>
+              input
+                .replace(/&/g, '&amp;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;')
+                .replace(/\"/g, '&quot;')
+                .replace(/'/g, '&#39;');
+
+            const toNumber = (raw: unknown) => {
+              if (raw === null || raw === undefined) return 0;
+              if (typeof raw === 'number') return Number.isFinite(raw) ? raw : 0;
+              if (typeof raw === 'object' && (raw as any).value !== undefined) {
+                const n = Number((raw as any).value);
+                return Number.isFinite(n) ? n : 0;
+              }
+              const n = Number(raw);
+              return Number.isFinite(n) ? n : 0;
+            };
+
+            const formatKpiValue = (
+              value: number,
+              mode?: 'auto' | 'text' | 'number' | 'compact' | 'accounting'
+            ) => {
+              if (!Number.isFinite(value)) return '0';
+              switch (mode) {
+                case 'text':
+                  return String(value);
+                case 'number':
+                  return new Intl.NumberFormat(undefined, { maximumFractionDigits: 0 }).format(value);
+                case 'compact':
+                  return new Intl.NumberFormat(undefined, { notation: 'compact', compactDisplay: 'short', maximumFractionDigits: 1 }).format(value);
+                case 'accounting':
+                  return new Intl.NumberFormat(undefined, { useGrouping: true, minimumFractionDigits: 0, maximumFractionDigits: 2 }).format(value);
+                case 'auto':
+                default: {
+                  const abs = Math.abs(value);
+                  if (abs >= 1_000_000) {
+                    return new Intl.NumberFormat(undefined, { notation: 'compact', compactDisplay: 'short', maximumFractionDigits: 1 }).format(value);
+                  }
+                  if (Number.isInteger(value)) {
+                    return new Intl.NumberFormat(undefined, { maximumFractionDigits: 0 }).format(value);
+                  }
+                  return new Intl.NumberFormat(undefined, { useGrouping: true, minimumFractionDigits: 0, maximumFractionDigits: 2 }).format(value);
+                }
+              }
+            };
+
+            const raw = payload.data?.series?.[0]?.[0];
+            const value = toNumber(raw);
+            const valueFormat = payload.options?.dataLabelValueFormat;
+            const text = formatKpiValue(value, valueFormat);
+            const themeAccent = payload.theme?.colors?.[0] || payload.theme?.textColor || '#111827';
+            const color = payload.options?.dataLabelColor || themeAccent;
+            const fontFamily = payload.options?.dataLabelFontFamily;
+            const fontWeight = payload.options?.dataLabelFontWeight || 'bold';
+
+            const safeText = escapeHtml(text);
+            const content = `<p style="text-align:center;"><span style="font-weight:${fontWeight};${fontFamily ? ` font-family:${fontFamily};` : ''}">${safeText}</span></p>`;
+
+            iframeWindow?.postMessage(
+              {
+                source: 'realdata-host',
+                type: 'update-kpi-text',
+                payload: {
+                  elementId: linked.elementId,
+                  content,
+                  defaultColor: color,
+                  ...(fontFamily ? { defaultFontName: fontFamily } : {}),
+                },
               },
-            },
-            '*'
-          );
+              '*'
+            );
+          } else {
+            // Send update to RealPPTX
+            iframeWindow?.postMessage(
+              {
+                source: 'realdata-host',
+                type: 'update-chart-data',
+                payload: {
+                  elementId: linked.elementId,
+                  data: payload.data,
+                  options: payload.options,
+                  theme: payload.theme,
+                },
+              },
+              '*'
+            );
+          }
           updatedCount++;
         });
 
         if (updatedCount > 0) {
-          showToast('Charts updated', `${updatedCount} chart(s) refreshed with latest data.`, 'success');
+          showToast('Charts updated', `${updatedCount} element(s) refreshed with latest data.`, 'success');
         } else {
           showToast('No updates', 'Could not find matching widgets for linked charts.', 'warning');
         }

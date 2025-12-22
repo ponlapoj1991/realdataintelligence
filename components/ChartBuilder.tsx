@@ -39,6 +39,7 @@ import { getChartSupports, getDefaultOrientation, validateChartConfig } from '..
 import MagicWidgetRenderer from './MagicWidgetRenderer';
 import { buildColumnProfiles } from '../utils/columnProfiles';
 import { buildFieldErrors, getConstraintsForType, hasBlockingErrors } from '../utils/chartValidation';
+import { useMagicAggregationWorker } from '../hooks/useMagicAggregationWorker';
 
 interface ChartBuilderProps {
   isOpen: boolean;
@@ -233,6 +234,16 @@ const SeriesConfigModal: React.FC<{
   const [yAxis, setYAxis] = useState<'left' | 'right'>(series?.yAxis || 'left');
   const [color, setColor] = useState(series?.color || COLORS[0]);
 
+  useEffect(() => {
+    if (!isOpen) return;
+    setLabel(series?.label || '');
+    setType(series?.type || 'bar');
+    setMeasure(series?.measure || 'count');
+    setMeasureCol(series?.measureCol || '');
+    setYAxis(series?.yAxis || 'left');
+    setColor(series?.color || COLORS[0]);
+  }, [isOpen, series]);
+
   const needsColumn = measure === 'sum' || measure === 'avg';
 
   if (!isOpen) return null;
@@ -394,6 +405,7 @@ const ChartBuilder: React.FC<ChartBuilderProps> = ({
   data,
   chartTheme = CLASSIC_ANALYTICS_THEME
 }) => {
+  const previewWorker = useMagicAggregationWorker(data, chartTheme);
   // UI State
   const [showTypeSelector, setShowTypeSelector] = useState(true); // Show type selector first
   const [activeTab, setActiveTab] = useState<'setup' | 'customize'>('setup');
@@ -581,8 +593,10 @@ const [sortSeriesId, setSortSeriesId] = useState('');
       const nextLabels = initialWidget.dataLabels || createDefaultDataLabels();
       if (initialWidget.type === 'kpi' && !initialWidget.dataLabels) {
         nextLabels.enabled = true;
-        nextLabels.fontSize = 42;
+        nextLabels.position = 'center';
+        nextLabels.fontSize = 72;
         nextLabels.fontWeight = 'bold';
+        nextLabels.color = initialWidget.color || CLASSIC_ANALYTICS_THEME.palette[0] || nextLabels.color;
       }
       setDataLabels(nextLabels);
       setXAxis(initialWidget.xAxis || createDefaultAxis({ min: undefined, max: undefined, format: undefined }));
@@ -794,15 +808,14 @@ const [sortSeriesId, setSortSeriesId] = useState('');
   };
 
   const handleSaveSeries = (newSeries: SeriesConfig) => {
-    const existing = series.find(s => s.id === newSeries.id);
-    if (existing) {
-      setSeries(series.map(s => s.id === newSeries.id ? newSeries : s));
-    } else {
-      setSeries([...series, newSeries]);
-      if (!sortSeriesId) {
-        setSortSeriesId(newSeries.id);
+    setSeries((prev) => {
+      const existing = prev.find(s => s.id === newSeries.id);
+      if (existing) {
+        return prev.map(s => s.id === newSeries.id ? newSeries : s);
       }
-    }
+      return [...prev, newSeries];
+    });
+    setSortSeriesId((prev) => prev || newSeries.id);
   };
 
   const handleSeriesChange = (id: string, changes: Partial<SeriesConfig>) => {
@@ -883,7 +896,15 @@ const [sortSeriesId, setSortSeriesId] = useState('');
     setCategoryGap(20);
     setLegend(createDefaultLegend());
     if (selectedType === 'kpi') {
-      setDataLabels({ ...createDefaultDataLabels(), enabled: true, fontSize: 42, fontWeight: 'bold' });
+      const accent = CLASSIC_ANALYTICS_THEME.palette[0] || '#3B82F6';
+      setDataLabels({
+        ...createDefaultDataLabels(),
+        enabled: true,
+        position: 'center',
+        fontSize: 72,
+        fontWeight: 'bold',
+        color: accent,
+      });
     } else {
       setDataLabels(createDefaultDataLabels());
     }
@@ -1108,6 +1129,8 @@ const [sortSeriesId, setSortSeriesId] = useState('');
                     onValueClick={handlePreviewCategoryClick}
                     theme={chartTheme}
                     isEditing={true}
+                    eager
+                    workerClient={previewWorker}
                   />
                   {/* Interactive overlay for quick access to panels - only show buttons relevant to chart type */}
                   <div className="pointer-events-none absolute inset-0 flex flex-col justify-between">

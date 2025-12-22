@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState, useCallback } from 'react';
+import React, { useEffect, useMemo, useRef, useState, useCallback } from 'react';
 import * as echarts from 'echarts/core';
 import {
   BarChart,
@@ -13,10 +13,9 @@ import {
   DatasetComponent,
 } from 'echarts/components';
 import { SVGRenderer } from 'echarts/renderers';
-import { DashboardWidget, RawRow } from '../types';
+import { DashboardFilter, DashboardWidget, RawRow } from '../types';
 import { ChartTheme, CLASSIC_ANALYTICS_THEME } from '../constants/chartTheme';
 import { buildMagicEchartsOption } from '../utils/magicOptionBuilder';
-import { applyWidgetFilters } from '../utils/widgetData';
 import { buildMagicChartPayload, MagicChartPayload } from '../utils/magicChartPayload';
 import type { MagicAggregationWorkerClient } from '../hooks/useMagicAggregationWorker';
 
@@ -35,15 +34,36 @@ echarts.use([
 interface MagicWidgetRendererProps {
   widget: DashboardWidget;
   data: RawRow[];
-  filters?: any[];
+  /** Legacy: additional filters to apply without mutating the widget */
+  filters?: DashboardFilter[];
+  /** Global (Dashboard-level) filters applied to all widgets */
+  globalFilters?: DashboardFilter[];
   theme?: ChartTheme;
   onValueClick?: (value: string, widget: DashboardWidget) => void;
   /** Disable animation during editing to prevent distracting re-renders */
   isEditing?: boolean;
   /** UI is being dragged/resized; defer heavy work until it stops */
   isInteracting?: boolean;
+  /** Force render immediately (ChartBuilder preview) */
+  eager?: boolean;
   workerClient?: MagicAggregationWorkerClient;
 }
+
+const mergeDashboardFilters = (...lists: Array<DashboardFilter[] | undefined>) => {
+  const seen = new Set<string>();
+  const merged: DashboardFilter[] = [];
+  for (const list of lists) {
+    if (!list || list.length === 0) continue;
+    for (const f of list) {
+      if (!f || !f.column) continue;
+      const key = `${f.column}|${f.dataType || ''}|${f.value || ''}|${f.endValue || ''}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      merged.push(f);
+    }
+  }
+  return merged.length ? merged : undefined;
+};
 
 const buildOption = (payload: MagicChartPayload | null) => {
   if (!payload) return null;
@@ -334,10 +354,12 @@ const MagicWidgetRenderer: React.FC<MagicWidgetRendererProps> = ({
   widget,
   data,
   filters,
+  globalFilters,
   theme,
   onValueClick,
   isEditing = false,
   isInteracting = false,
+  eager = false,
   workerClient,
 }) => {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -350,6 +372,12 @@ const MagicWidgetRenderer: React.FC<MagicWidgetRendererProps> = ({
   const [payload, setPayload] = useState<MagicChartPayload | null>(null);
   const [didCompute, setDidCompute] = useState(false);
   const isKpiWidget = widget.type === 'kpi';
+
+  const resolvedWidget = useMemo(() => {
+    const mergedFilters = mergeDashboardFilters(widget.filters, filters, globalFilters);
+    if (!mergedFilters) return widget;
+    return { ...widget, filters: mergedFilters };
+  }, [widget, filters, globalFilters]);
 
   const cancelDispose = useCallback(() => {
     if (disposeTimerRef.current) {
@@ -371,7 +399,7 @@ const MagicWidgetRenderer: React.FC<MagicWidgetRendererProps> = ({
 
   // IntersectionObserver: lazy init + dispose when out-of-view
   useEffect(() => {
-    if (isKpiWidget) {
+    if (isKpiWidget || eager) {
       setIsInView(true);
       return;
     }
@@ -391,21 +419,21 @@ const MagicWidgetRenderer: React.FC<MagicWidgetRendererProps> = ({
     return () => {
       observer.disconnect();
     };
-  }, [isKpiWidget]);
+  }, [isKpiWidget, eager]);
 
   // Build payload (heavy): run only when visible and not interacting
   useEffect(() => {
-    if (!isInView && !isKpiWidget) return;
+    if (!isInView && !isKpiWidget && !eager) return;
     if (isInteracting) return;
 
     let cancelled = false;
     const run = async () => {
-      if (cancelled) return;
+        if (cancelled) return;
       try {
         if (isEditing) setDidCompute(false);
         const next = workerClient?.isSupported
-          ? await workerClient.requestPayload({ widget, filters, theme: activeTheme })
-          : buildMagicChartPayload(widget, applyWidgetFilters(data, filters), { theme: activeTheme });
+          ? await workerClient.requestPayload({ widget: resolvedWidget, theme: activeTheme, isEditing })
+          : buildMagicChartPayload(resolvedWidget, data, { theme: activeTheme });
         if (cancelled) return;
         setPayload(next);
         setDidCompute(true);
@@ -425,7 +453,7 @@ const MagicWidgetRenderer: React.FC<MagicWidgetRendererProps> = ({
     let handle: number | null = null;
 
     if (isEditing) {
-      handle = window.setTimeout(() => void run(), 120);
+      handle = window.setTimeout(() => void run(), eager ? 0 : 120);
     } else if (ric) {
       handle = ric(() => void run(), { timeout: 800 });
     } else {
@@ -439,7 +467,7 @@ const MagicWidgetRenderer: React.FC<MagicWidgetRendererProps> = ({
         else window.clearTimeout(handle);
       }
     };
-  }, [isInView, isInteracting, widget, data, filters, activeTheme, workerClient, isEditing, isKpiWidget]);
+  }, [isInView, isInteracting, resolvedWidget, data, activeTheme, workerClient, isEditing, isKpiWidget, eager]);
 
   // Init chart only when visible
   useEffect(() => {
@@ -473,8 +501,13 @@ const MagicWidgetRenderer: React.FC<MagicWidgetRendererProps> = ({
     const chart = chartRef.current;
 
     if (resizeObserverRef.current) resizeObserverRef.current.disconnect();
+    let resizeRaf: number | null = null;
     resizeObserverRef.current = new ResizeObserver(() => {
-      chart.resize();
+      if (resizeRaf !== null) window.cancelAnimationFrame(resizeRaf);
+      resizeRaf = window.requestAnimationFrame(() => {
+        resizeRaf = null;
+        chart.resize();
+      });
     });
     resizeObserverRef.current.observe(el);
 
@@ -482,6 +515,10 @@ const MagicWidgetRenderer: React.FC<MagicWidgetRendererProps> = ({
       if (resizeObserverRef.current) {
         resizeObserverRef.current.disconnect();
         resizeObserverRef.current = null;
+      }
+      if (resizeRaf !== null) {
+        window.cancelAnimationFrame(resizeRaf);
+        resizeRaf = null;
       }
     };
   }, [isInView, scheduleDispose, cancelDispose, isKpiWidget]);
@@ -496,7 +533,7 @@ const MagicWidgetRenderer: React.FC<MagicWidgetRendererProps> = ({
     // KPI is rendered as a card (no ECharts)
     if (payload.type === 'kpi') return;
 
-    const option = buildMagicEchartsOption(payload, widget.colSpan || 2, isEditing);
+    const option = payload.optionRaw ?? buildMagicEchartsOption(payload, widget.colSpan || 2, isEditing);
     if (!option) return;
     chart.setOption(option as any, { notMerge: true, lazyUpdate: true } as any);
   }, [payload, isInView, widget.colSpan, isEditing]);
@@ -545,27 +582,77 @@ const MagicWidgetRenderer: React.FC<MagicWidgetRendererProps> = ({
   }
 
   if (payload?.type === 'kpi') {
-    const value = payload.data?.series?.[0]?.[0] ?? 0;
-    const formatter = new Intl.NumberFormat(undefined, {
-      notation: widget.valueFormat === 'compact' ? 'compact' : 'standard',
-      maximumFractionDigits: widget.valueFormat === 'percent' ? 2 : 2,
-    });
+    const getNumericValue = (raw: any) => {
+      if (raw === null || raw === undefined) return 0;
+      if (typeof raw === 'number') return Number.isFinite(raw) ? raw : 0;
+      if (typeof raw === 'object' && (raw as any).value !== undefined) {
+        const n = Number((raw as any).value);
+        return Number.isFinite(n) ? n : 0;
+      }
+      const n = Number(raw);
+      return Number.isFinite(n) ? n : 0;
+    };
+
+    const formatKpiValue = (
+      value: number,
+      mode?: 'auto' | 'text' | 'number' | 'compact' | 'accounting'
+    ) => {
+      if (!Number.isFinite(value)) return '0';
+      switch (mode) {
+        case 'text':
+          return String(value);
+        case 'number':
+          return new Intl.NumberFormat(undefined, { maximumFractionDigits: 0 }).format(value);
+        case 'compact':
+          return new Intl.NumberFormat(undefined, { notation: 'compact', compactDisplay: 'short', maximumFractionDigits: 1 }).format(value);
+        case 'accounting':
+          return new Intl.NumberFormat(undefined, { useGrouping: true, minimumFractionDigits: 0, maximumFractionDigits: 2 }).format(value);
+        case 'auto':
+        default: {
+          const abs = Math.abs(value);
+          if (abs >= 1_000_000) {
+            return new Intl.NumberFormat(undefined, { notation: 'compact', compactDisplay: 'short', maximumFractionDigits: 1 }).format(value);
+          }
+          if (Number.isInteger(value)) {
+            return new Intl.NumberFormat(undefined, { maximumFractionDigits: 0 }).format(value);
+          }
+          return new Intl.NumberFormat(undefined, { useGrouping: true, minimumFractionDigits: 0, maximumFractionDigits: 2 }).format(value);
+        }
+      }
+    };
+
+    const raw = payload.data?.series?.[0]?.[0];
+    const value = getNumericValue(raw);
+    const valueFormat = payload.options?.dataLabelValueFormat ?? widget.dataLabels?.valueFormat ?? 'auto';
     const textColor = payload.textColor || '#111827';
     const lineColor = payload.lineColor || '#E5E7EB';
-    const accent = payload.themeColors?.[0] || '#111827';
+    const accentFallback = payload.themeColors?.[0] || widget.color || '#111827';
+    const valueColor = payload.options?.dataLabelColor || widget.dataLabels?.color || accentFallback;
+    const fontFamily = payload.options?.dataLabelFontFamily || widget.dataLabels?.fontFamily;
+    const fontWeight = payload.options?.dataLabelFontWeight || widget.dataLabels?.fontWeight || 'bold';
+    const fontSize = payload.options?.dataLabelFontSize || widget.dataLabels?.fontSize;
     const titleText = widget.chartTitle || widget.title || 'Number';
+    const valueText = formatKpiValue(value, valueFormat);
 
     return (
       <div className="w-full h-full flex items-center justify-center">
         <div
-          className="w-full h-full rounded-xl border bg-white flex flex-col justify-center px-6"
+          className="w-full h-full rounded-xl border bg-white flex flex-col items-center justify-center px-6 text-center"
           style={{ borderColor: lineColor }}
         >
           <div className="text-xs font-semibold tracking-wide uppercase" style={{ color: textColor, opacity: 0.7 }}>
             {titleText}
           </div>
-          <div className="mt-2 text-4xl font-bold tabular-nums" style={{ color: accent }}>
-            {formatter.format(value)}
+          <div
+            className="mt-2 tabular-nums leading-none"
+            style={{
+              color: valueColor,
+              fontSize: typeof fontSize === 'number' ? `${fontSize}px` : 'clamp(36px, 7vw, 88px)',
+              fontWeight,
+              ...(fontFamily ? { fontFamily } : {}),
+            }}
+          >
+            {valueText}
           </div>
           {widget.subtitle ? (
             <div className="mt-1 text-xs" style={{ color: textColor, opacity: 0.65 }}>
