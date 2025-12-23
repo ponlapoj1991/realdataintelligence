@@ -505,21 +505,8 @@ export interface Project {
   aiSettings?: AISettings; // Per-project AI settings (legacy/compat)
 }
 
-// Interface for the globally available XLSX object from CDN
-export interface XLSXLibrary {
-  read: (data: any, options?: any) => any;
-  utils: {
-    sheet_to_json: (worksheet: any, options?: any) => any[];
-    json_to_sheet: (data: any[]) => any;
-    book_new: () => any;
-    book_append_sheet: (workbook: any, worksheet: any, name: string) => void;
-  };
-  writeFile: (workbook: any, filename: string, options?: any) => void;
-}
-
 declare global {
   interface Window {
-    XLSX: XLSXLibrary;
     html2canvas: any;
     PptxGenJS: any;
     JSZip: any;

@@ -1,21 +1,23 @@
 import { RawRow, ColumnConfig } from '../types';
 
+const loadXlsx = async () => {
+  const mod: any = await import('xlsx');
+  return mod?.default ?? mod;
+};
+
 export const parseExcelFile = async (file: File): Promise<RawRow[]> => {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
-    reader.onload = (e) => {
+    reader.onload = async (e) => {
       try {
         const data = e.target?.result;
-        if (!window.XLSX) {
-          reject(new Error("XLSX library not loaded"));
-          return;
-        }
-        const workbook = window.XLSX.read(data, { type: 'binary' });
+        const XLSX = await loadXlsx();
+        const workbook = XLSX.read(data, { type: 'binary' });
         const sheetName = workbook.SheetNames[0];
         const worksheet = workbook.Sheets[sheetName];
         
         // Use raw: false to get the "formatted string" as seen in Excel.
-        const json = window.XLSX.utils.sheet_to_json(worksheet, { 
+        const json = XLSX.utils.sheet_to_json(worksheet, { 
             raw: false,
             defval: "" 
         });
@@ -35,12 +37,12 @@ export const parseCsvUrl = async (url: string): Promise<RawRow[]> => {
     if (!response.ok) throw new Error('Failed to fetch CSV');
     const csvText = await response.text();
     
-    if (!window.XLSX) throw new Error("XLSX library not loaded");
+    const XLSX = await loadXlsx();
     
-    const workbook = window.XLSX.read(csvText, { type: 'string' });
+    const workbook = XLSX.read(csvText, { type: 'string' });
     const sheetName = workbook.SheetNames[0];
     const worksheet = workbook.Sheets[sheetName];
-    return window.XLSX.utils.sheet_to_json(worksheet, { raw: false, defval: "" }) as RawRow[];
+    return XLSX.utils.sheet_to_json(worksheet, { raw: false, defval: "" }) as RawRow[];
   } catch (err) {
     throw err;
   }
@@ -62,38 +64,36 @@ const normalizeDataForExport = (data: RawRow[]) => {
 };
 
 export const exportToExcel = (data: RawRow[], filename: string) => {
-  if (!window.XLSX) {
-      alert("Excel library not loaded.");
-      return;
-  }
   if (!data || data.length === 0) {
       alert("No data available to export.");
       return;
   }
 
-  const safeData = normalizeDataForExport(data);
+  void (async () => {
+    const XLSX = await loadXlsx();
+    const safeData = normalizeDataForExport(data);
 
-  const ws = window.XLSX.utils.json_to_sheet(safeData);
-  const wb = window.XLSX.utils.book_new();
-  window.XLSX.utils.book_append_sheet(wb, ws, "Processed Data");
-  window.XLSX.writeFile(wb, `${filename}.xlsx`);
+    const ws = XLSX.utils.json_to_sheet(safeData);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "Processed Data");
+    XLSX.writeFile(wb, `${filename}.xlsx`);
+  })();
 };
 
 export const exportToCsv = (data: RawRow[], filename: string) => {
-  if (!window.XLSX) {
-    alert("Excel library not loaded.");
-    return;
-  }
   if (!data || data.length === 0) {
     alert("No data available to export.");
     return;
   }
 
-  const safeData = normalizeDataForExport(data);
-  const ws = window.XLSX.utils.json_to_sheet(safeData);
-  const wb = window.XLSX.utils.book_new();
-  window.XLSX.utils.book_append_sheet(wb, ws, "Processed Data");
-  window.XLSX.writeFile(wb, `${filename}.csv`, { bookType: 'csv' });
+  void (async () => {
+    const XLSX = await loadXlsx();
+    const safeData = normalizeDataForExport(data);
+    const ws = XLSX.utils.json_to_sheet(safeData);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "Processed Data");
+    XLSX.writeFile(wb, `${filename}.csv`, { bookType: 'csv' });
+  })();
 };
 
 export const inferColumns = (row: RawRow): ColumnConfig[] => {
