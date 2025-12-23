@@ -431,10 +431,7 @@ const MagicWidgetRenderer: React.FC<MagicWidgetRendererProps> = ({
         if (cancelled) return;
       try {
         if (isEditing) setDidCompute(false);
-        // For eager mode (ChartBuilder preview), bypass worker to ensure data/widget sync
-        // Worker has timing issues when widget changes rapidly without data changes
-        const useWorker = workerClient?.isSupported && !eager;
-        const next = useWorker
+        const next = workerClient?.isSupported
           ? await workerClient.requestPayload({ widget: resolvedWidget, theme: activeTheme, isEditing })
           : buildMagicChartPayload(resolvedWidget, data, { theme: activeTheme });
         if (cancelled) return;
