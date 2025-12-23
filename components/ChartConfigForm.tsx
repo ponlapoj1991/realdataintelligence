@@ -196,8 +196,6 @@ const ChartConfigForm: React.FC<ChartConfigFormProps> = ({
   const showArea = isAreaChart(chartType);
   const canShowCategoryFilter =
     supports.categoryFilter &&
-    !showBubble &&
-    !showPie &&
     chartType !== 'table' &&
     chartType !== 'kpi' &&
     allCategories.length > 0;
@@ -875,7 +873,8 @@ const ChartConfigForm: React.FC<ChartConfigFormProps> = ({
               <option value="value-asc">Value (Low to High)</option>
               <option value="name-asc">Name (A-Z)</option>
               <option value="name-desc">Name (Z-A)</option>
-              <option value="original">Original Order (for Dates)</option>
+              <option value="date-desc">Date (Newest to Oldest)</option>
+              <option value="date-asc">Date (Oldest to Newest)</option>
             </select>
           </div>
           <div className="border border-gray-200 rounded-lg p-3 bg-gray-50 space-y-2">

@@ -106,22 +106,44 @@ export const applyWidgetFilters = (rows: RawRow[], filters?: DashboardFilter[]) 
 
 const applySorting = (data: any[], order: string | undefined, valueKey: string) => {
   const sortBy = order || 'value-desc';
-  const compareName = (aName: any, bName: any) => {
-    const aStr = String(aName ?? '');
-    const bStr = String(bName ?? '');
+  const stableSort = <T,>(arr: T[], compare: (a: T, b: T) => number) => {
+    return arr
+      .map((item, idx) => ({ item, idx }))
+      .sort((a, b) => {
+        const cmp = compare(a.item, b.item);
+        return cmp !== 0 ? cmp : a.idx - b.idx;
+      })
+      .map(({ item }) => item);
+  };
 
-    const parseRangeStartNumber = (s: string) => {
-      const m = s.match(/^\s*(-?\d+(?:\.\d+)?)\s*-\s*/);
-      if (!m) return null;
-      const n = Number(m[1]);
-      return Number.isFinite(n) ? n : null;
-    };
-    const parseRangeStartDate = (s: string) => {
-      const start = s.split('-').length >= 3 ? s.split(' - ')[0] : null;
-      if (!start) return null;
-      const d = toDate(start.trim());
-      return d ? d.getTime() : null;
-    };
+  const collator = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' });
+
+  const parseRangeStartNumber = (s: string) => {
+    const m = s.match(/^\s*(-?\d+(?:\.\d+)?)\s*-\s*/);
+    if (!m) return null;
+    const n = Number(m[1]);
+    return Number.isFinite(n) ? n : null;
+  };
+
+  const parseRangeStartDate = (s: string) => {
+    const parts = s.split(' - ');
+    if (parts.length < 2) return null;
+    const d = toDate(parts[0].trim());
+    return d ? d.getTime() : null;
+  };
+
+  const parseDateLabel = (raw: any) => {
+    const s = String(raw ?? '').trim();
+    if (!s) return null;
+    const rangeStart = parseRangeStartDate(s);
+    if (rangeStart !== null) return rangeStart;
+    const d = toDate(s);
+    return d ? d.getTime() : null;
+  };
+
+  const compareName = (aName: any, bName: any) => {
+    const aStr = String(aName ?? '').trim();
+    const bStr = String(bName ?? '').trim();
 
     const aRangeNum = parseRangeStartNumber(aStr);
     const bRangeNum = parseRangeStartNumber(bStr);
@@ -141,17 +163,32 @@ const applySorting = (data: any[], order: string | undefined, valueKey: string) 
     const bDate = toDate(bStr);
     if (aDate && bDate) return aDate.getTime() - bDate.getTime();
 
-    return aStr.localeCompare(bStr);
+    return collator.compare(aStr, bStr);
+  };
+
+  const compareDate = (aName: any, bName: any) => {
+    const aMs = parseDateLabel(aName);
+    const bMs = parseDateLabel(bName);
+    if (aMs !== null && bMs !== null) return aMs - bMs;
+    if (aMs !== null) return -1;
+    if (bMs !== null) return 1;
+    return compareName(aName, bName);
   };
   switch (sortBy) {
     case 'value-desc':
-      return [...data].sort((a, b) => (b[valueKey] || 0) - (a[valueKey] || 0));
+      return stableSort([...data], (a, b) => (b[valueKey] || 0) - (a[valueKey] || 0));
     case 'value-asc':
-      return [...data].sort((a, b) => (a[valueKey] || 0) - (b[valueKey] || 0));
+      return stableSort([...data], (a, b) => (a[valueKey] || 0) - (b[valueKey] || 0));
     case 'name-asc':
-      return [...data].sort((a, b) => compareName(a.name, b.name));
+      return stableSort([...data], (a, b) => compareName(a.name, b.name));
     case 'name-desc':
-      return [...data].sort((a, b) => compareName(b.name, a.name));
+      return stableSort([...data], (a, b) => compareName(b.name, a.name));
+    case 'date-asc':
+      return stableSort([...data], (a, b) => compareDate(a.name, b.name));
+    case 'date-desc':
+      return stableSort([...data], (a, b) => compareDate(b.name, a.name));
+    case 'original':
+      return data;
     default:
       return data;
   }
@@ -314,12 +351,14 @@ export const aggregateWidgetData = (
     if (widget.dimension && (widget.xMeasure || widget.yMeasure)) {
       // Group by dimension and aggregate X/Y values
       const groups: Record<string, { count: number; xSum: number; ySum: number; sizeSum: number }> = {};
+      const excluded = new Set(widget.categoryFilter || []);
 
       rows.forEach(row => {
         const base = normalizeKey(row[widget.dimension!]);
         const dimValues = widget.groupByString ? splitByString(base) : [base];
 
         for (const dimVal of dimValues) {
+          if (excluded.has(dimVal)) continue;
           if (!groups[dimVal]) {
             groups[dimVal] = { count: 0, xSum: 0, ySum: 0, sizeSum: 0 };
           }
@@ -415,7 +454,7 @@ export const aggregateWidgetData = (
 
   const resolvedSortBy =
     inferredForLine && (!widget.sortBy || widget.sortBy === 'original')
-      ? 'name-asc'
+      ? (inferredForLine === 'date' ? 'date-asc' : 'name-asc')
       : widget.sortBy;
 
   const is100Stacked = [
@@ -619,7 +658,7 @@ export const processMultiSeriesData = (widget: DashboardWidget, rows: RawRow[]) 
     : null;
   const resolvedSortBy =
     inferredForLine && (!widget.sortBy || widget.sortBy === 'original')
-      ? 'name-asc'
+      ? (inferredForLine === 'date' ? 'date-asc' : 'name-asc')
       : widget.sortBy;
   const sorted = sortMultiSeriesRows(rowEntries, widget, resolvedSortBy);
   const dimensionKey = widget.dimension!;
@@ -683,7 +722,7 @@ export const getTopNOverflowDimensionValues = (widget: DashboardWidget, rows: Ra
 
   const resolvedSortBy =
     inferredForLine && (!widget.sortBy || widget.sortBy === 'original')
-      ? 'name-asc'
+      ? (inferredForLine === 'date' ? 'date-asc' : 'name-asc')
       : widget.sortBy;
 
   if (widget.series && widget.series.length > 0) {

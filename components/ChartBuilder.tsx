@@ -552,7 +552,11 @@ const [sortSeriesId, setSortSeriesId] = useState('');
       setType(initialWidget.type);
       setDimension(initialWidget.dimension);
       setWidth(initialWidget.width);
-      setSortBy(initialWidget.sortBy || 'value-desc');
+      const normalizedSort =
+        initialWidget.sortBy === 'original'
+          ? (columnProfiles[initialWidget.dimension]?.type === 'date' ? 'date-asc' : 'name-asc')
+          : (initialWidget.sortBy || 'value-desc');
+      setSortBy(normalizedSort);
       if (typeof initialWidget.topN === 'number' && initialWidget.topN > 0) {
         setTopNEnabled(true);
         setTopNCount(initialWidget.topN);
@@ -746,6 +750,10 @@ const [sortSeriesId, setSortSeriesId] = useState('');
       alert('Please fix the highlighted fields before saving.');
       return;
     }
+    const normalizedSortBy =
+      sortBy === 'original'
+        ? (columnProfiles[dimension]?.type === 'date' ? 'date-asc' : 'name-asc')
+        : sortBy;
     const errors = validateChartConfig(type, {
       dimension,
       stackBy,
@@ -774,7 +782,7 @@ const [sortSeriesId, setSortSeriesId] = useState('');
       color: primaryColor,
       dimension: supports?.dimension ? dimension : '',
       width,
-      sortBy,
+      sortBy: normalizedSortBy,
       barOrientation,
       categoryFilter: categoryFilter.length > 0 ? categoryFilter : undefined,
       sortSeriesId: sortSeriesId || undefined,
