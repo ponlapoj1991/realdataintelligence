@@ -8,6 +8,16 @@ export interface AggregatedWidgetData {
 
 const MAX_TOP_N = 500;
 
+const normalizeKey = (raw: any, emptyLabel: string = '(Empty)') => {
+  const s = String(raw ?? '').trim();
+  return s ? s : emptyLabel;
+};
+
+const splitByString = (value: string) => {
+  const tokens = value.split(/[,\n;|]+/).map((t) => t.trim()).filter(Boolean);
+  return tokens.length ? tokens : ['(Empty)'];
+};
+
 const clampTopN = (value?: number | null) => {
   if (!value || value <= 0) return null;
   return Math.min(Math.max(1, value), MAX_TOP_N);
@@ -23,7 +33,34 @@ export const toDate = (value: any): Date | null => {
   if (value instanceof Date) {
     return isNaN(value.getTime()) ? null : value;
   }
-  const parsed = Date.parse(value);
+  if (typeof value === 'string') {
+    const trimmed = value.trim();
+    if (!trimmed) return null;
+
+    const isoMatch = trimmed.match(/^(\d{4})[-/](\d{1,2})[-/](\d{1,2})(?:[T\s].*)?$/);
+    if (isoMatch) {
+      const year = Number(isoMatch[1]);
+      const month = Number(isoMatch[2]);
+      const day = Number(isoMatch[3]);
+      if (Number.isFinite(year) && Number.isFinite(month) && Number.isFinite(day)) {
+        const d = new Date(year, month - 1, day);
+        return isNaN(d.getTime()) ? null : d;
+      }
+    }
+
+    const dmyMatch = trimmed.match(/^(\d{1,2})[-/](\d{1,2})[-/](\d{4})(?:[T\s].*)?$/);
+    if (dmyMatch) {
+      const day = Number(dmyMatch[1]);
+      const month = Number(dmyMatch[2]);
+      const year = Number(dmyMatch[3]);
+      if (Number.isFinite(year) && Number.isFinite(month) && Number.isFinite(day)) {
+        const d = new Date(year, month - 1, day);
+        return isNaN(d.getTime()) ? null : d;
+      }
+    }
+  }
+
+  const parsed = Date.parse(String(value));
   if (Number.isNaN(parsed)) return null;
   return new Date(parsed);
 };
@@ -69,22 +106,44 @@ export const applyWidgetFilters = (rows: RawRow[], filters?: DashboardFilter[]) 
 
 const applySorting = (data: any[], order: string | undefined, valueKey: string) => {
   const sortBy = order || 'value-desc';
-  const compareName = (aName: any, bName: any) => {
-    const aStr = String(aName ?? '');
-    const bStr = String(bName ?? '');
+  const stableSort = <T,>(arr: T[], compare: (a: T, b: T) => number) => {
+    return arr
+      .map((item, idx) => ({ item, idx }))
+      .sort((a, b) => {
+        const cmp = compare(a.item, b.item);
+        return cmp !== 0 ? cmp : a.idx - b.idx;
+      })
+      .map(({ item }) => item);
+  };
 
-    const parseRangeStartNumber = (s: string) => {
-      const m = s.match(/^\s*(-?\d+(?:\.\d+)?)\s*-\s*/);
-      if (!m) return null;
-      const n = Number(m[1]);
-      return Number.isFinite(n) ? n : null;
-    };
-    const parseRangeStartDate = (s: string) => {
-      const start = s.split('-').length >= 3 ? s.split(' - ')[0] : null;
-      if (!start) return null;
-      const d = toDate(start.trim());
-      return d ? d.getTime() : null;
-    };
+  const collator = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' });
+
+  const parseRangeStartNumber = (s: string) => {
+    const m = s.match(/^\s*(-?\d+(?:\.\d+)?)\s*-\s*/);
+    if (!m) return null;
+    const n = Number(m[1]);
+    return Number.isFinite(n) ? n : null;
+  };
+
+  const parseRangeStartDate = (s: string) => {
+    const parts = s.split(' - ');
+    if (parts.length < 2) return null;
+    const d = toDate(parts[0].trim());
+    return d ? d.getTime() : null;
+  };
+
+  const parseDateLabel = (raw: any) => {
+    const s = String(raw ?? '').trim();
+    if (!s) return null;
+    const rangeStart = parseRangeStartDate(s);
+    if (rangeStart !== null) return rangeStart;
+    const d = toDate(s);
+    return d ? d.getTime() : null;
+  };
+
+  const compareName = (aName: any, bName: any) => {
+    const aStr = String(aName ?? '').trim();
+    const bStr = String(bName ?? '').trim();
 
     const aRangeNum = parseRangeStartNumber(aStr);
     const bRangeNum = parseRangeStartNumber(bStr);
@@ -104,17 +163,32 @@ const applySorting = (data: any[], order: string | undefined, valueKey: string) 
     const bDate = toDate(bStr);
     if (aDate && bDate) return aDate.getTime() - bDate.getTime();
 
-    return aStr.localeCompare(bStr);
+    return collator.compare(aStr, bStr);
+  };
+
+  const compareDate = (aName: any, bName: any) => {
+    const aMs = parseDateLabel(aName);
+    const bMs = parseDateLabel(bName);
+    if (aMs !== null && bMs !== null) return aMs - bMs;
+    if (aMs !== null) return -1;
+    if (bMs !== null) return 1;
+    return compareName(aName, bName);
   };
   switch (sortBy) {
     case 'value-desc':
-      return [...data].sort((a, b) => (b[valueKey] || 0) - (a[valueKey] || 0));
+      return stableSort([...data], (a, b) => (b[valueKey] || 0) - (a[valueKey] || 0));
     case 'value-asc':
-      return [...data].sort((a, b) => (a[valueKey] || 0) - (b[valueKey] || 0));
+      return stableSort([...data], (a, b) => (a[valueKey] || 0) - (b[valueKey] || 0));
     case 'name-asc':
-      return [...data].sort((a, b) => compareName(a.name, b.name));
+      return stableSort([...data], (a, b) => compareName(a.name, b.name));
     case 'name-desc':
-      return [...data].sort((a, b) => compareName(b.name, a.name));
+      return stableSort([...data], (a, b) => compareName(b.name, a.name));
+    case 'date-asc':
+      return stableSort([...data], (a, b) => compareDate(a.name, b.name));
+    case 'date-desc':
+      return stableSort([...data], (a, b) => compareDate(b.name, a.name));
+    case 'original':
+      return data;
     default:
       return data;
   }
@@ -144,9 +218,15 @@ const createMajorBucketMapper = (rows: RawRow[], column: string, major: number) 
   if (!kind) return null;
 
   if (kind === 'date') {
-    const dates = values.map(v => toDate(v)).filter((d): d is Date => !!d);
-    if (!dates.length) return null;
-    const min = new Date(Math.min(...dates.map(d => d.getTime())));
+    let minMs = Infinity;
+    for (const v of values) {
+      const d = toDate(v);
+      if (!d) continue;
+      const ms = d.getTime();
+      if (ms < minMs) minMs = ms;
+    }
+    if (!Number.isFinite(minMs)) return null;
+    const min = new Date(minMs);
     min.setHours(0, 0, 0, 0);
     const msPerDay = 24 * 60 * 60 * 1000;
     return (raw: any) => {
@@ -162,11 +242,13 @@ const createMajorBucketMapper = (rows: RawRow[], column: string, major: number) 
     };
   }
 
-  const nums = values
-    .map(v => Number(String(v)))
-    .filter((n) => Number.isFinite(n));
-  if (!nums.length) return null;
-  const min = Math.min(...nums);
+  let min = Infinity;
+  for (const v of values) {
+    const n = Number(String(v));
+    if (!Number.isFinite(n)) continue;
+    if (n < min) min = n;
+  }
+  if (!Number.isFinite(min)) return null;
   return (raw: any) => {
     const n = Number(String(raw));
     if (!Number.isFinite(n)) return '(Empty)';
@@ -198,13 +280,13 @@ const applyTopNLimiter = (
   return kept;
 };
 
-const sortMultiSeriesRows = (rows: any[], widget: DashboardWidget) => {
+const sortMultiSeriesRows = (rows: any[], widget: DashboardWidget, orderOverride?: string) => {
   if (!rows || rows.length === 0 || !widget.series || widget.series.length === 0) return rows;
   const specified = widget.sortSeriesId && widget.series.find(s => s.id === widget.sortSeriesId);
   const fallback = widget.series.find(s => s.type === 'bar') || widget.series[0];
   const target = specified || fallback;
   if (!target) return rows;
-  return applySorting(rows, widget.sortBy, target.id);
+  return applySorting(rows, orderOverride ?? widget.sortBy, target.id);
 };
 
 export const aggregateWidgetData = (
@@ -242,7 +324,10 @@ export const aggregateWidgetData = (
           if (raw === null || raw === undefined) return;
           const s = String(raw).trim();
           if (!s) return;
-          counts[s] = (counts[s] || 0) + 1;
+          const tokens = widget.groupByString ? splitByString(s) : [s];
+          for (const token of tokens) {
+            counts[token] = (counts[token] || 0) + 1;
+          }
         });
 
         value = Object.entries(counts).reduce((sum, [cat, cnt]) => {
@@ -277,27 +362,33 @@ export const aggregateWidgetData = (
     if (widget.dimension && (widget.xMeasure || widget.yMeasure)) {
       // Group by dimension and aggregate X/Y values
       const groups: Record<string, { count: number; xSum: number; ySum: number; sizeSum: number }> = {};
+      const excluded = new Set(widget.categoryFilter || []);
 
       rows.forEach(row => {
-        const dimVal = String(row[widget.dimension!] || '(Empty)');
-        if (!groups[dimVal]) {
-          groups[dimVal] = { count: 0, xSum: 0, ySum: 0, sizeSum: 0 };
-        }
-        groups[dimVal].count++;
+        const base = normalizeKey(row[widget.dimension!]);
+        const dimValues = widget.groupByString ? splitByString(base) : [base];
 
-        // X value aggregation
-        if (widget.xMeasureCol) {
-          groups[dimVal].xSum += parseFloat(String(row[widget.xMeasureCol])) || 0;
-        }
+        for (const dimVal of dimValues) {
+          if (excluded.has(dimVal)) continue;
+          if (!groups[dimVal]) {
+            groups[dimVal] = { count: 0, xSum: 0, ySum: 0, sizeSum: 0 };
+          }
+          groups[dimVal].count++;
 
-        // Y value aggregation
-        if (widget.yMeasureCol) {
-          groups[dimVal].ySum += parseFloat(String(row[widget.yMeasureCol])) || 0;
-        }
+          // X value aggregation
+          if (widget.xMeasureCol) {
+            groups[dimVal].xSum += parseFloat(String(row[widget.xMeasureCol])) || 0;
+          }
 
-        // Size (for bubble)
-        if (widget.sizeDimension) {
-          groups[dimVal].sizeSum += parseFloat(String(row[widget.sizeDimension])) || 0;
+          // Y value aggregation
+          if (widget.yMeasureCol) {
+            groups[dimVal].ySum += parseFloat(String(row[widget.yMeasureCol])) || 0;
+          }
+
+          // Size (for bubble)
+          if (widget.sizeDimension) {
+            groups[dimVal].sizeSum += parseFloat(String(row[widget.sizeDimension])) || 0;
+          }
         }
       });
 
@@ -359,9 +450,23 @@ export const aggregateWidgetData = (
       : null;
   const getDimensionKey = (row: RawRow) => {
     const raw = row[widget.dimension];
-    const base = majorBucket ? majorBucket(raw) : String(raw || '(Empty)');
-    return base || '(Empty)';
+    const base = majorBucket ? majorBucket(raw) : normalizeKey(raw);
+    return base ? String(base) : '(Empty)';
   };
+  const getDimensionKeys = (row: RawRow) => {
+    const key = getDimensionKey(row);
+    if (!widget.groupByString) return [key];
+    return splitByString(key);
+  };
+
+  const inferredForLine = isLineFamily && widget.dimension
+    ? inferTemporalOrSequential(rows.map(r => r[widget.dimension]))
+    : null;
+
+  const resolvedSortBy =
+    inferredForLine && (!widget.sortBy || widget.sortBy === 'original')
+      ? (inferredForLine === 'date' ? 'date-asc' : 'name-asc')
+      : widget.sortBy;
 
   const is100Stacked = [
     '100-stacked-column', '100-stacked-bar', '100-stacked-area'
@@ -372,24 +477,26 @@ export const aggregateWidgetData = (
     const groups: Record<string, Record<string, number>> = {};
 
     rows.forEach(row => {
-      const dimVal = getDimensionKey(row);
-      const stackVal = String(row[widget.stackBy!] || '(Other)');
-
-      if (widget.categoryFilter && widget.categoryFilter.length > 0 && widget.categoryFilter.includes(dimVal)) {
-        return;
-      }
+      const stackVal = normalizeKey(row[widget.stackBy!] ?? '(Other)');
 
       stackKeys.add(stackVal);
-      if (!groups[dimVal]) groups[dimVal] = {};
-      if (!groups[dimVal][stackVal]) groups[dimVal][stackVal] = 0;
+      const dimValues = getDimensionKeys(row);
+      for (const dimVal of dimValues) {
+        if (widget.categoryFilter && widget.categoryFilter.length > 0 && widget.categoryFilter.includes(dimVal)) {
+          continue;
+        }
 
-      if (widget.measure === 'count') {
-        groups[dimVal][stackVal]++;
-      } else if (widget.measure === 'sum' && widget.measureCol) {
-        const val = Number(row[widget.measureCol]) || 0;
-        groups[dimVal][stackVal] += val;
-      } else if (widget.measure === 'avg' && widget.measureCol) {
-        groups[dimVal][stackVal] += Number(row[widget.measureCol]) || 0;
+        if (!groups[dimVal]) groups[dimVal] = {};
+        if (!groups[dimVal][stackVal]) groups[dimVal][stackVal] = 0;
+
+        if (widget.measure === 'count') {
+          groups[dimVal][stackVal]++;
+        } else if (widget.measure === 'sum' && widget.measureCol) {
+          const val = Number(row[widget.measureCol]) || 0;
+          groups[dimVal][stackVal] += val;
+        } else if (widget.measure === 'avg' && widget.measureCol) {
+          groups[dimVal][stackVal] += Number(row[widget.measureCol]) || 0;
+        }
       }
     });
 
@@ -406,7 +513,7 @@ export const aggregateWidgetData = (
 
     const stackKeyList = Array.from(stackKeys);
 
-    let finalRows = applySorting(result, widget.sortBy, '__total');
+    let finalRows = applySorting(result, resolvedSortBy, '__total');
     finalRows = applyTopNLimiter(finalRows, widget, (overflow) => {
       if (overflow.length === 0) return null;
       const othersRow: any = { name: 'Others', __total: 0 };
@@ -438,41 +545,33 @@ export const aggregateWidgetData = (
     return { data: finalRows, isStack: isStackedChart, stackKeys: stackKeyList };
   }
 
-  const groups: Record<string, number> = {};
+  const measure = widget.measure || 'count';
+  const sums: Record<string, number> = {};
+  const counts: Record<string, number> = {};
+
   rows.forEach(row => {
-    const key = getDimensionKey(row);
-    if (widget.categoryFilter && widget.categoryFilter.length > 0 && widget.categoryFilter.includes(key)) return;
-    if (!groups[key]) groups[key] = 0;
-    if (widget.measure === 'count') {
-      groups[key]++;
-    } else if (widget.measure === 'sum' && widget.measureCol) {
-      groups[key] += Number(row[widget.measureCol]) || 0;
-    } else if (widget.measure === 'avg' && widget.measureCol) {
-      groups[key] += Number(row[widget.measureCol]) || 0;
+    const dimValues = getDimensionKeys(row);
+    for (const key of dimValues) {
+      if (widget.categoryFilter && widget.categoryFilter.length > 0 && widget.categoryFilter.includes(key)) continue;
+
+      if (measure === 'count') {
+        sums[key] = (sums[key] || 0) + 1;
+      } else if ((measure === 'sum' || measure === 'avg') && widget.measureCol) {
+        sums[key] = (sums[key] || 0) + (Number(row[widget.measureCol]) || 0);
+      }
+
+      if (measure === 'avg') {
+        counts[key] = (counts[key] || 0) + 1;
+      }
     }
   });
 
-  let result = Object.keys(groups).map(key => ({
+  let result = Object.keys(sums).map(key => ({
     name: key,
-    value: groups[key]
+    value: measure === 'avg' ? (counts[key] ? sums[key] / counts[key] : 0) : sums[key]
   }));
 
-  if (widget.measure === 'avg' && widget.measureCol) {
-    result = result.map(item => ({
-      ...item,
-      value: item.value / (rows.filter(row => getDimensionKey(row) === item.name).length || 1)
-    }));
-  }
-
-  const inferredForLine = isLineFamily && widget.dimension
-    ? inferTemporalOrSequential(rows.map(r => r[widget.dimension]))
-    : null;
-  const sortOverride =
-    inferredForLine && (!widget.sortBy || widget.sortBy === 'original')
-      ? 'name-asc'
-      : widget.sortBy;
-
-  result = applySorting(result, sortOverride, 'value');
+  result = applySorting(result, resolvedSortBy, 'value');
 
   result = applyTopNLimiter(result, widget, (overflow) => {
     const total = overflow.reduce((acc, curr) => acc + (curr.value || 0), 0);
@@ -506,7 +605,13 @@ export const processMultiSeriesData = (widget: DashboardWidget, rows: RawRow[]) 
   const majorBucket = createMajorBucketMapper(rows, widget.dimension, widget.xAxis?.major ?? 0);
   const getDimKey = (row: RawRow) => {
     const raw = row[widget.dimension!];
-    return majorBucket ? majorBucket(raw) : String(raw || 'N/A');
+    const base = majorBucket ? majorBucket(raw) : normalizeKey(raw);
+    return base ? String(base) : '(Empty)';
+  };
+  const getDimKeys = (row: RawRow) => {
+    const key = getDimKey(row);
+    if (!widget.groupByString) return [key];
+    return splitByString(key);
   };
 
   const result: Record<string, any> = {};
@@ -518,28 +623,30 @@ export const processMultiSeriesData = (widget: DashboardWidget, rows: RawRow[]) 
     }
 
     seriesRows.forEach(row => {
-      const dimValue = getDimKey(row);
-      if (widget.categoryFilter && widget.categoryFilter.length > 0 && widget.categoryFilter.includes(dimValue)) {
-        return;
-      }
-
-      if (!result[dimValue]) {
-        result[dimValue] = { [widget.dimension!]: dimValue, name: dimValue };
-      }
-
-      if (series.measure === 'count') {
-        result[dimValue][series.id] = (result[dimValue][series.id] || 0) + 1;
-      } else if (series.measure === 'sum' && series.measureCol) {
-        const val = parseFloat(String(row[series.measureCol])) || 0;
-        result[dimValue][series.id] = (result[dimValue][series.id] || 0) + val;
-      } else if (series.measure === 'avg' && series.measureCol) {
-        if (!result[dimValue][`${series.id}_sum`]) {
-          result[dimValue][`${series.id}_sum`] = 0;
-          result[dimValue][`${series.id}_count`] = 0;
+      const dimValues = getDimKeys(row);
+      for (const dimValue of dimValues) {
+        if (widget.categoryFilter && widget.categoryFilter.length > 0 && widget.categoryFilter.includes(dimValue)) {
+          continue;
         }
-        const val = parseFloat(String(row[series.measureCol])) || 0;
-        result[dimValue][`${series.id}_sum`] += val;
-        result[dimValue][`${series.id}_count`] += 1;
+
+        if (!result[dimValue]) {
+          result[dimValue] = { [widget.dimension!]: dimValue, name: dimValue };
+        }
+
+        if (series.measure === 'count') {
+          result[dimValue][series.id] = (result[dimValue][series.id] || 0) + 1;
+        } else if (series.measure === 'sum' && series.measureCol) {
+          const val = parseFloat(String(row[series.measureCol])) || 0;
+          result[dimValue][series.id] = (result[dimValue][series.id] || 0) + val;
+        } else if (series.measure === 'avg' && series.measureCol) {
+          if (!result[dimValue][`${series.id}_sum`]) {
+            result[dimValue][`${series.id}_sum`] = 0;
+            result[dimValue][`${series.id}_count`] = 0;
+          }
+          const val = parseFloat(String(row[series.measureCol])) || 0;
+          result[dimValue][`${series.id}_sum`] += val;
+          result[dimValue][`${series.id}_count`] += 1;
+        }
       }
     });
   });
@@ -556,7 +663,15 @@ export const processMultiSeriesData = (widget: DashboardWidget, rows: RawRow[]) 
   });
 
   const rowEntries = Object.values(result);
-  const sorted = sortMultiSeriesRows(rowEntries, widget);
+  const isLineFamily = ['line', 'smooth-line', 'area', 'stacked-area', '100-stacked-area'].includes(widget.type);
+  const inferredForLine = isLineFamily && widget.dimension
+    ? inferTemporalOrSequential(rows.map(r => r[widget.dimension!]))
+    : null;
+  const resolvedSortBy =
+    inferredForLine && (!widget.sortBy || widget.sortBy === 'original')
+      ? (inferredForLine === 'date' ? 'date-asc' : 'name-asc')
+      : widget.sortBy;
+  const sorted = sortMultiSeriesRows(rowEntries, widget, resolvedSortBy);
   const dimensionKey = widget.dimension!;
   const limited = applyTopNLimiter(sorted, widget, (overflow) => {
     if (!overflow.length) return null;
@@ -584,4 +699,166 @@ export const processMultiSeriesData = (widget: DashboardWidget, rows: RawRow[]) 
     });
     return clean;
   });
+};
+
+export const getTopNOverflowDimensionValues = (widget: DashboardWidget, rows: RawRow[]) => {
+  const limit = clampTopN(widget.topN);
+  if (!limit) return [];
+  if (widget.groupOthers === false) return [];
+  if (!widget.dimension) return [];
+
+  const excluded = new Set(widget.categoryFilter || []);
+
+  const isStackedChart = [
+    'stacked-column', '100-stacked-column',
+    'stacked-bar', '100-stacked-bar',
+    'stacked-area', '100-stacked-area'
+  ].includes(widget.type);
+
+  const isLineFamily = ['line', 'smooth-line', 'area', 'stacked-area', '100-stacked-area'].includes(widget.type);
+  const major = widget.xAxis?.major ?? 0;
+  const majorBucket =
+    isLineFamily && widget.dimension
+      ? createMajorBucketMapper(rows, widget.dimension, major)
+      : null;
+  const getDimensionKey = (row: RawRow) => {
+    const raw = row[widget.dimension];
+    const base = majorBucket ? majorBucket(raw) : normalizeKey(raw);
+    return base ? String(base) : '(Empty)';
+  };
+
+  const inferredForLine = isLineFamily && widget.dimension
+    ? inferTemporalOrSequential(rows.map(r => r[widget.dimension]))
+    : null;
+
+  const resolvedSortBy =
+    inferredForLine && (!widget.sortBy || widget.sortBy === 'original')
+      ? (inferredForLine === 'date' ? 'date-asc' : 'name-asc')
+      : widget.sortBy;
+
+  if (widget.series && widget.series.length > 0) {
+    const result: Record<string, any> = {};
+    widget.series.forEach(series => {
+      let seriesRows = rows;
+      if (series.filters && series.filters.length > 0) {
+        seriesRows = applyWidgetFilters(seriesRows, series.filters);
+      }
+
+      seriesRows.forEach(row => {
+        const dimValues = getDimensionKeys(row);
+        for (const dimValue of dimValues) {
+          if (excluded.has(dimValue)) continue;
+
+          if (!result[dimValue]) {
+            result[dimValue] = { [widget.dimension!]: dimValue, name: dimValue };
+          }
+
+          if (series.measure === 'count') {
+            result[dimValue][series.id] = (result[dimValue][series.id] || 0) + 1;
+          } else if (series.measure === 'sum' && series.measureCol) {
+            const val = parseFloat(String(row[series.measureCol])) || 0;
+            result[dimValue][series.id] = (result[dimValue][series.id] || 0) + val;
+          } else if (series.measure === 'avg' && series.measureCol) {
+            if (!result[dimValue][`${series.id}_sum`]) {
+              result[dimValue][`${series.id}_sum`] = 0;
+              result[dimValue][`${series.id}_count`] = 0;
+            }
+            const val = parseFloat(String(row[series.measureCol])) || 0;
+            result[dimValue][`${series.id}_sum`] += val;
+            result[dimValue][`${series.id}_count`] += 1;
+          }
+        }
+      });
+    });
+
+    Object.values(result).forEach(item => {
+      widget.series!.forEach(series => {
+        if (series.measure === 'avg') {
+          const count = item[`${series.id}_count`] || 0;
+          if (count > 0) {
+            item[series.id] = item[`${series.id}_sum`] / count;
+          }
+        }
+      });
+    });
+
+    const rowEntries = Object.values(result);
+    const sorted = sortMultiSeriesRows(rowEntries, widget, resolvedSortBy);
+    return sorted.slice(limit).map((row: any) => String(row.name));
+  }
+
+  if (isStackedChart && widget.stackBy) {
+    const stackKeys = new Set<string>();
+    const groups: Record<string, Record<string, number>> = {};
+
+    rows.forEach(row => {
+      const stackVal = normalizeKey(row[widget.stackBy!] ?? '(Other)');
+
+      stackKeys.add(stackVal);
+      const dimValues = getDimensionKeys(row);
+      for (const dimVal of dimValues) {
+        if (excluded.has(dimVal)) continue;
+
+        if (!groups[dimVal]) groups[dimVal] = {};
+        if (!groups[dimVal][stackVal]) groups[dimVal][stackVal] = 0;
+
+        if (widget.measure === 'count') {
+          groups[dimVal][stackVal]++;
+        } else if (widget.measure === 'sum' && widget.measureCol) {
+          const val = Number(row[widget.measureCol]) || 0;
+          groups[dimVal][stackVal] += val;
+        } else if (widget.measure === 'avg' && widget.measureCol) {
+          // Keep behavior consistent with aggregateWidgetData (sum-based for stacked avg).
+          groups[dimVal][stackVal] += Number(row[widget.measureCol]) || 0;
+        }
+      }
+    });
+
+    const result = Object.keys(groups).map(dim => {
+      const row: any = { name: dim };
+      let total = 0;
+      Object.keys(groups[dim]).forEach(stack => {
+        row[stack] = groups[dim][stack];
+        total += groups[dim][stack];
+      });
+      row.__total = total;
+      return row;
+    });
+
+    const sorted = applySorting(result, resolvedSortBy, '__total');
+    return sorted.slice(limit).map((row: any) => String(row.name));
+  }
+
+  const measure = widget.measure || 'count';
+  const sums: Record<string, number> = {};
+  const counts: Record<string, number> = {};
+
+  rows.forEach(row => {
+    const dimValues = getDimensionKeys(row);
+    for (const key of dimValues) {
+      if (excluded.has(key)) continue;
+
+      if (measure === 'count') {
+        sums[key] = (sums[key] || 0) + 1;
+        continue;
+      }
+
+      if ((measure === 'sum' || measure === 'avg') && widget.measureCol) {
+        const n = Number(row[widget.measureCol]) || 0;
+        sums[key] = (sums[key] || 0) + n;
+        if (measure === 'avg') {
+          counts[key] = (counts[key] || 0) + 1;
+        }
+      }
+    }
+  });
+
+  let result = Object.keys(sums).map(key => ({
+    name: key,
+    value: measure === 'avg' ? (counts[key] ? sums[key] / counts[key] : 0) : sums[key]
+  }));
+
+  result = applySorting(result, resolvedSortBy, 'value');
+
+  return result.slice(limit).map(r => String(r.name));
 };

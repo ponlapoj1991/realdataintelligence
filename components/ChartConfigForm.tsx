@@ -88,6 +88,8 @@ interface ChartConfigFormProps {
   setTopNCount: (val: number) => void;
   groupOthers: boolean;
   setGroupOthers: (val: boolean) => void;
+  groupByString: boolean;
+  setGroupByString: (val: boolean) => void;
   categoryFilter: string[];
   setCategoryFilter: (val: string[]) => void;
   allCategories: string[];
@@ -166,6 +168,8 @@ const ChartConfigForm: React.FC<ChartConfigFormProps> = ({
   setTopNCount,
   groupOthers,
   setGroupOthers,
+  groupByString,
+  setGroupByString,
   categoryFilter,
   setCategoryFilter,
   allCategories,
@@ -190,6 +194,12 @@ const ChartConfigForm: React.FC<ChartConfigFormProps> = ({
   const showPie = isPieChart(chartType);
   const showLine = isLineChart(chartType);
   const showArea = isAreaChart(chartType);
+  const canShowCategoryFilter =
+    supports.categoryFilter &&
+    chartType !== 'table' &&
+    chartType !== 'kpi' &&
+    allCategories.length > 0;
+  const showGroupByStringInSetup = supports.dimension && !canShowCategoryFilter;
   const showBarSizeControl = useMemo(() => {
     const BAR_TYPES = new Set<ChartType>([
       'column',
@@ -354,6 +364,20 @@ const ChartConfigForm: React.FC<ChartConfigFormProps> = ({
             </div>
           )}
 
+          {measure === 'count' && measureCol && (
+            <div className="border border-gray-200 rounded-lg p-3 bg-gray-50">
+              <label className="flex items-center gap-2 text-sm text-gray-700">
+                <input
+                  type="checkbox"
+                  checked={groupByString}
+                  onChange={(e) => setGroupByString(e.target.checked)}
+                  className="rounded"
+                />
+                By String
+              </label>
+            </div>
+          )}
+
           {measure === 'count' && measureCol && kpiCountMode === 'group' && kpiCategories.length > 0 && (
             <div>
               <div className="flex items-center justify-between mb-2">
@@ -480,13 +504,41 @@ const ChartConfigForm: React.FC<ChartConfigFormProps> = ({
           STANDARD DIMENSION (for non-bubble charts)
           ======================================== */}
       {!showBubble && !showScatterXY && !showPie && chartType !== 'kpi' && chartType !== 'table' && supports.dimension && (
-        renderColumnSelect('dimension', dimension, setDimension, `Dimension (${getDefaultOrientation(chartType) === 'vertical' ? 'X' : 'Y'}-Axis)`)
+        <div className="space-y-2">
+          {renderColumnSelect('dimension', dimension, setDimension, `Dimension (${getDefaultOrientation(chartType) === 'vertical' ? 'X' : 'Y'}-Axis)`)}
+          {showGroupByStringInSetup && (
+            <label className="flex items-center gap-2 text-xs text-gray-600">
+              <input
+                type="checkbox"
+                checked={groupByString}
+                onChange={(e) => setGroupByString(e.target.checked)}
+                className="rounded"
+              />
+              By String
+            </label>
+          )}
+        </div>
       )}
 
       {/* ========================================
           PIE CHART - Category
           ======================================== */}
-      {showPie && renderColumnSelect('dimension', dimension, setDimension, 'Category')}
+      {showPie && (
+        <div className="space-y-2">
+          {renderColumnSelect('dimension', dimension, setDimension, 'Category')}
+          {showGroupByStringInSetup && (
+            <label className="flex items-center gap-2 text-xs text-gray-600">
+              <input
+                type="checkbox"
+                checked={groupByString}
+                onChange={(e) => setGroupByString(e.target.checked)}
+                className="rounded"
+              />
+              By String
+            </label>
+          )}
+        </div>
+      )}
 
       {/* ========================================
           STACKED CHARTS - Stack By
@@ -802,7 +854,7 @@ const ChartConfigForm: React.FC<ChartConfigFormProps> = ({
                 Major (Group Interval)
               </label>
               <div className="flex items-center gap-3">
-                <input
+               <input
                   type="number"
                   min={0}
                   max={365}
@@ -810,9 +862,6 @@ const ChartConfigForm: React.FC<ChartConfigFormProps> = ({
                   onChange={(e) => setXAxisMajor(parseInt(e.target.value || '0', 10) || 0)}
                   className="w-28 px-3 py-2 border border-gray-300 rounded text-sm bg-white"
                 />
-                <p className="text-xs text-gray-500">
-                  ใส่ 0 เพื่อแสดงทุกค่า, ใส่ 7 เพื่อรวมเป็นช่วงละ 7 หน่วย
-                </p>
               </div>
             </div>
           )}
@@ -835,7 +884,8 @@ const ChartConfigForm: React.FC<ChartConfigFormProps> = ({
               <option value="value-asc">Value (Low to High)</option>
               <option value="name-asc">Name (A-Z)</option>
               <option value="name-desc">Name (Z-A)</option>
-              <option value="original">Original Order (for Dates)</option>
+              <option value="date-desc">Date (Newest to Oldest)</option>
+              <option value="date-asc">Date (Oldest to Newest)</option>
             </select>
           </div>
           <div className="border border-gray-200 rounded-lg p-3 bg-gray-50 space-y-2">
@@ -881,25 +931,36 @@ const ChartConfigForm: React.FC<ChartConfigFormProps> = ({
       {/* ========================================
           CATEGORY FILTER (for dimension-based charts)
           ======================================== */}
-      {supports.categoryFilter && !showBubble && !showPie && chartType !== 'table' && chartType !== 'kpi' && allCategories.length > 0 && (
+      {canShowCategoryFilter && (
         <div>
           <div className="flex items-center justify-between mb-2">
             <label className="block text-sm font-medium text-gray-700">
               Categories ({allCategories.length - categoryFilter.length} of {allCategories.length} visible)
             </label>
-            <div className="flex gap-2">
-              <button
-                onClick={onClearAllCategories}
-                className="text-xs text-blue-600 hover:text-blue-800"
-              >
-                Show All
-              </button>
-              <button
-                onClick={onSelectAllCategories}
-                className="text-xs text-gray-600 hover:text-gray-800"
-              >
-                Hide All
-              </button>
+            <div className="flex items-center gap-3">
+              <label className="flex items-center gap-2 text-xs text-gray-600">
+                <input
+                  type="checkbox"
+                  checked={groupByString}
+                  onChange={(e) => setGroupByString(e.target.checked)}
+                  className="rounded"
+                />
+                By String
+              </label>
+              <div className="flex gap-2">
+                <button
+                  onClick={onClearAllCategories}
+                  className="text-xs text-blue-600 hover:text-blue-800"
+                >
+                  Show All
+                </button>
+                <button
+                  onClick={onSelectAllCategories}
+                  className="text-xs text-gray-600 hover:text-gray-800"
+                >
+                  Hide All
+                </button>
+              </div>
             </div>
           </div>
 

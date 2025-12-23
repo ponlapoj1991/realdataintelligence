@@ -39,7 +39,7 @@ interface MagicWidgetRendererProps {
   /** Global (Dashboard-level) filters applied to all widgets */
   globalFilters?: DashboardFilter[];
   theme?: ChartTheme;
-  onValueClick?: (value: string, widget: DashboardWidget) => void;
+  onValueClick?: (value: string, widget: DashboardWidget, meta?: { seriesName?: string }) => void;
   /** Disable animation during editing to prevent distracting re-renders */
   isEditing?: boolean;
   /** UI is being dragged/resized; defer heavy work until it stops */
@@ -555,7 +555,7 @@ const MagicWidgetRenderer: React.FC<MagicWidgetRendererProps> = ({
         params.axisValue ??
         (Array.isArray(params.value) ? params.value[0] : params.value);
       if (rawLabel === undefined || rawLabel === null) return;
-      onValueClick(String(rawLabel), widget);
+      onValueClick(String(rawLabel), widget, { seriesName: params.seriesName });
     };
 
     chart.off('click');

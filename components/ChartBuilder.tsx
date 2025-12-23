@@ -415,7 +415,7 @@ const ChartBuilder: React.FC<ChartBuilderProps> = ({
   const [title, setTitle] = useState('New Chart');
   const [type, setType] = useState<ChartType | null>(null); // null until selected
   const [dimension, setDimension] = useState('');
-  const [width, setWidth] = useState<'half' | 'full'>('half');
+  const [width, setWidth] = useState<'half' | 'full'>('full');
 
   // Stacked Charts
   const [stackBy, setStackBy] = useState('');
@@ -448,6 +448,7 @@ const ChartBuilder: React.FC<ChartBuilderProps> = ({
   const [topNEnabled, setTopNEnabled] = useState(false);
   const [topNCount, setTopNCount] = useState(5);
   const [groupOthers, setGroupOthers] = useState(true);
+  const [groupByString, setGroupByString] = useState(false);
   const [categoryFilter, setCategoryFilter] = useState<string[]>([]);
   const [categorySearch, setCategorySearch] = useState('');
 
@@ -493,7 +494,7 @@ const [sortSeriesId, setSortSeriesId] = useState('');
     setTitle('New Chart');
     setType(null);
     setDimension(availableColumns[0] || '');
-    setWidth('half');
+    setWidth('full');
     setStackBy('');
     setXDimension('');
     setYDimension('');
@@ -515,6 +516,7 @@ const [sortSeriesId, setSortSeriesId] = useState('');
     setTopNEnabled(false);
     setTopNCount(5);
     setGroupOthers(true);
+    setGroupByString(false);
     setCategoryFilter([]);
     setCategorySearch('');
     setBarOrientation('vertical');
@@ -549,8 +551,17 @@ const [sortSeriesId, setSortSeriesId] = useState('');
       setTitle(initialWidget.title);
       setType(initialWidget.type);
       setDimension(initialWidget.dimension);
-      setWidth(initialWidget.width);
-      setSortBy(initialWidget.sortBy || 'value-desc');
+      setWidth('full');
+      setStackBy(initialWidget.stackBy || '');
+      setXDimension(initialWidget.xDimension || '');
+      setYDimension(initialWidget.yDimension || '');
+      setSizeDimension(initialWidget.sizeDimension || '');
+      setColorBy(initialWidget.colorBy || '');
+      const normalizedSort =
+        initialWidget.sortBy === 'original'
+          ? (columnProfiles[initialWidget.dimension]?.type === 'date' ? 'date-asc' : 'name-asc')
+          : (initialWidget.sortBy || 'value-desc');
+      setSortBy(normalizedSort);
       if (typeof initialWidget.topN === 'number' && initialWidget.topN > 0) {
         setTopNEnabled(true);
         setTopNCount(initialWidget.topN);
@@ -560,6 +571,7 @@ const [sortSeriesId, setSortSeriesId] = useState('');
         setTopNCount(5);
         setGroupOthers(true);
       }
+      setGroupByString(!!initialWidget.groupByString);
       setBarOrientation(initialWidget.barOrientation || 'vertical');
       setCategoryFilter(initialWidget.categoryFilter || []);
       setChartTitle(initialWidget.chartTitle || initialWidget.title);
@@ -663,12 +675,26 @@ const [sortSeriesId, setSortSeriesId] = useState('');
   const allCategories = useMemo(() => {
     if (!dimension || data.length === 0) return [];
     const unique = new Set<string>();
-    data.forEach(row => {
-      const val = String(row[dimension] || 'N/A');
-      unique.add(val);
-    });
-    return Array.from(unique).sort();
-  }, [dimension, data]);
+    const addTokens = (raw: any) => {
+      const s = String(raw ?? '').trim();
+      if (!s) {
+        unique.add('(Empty)');
+        return;
+      }
+      if (!groupByString) {
+        unique.add(s);
+        return;
+      }
+      const tokens = s.split(/[,\n;|]+/).map((t) => t.trim()).filter(Boolean);
+      if (tokens.length === 0) {
+        unique.add('(Empty)');
+        return;
+      }
+      tokens.forEach((t) => unique.add(t));
+    };
+    data.forEach(row => addTokens(row[dimension]));
+    return Array.from(unique).sort((a, b) => a.localeCompare(b));
+  }, [dimension, data, groupByString]);
 
   const stackKeys = useMemo(() => {
     if (!supports?.stackBy) return [];
@@ -688,15 +714,19 @@ const [sortSeriesId, setSortSeriesId] = useState('');
     if (measure !== 'count') return [];
     if (!measureCol) return [];
     const unique = new Set<string>();
-    data.forEach((row) => {
-      const raw = row[measureCol];
-      if (raw === null || raw === undefined) return;
-      const s = String(raw).trim();
+    const addTokens = (raw: any) => {
+      const s = String(raw ?? '').trim();
       if (!s) return;
-      unique.add(s);
-    });
+      if (!groupByString) {
+        unique.add(s);
+        return;
+      }
+      const tokens = s.split(/[,\n;|]+/).map((t) => t.trim()).filter(Boolean);
+      tokens.forEach((t) => unique.add(t));
+    };
+    data.forEach((row) => addTokens(row[measureCol]));
     return Array.from(unique).sort();
-  }, [type, measure, measureCol, data]);
+  }, [type, measure, measureCol, data, groupByString]);
 
   const prevKpiColRef = useRef<string>('');
   useEffect(() => {
@@ -729,6 +759,10 @@ const [sortSeriesId, setSortSeriesId] = useState('');
       alert('Please fix the highlighted fields before saving.');
       return;
     }
+    const normalizedSortBy =
+      sortBy === 'original'
+        ? (columnProfiles[dimension]?.type === 'date' ? 'date-asc' : 'name-asc')
+        : sortBy;
     const errors = validateChartConfig(type, {
       dimension,
       stackBy,
@@ -757,7 +791,7 @@ const [sortSeriesId, setSortSeriesId] = useState('');
       color: primaryColor,
       dimension: supports?.dimension ? dimension : '',
       width,
-      sortBy,
+      sortBy: normalizedSortBy,
       barOrientation,
       categoryFilter: categoryFilter.length > 0 ? categoryFilter : undefined,
       sortSeriesId: sortSeriesId || undefined,
@@ -773,6 +807,7 @@ const [sortSeriesId, setSortSeriesId] = useState('');
       categoryGap,
       topN: topNEnabled ? Math.max(1, topNCount) : undefined,
       groupOthers: topNEnabled ? groupOthers : undefined,
+      groupByString: groupByString || undefined,
       valueFormat,
       categoryConfig,
 
@@ -864,6 +899,12 @@ const [sortSeriesId, setSortSeriesId] = useState('');
     }
   };
 
+  const handleGroupByStringChange = (val: boolean) => {
+    setGroupByString(val);
+    setCategoryFilter([]);
+    setCategorySearch('');
+  };
+
   const handleSelectAllCategories = () => {
     if (type === 'kpi' && measure === 'count' && kpiCountMode === 'group') {
       setCategoryFilter([...kpiCategories]);
@@ -903,6 +944,7 @@ const [sortSeriesId, setSortSeriesId] = useState('');
     setMeasureCol('');
     setKpiCountMode('row');
     setCategoryFilter([]);
+    setGroupByString(false);
     setCategoryConfig({});
     setPrimaryColor(CLASSIC_ANALYTICS_THEME.palette[0] || '#3B82F6');
     setXDimension('');
@@ -1044,6 +1086,7 @@ const [sortSeriesId, setSortSeriesId] = useState('');
       categoryGap,
       topN: topNEnabled ? Math.max(1, topNCount) : undefined,
       groupOthers: topNEnabled ? groupOthers : undefined,
+      groupByString: groupByString || undefined,
       categoryConfig,
       filters: [],
       xAxis,
@@ -1089,6 +1132,7 @@ const [sortSeriesId, setSortSeriesId] = useState('');
     topNEnabled,
     topNCount,
     groupOthers,
+    groupByString,
     categoryConfig,
     xAxis,
     leftYAxis,
@@ -1230,7 +1274,7 @@ const [sortSeriesId, setSortSeriesId] = useState('');
             <div className="flex-1 overflow-y-auto p-4">
               {activeTab === 'setup' && (
                 <div className="space-y-4">
-                  <div className="grid grid-cols-2 gap-3">
+                  <div className="grid grid-cols-1 gap-3">
                     <div>
                       <label className="block text-xs font-medium text-gray-700 mb-1">Widget Title</label>
                       <input
@@ -1238,22 +1282,8 @@ const [sortSeriesId, setSortSeriesId] = useState('');
                         value={title}
                         onChange={(e) => setTitle(e.target.value)}
                         className="w-full px-3 py-2 border border-gray-300 rounded text-sm"
-                        placeholder="e.g., Top Posts by Channel"
                         style={{ outline: 'none' }}
                       />
-                    </div>
-                    <div>
-                      <label className="block text-xs font-medium text-gray-700 mb-1">Dashboard Width</label>
-                      <select
-                        value={width}
-                        onChange={(e) => setWidth(e.target.value as 'half' | 'full')}
-                        className="w-full px-3 py-2 border border-gray-300 rounded text-sm"
-                        style={{ outline: 'none' }}
-                      >
-                        <option value="half">Half (1 column)</option>
-                        <option value="full">Full (2 columns)</option>
-                      </select>
-                      <p className="text-[11px] text-gray-500 mt-1">Full width spans the entire dashboard row.</p>
                     </div>
                   </div>
 
@@ -1336,6 +1366,8 @@ const [sortSeriesId, setSortSeriesId] = useState('');
                     setTopNCount={setTopNCount}
                     groupOthers={groupOthers}
                     setGroupOthers={setGroupOthers}
+                    groupByString={groupByString}
+                    setGroupByString={handleGroupByStringChange}
                     categoryFilter={categoryFilter}
                     setCategoryFilter={setCategoryFilter}
                     allCategories={allCategories}

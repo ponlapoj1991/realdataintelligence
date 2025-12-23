@@ -164,7 +164,14 @@ export interface ChartDefinition {
 }
 
 export type AggregateMethod = 'count' | 'sum' | 'avg';
-export type SortOrder = 'value-desc' | 'value-asc' | 'name-asc' | 'name-desc' | 'original';
+export type SortOrder =
+  | 'value-desc'
+  | 'value-asc'
+  | 'name-asc'
+  | 'name-desc'
+  | 'date-desc'
+  | 'date-asc'
+  | 'original';
 
 export type FilterDataType = 'text' | 'number' | 'date';
 
@@ -345,6 +352,7 @@ export interface DashboardWidget {
   sectionIndex?: number; // 0-4 (New Grid System)
   topN?: number;
   groupOthers?: boolean;
+  groupByString?: boolean;
 }
 
 export interface ProjectDashboard {
