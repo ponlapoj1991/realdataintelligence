@@ -364,6 +364,20 @@ const ChartConfigForm: React.FC<ChartConfigFormProps> = ({
             </div>
           )}
 
+          {measure === 'count' && measureCol && (
+            <div className="border border-gray-200 rounded-lg p-3 bg-gray-50">
+              <label className="flex items-center gap-2 text-sm text-gray-700">
+                <input
+                  type="checkbox"
+                  checked={groupByString}
+                  onChange={(e) => setGroupByString(e.target.checked)}
+                  className="rounded"
+                />
+                By String
+              </label>
+            </div>
+          )}
+
           {measure === 'count' && measureCol && kpiCountMode === 'group' && kpiCategories.length > 0 && (
             <div>
               <div className="flex items-center justify-between mb-2">
@@ -840,7 +854,7 @@ const ChartConfigForm: React.FC<ChartConfigFormProps> = ({
                 Major (Group Interval)
               </label>
               <div className="flex items-center gap-3">
-                <input
+               <input
                   type="number"
                   min={0}
                   max={365}
@@ -848,9 +862,6 @@ const ChartConfigForm: React.FC<ChartConfigFormProps> = ({
                   onChange={(e) => setXAxisMajor(parseInt(e.target.value || '0', 10) || 0)}
                   className="w-28 px-3 py-2 border border-gray-300 rounded text-sm bg-white"
                 />
-                <p className="text-xs text-gray-500">
-                  ใส่ 0 เพื่อแสดงทุกค่า, ใส่ 7 เพื่อรวมเป็นช่วงละ 7 หน่วย
-                </p>
               </div>
             </div>
           )}

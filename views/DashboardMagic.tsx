@@ -1,5 +1,4 @@
 import React, { useEffect, useMemo, useState, useCallback, useRef } from 'react';
-import { saveAs } from 'file-saver';
 import {
   ArrowLeft,
   Edit3,
@@ -14,6 +13,7 @@ import {
   Loader2,
   X,
   Table,
+  Copy,
   Download,
   Presentation,
   GripHorizontal,
@@ -38,8 +38,6 @@ import { ensureDataSources } from '../utils/dataSources';
 import { resolveDashboardBaseData } from '../utils/dashboardData';
 import { saveProject } from '../utils/storage-compat';
 import { REALPPTX_CHART_THEME } from '../constants/chartTheme';
-import { buildMagicChartPayload } from '../utils/magicChartPayload';
-import { buildMagicEchartsOption } from '../utils/magicOptionBuilder';
 import { exportToExcel } from '../utils/excel';
 import { generatePowerPoint } from '../utils/report';
 import { useMagicAggregationWorker } from '../hooks/useMagicAggregationWorker';
@@ -417,18 +415,21 @@ const DashboardMagic: React.FC<DashboardMagicProps> = ({ project, onUpdateProjec
     await handleSaveWidgets(updatedWidgets);
   };
 
-  const handleExportWidget = (widget: DashboardWidget) => {
-    const payload = buildMagicChartPayload(widget, filteredData, {
-      theme: REALPPTX_CHART_THEME,
-      sourceDashboardId: editingDashboard?.id,
-    });
-    if (!payload) {
-      alert('No data to export');
-      return;
-    }
-    const optionRaw = buildMagicEchartsOption(payload);
-    const blob = new Blob([JSON.stringify({ ...payload, optionRaw }, null, 2)], { type: 'application/json' });
-    saveAs(blob, `${widget.title || 'chart'}.magic-echarts.json`);
+  const generateWidgetId = () => 'w-' + Date.now().toString(36) + Math.random().toString(36).substring(2, 9);
+  const deepClone = <T,>(value: T): T => {
+    const sc = (globalThis as any).structuredClone as undefined | ((val: any) => any);
+    if (typeof sc === 'function') return sc(value) as T;
+    return JSON.parse(JSON.stringify(value)) as T;
+  };
+
+  const handleDuplicateWidget = async (widget: DashboardWidget) => {
+    const copy = deepClone(widget);
+    copy.id = generateWidgetId();
+    const idx = widgets.findIndex((w) => w.id === widget.id);
+    const next = [...widgets];
+    next.splice(idx >= 0 ? idx + 1 : next.length, 0, copy);
+    setWidgets(next);
+    await handleSaveWidgets(next);
   };
 
   const handleActiveDataSourceChange = async (id: string) => {
@@ -495,15 +496,24 @@ const DashboardMagic: React.FC<DashboardMagicProps> = ({ project, onUpdateProjec
   // --- Grid Handlers ---
 
   const onDragStart = (e: React.DragEvent, id: string, sectionIndex: number) => {
+    e.dataTransfer.setData('text/plain', id);
+    e.dataTransfer.effectAllowed = 'move';
+    try {
+      const img = new Image();
+      img.src = 'data:image/gif;base64,R0lGODlhAQABAAAAACH5BAEAAAAALAAAAAABAAEAAAICRAEAOw==';
+      e.dataTransfer.setDragImage(img, 0, 0);
+    } catch {
+      // Ignore drag image failures
+    }
+
     const target = e.currentTarget as HTMLElement;
-    const rect = target.getBoundingClientRect();
+    const cardEl = target.closest?.('[data-widget-id]') as HTMLElement | null;
+    const rect = (cardEl ?? target).getBoundingClientRect();
     const w = widgets.find((x) => x.id === id);
     const colSpan = Math.max(1, Math.min(4, w?.colSpan || (w?.width === 'full' ? 4 : 2)));
     setDraggedWidget({ id, sectionIndex, colSpan, heightPx: Math.max(120, Math.round(rect.height)) });
     setDragOverSection(sectionIndex);
     setDropTarget(null);
-    e.dataTransfer.effectAllowed = 'move';
-    // Transparent drag image if needed, or default
   };
 
   const onDragOverSection = (e: React.DragEvent, sectionIndex: number) => {
@@ -1097,8 +1107,8 @@ const DashboardMagic: React.FC<DashboardMagicProps> = ({ project, onUpdateProjec
           {widgets.length === 0 ? (
             <EmptyState
               icon={LayoutDashboard}
-              title="No charts yet"
-              description="Click Add Chart to create your first ECharts visualization."
+              title="No charts"
+              description="Dashboard is empty."
               actionLabel="Add Chart"
               onAction={() => {
                 setEditingWidget(null);
@@ -1164,9 +1174,6 @@ const DashboardMagic: React.FC<DashboardMagicProps> = ({ project, onUpdateProjec
                           <div
                             key={w.id}
                             data-widget-id={w.id}
-                            draggable={!isPresentationMode}
-                            onDragStart={(e) => onDragStart(e, w.id, sectionIndex)}
-                            onDragEnd={onDragEnd}
                             onDragOver={(e) => onDragOverWidget(e, sectionIndex, w.id)}
                             className={`group relative flex flex-col rounded-2xl border border-gray-200 bg-white/80 backdrop-blur-sm p-5 shadow-sm transition-shadow hover:shadow-md ${
                               draggedWidget?.id === w.id ? 'opacity-60' : ''
@@ -1174,28 +1181,35 @@ const DashboardMagic: React.FC<DashboardMagicProps> = ({ project, onUpdateProjec
                             style={{
                               gridColumn: `span ${w.colSpan || 2} / span ${w.colSpan || 2}`,
                               minHeight: '420px',
-                              cursor: isPresentationMode ? 'default' : 'grab'
+                              cursor: 'default'
                             }}
                           >
                             {/* Header */}
                             <div className="flex justify-between items-start mb-3">
                               <div className="flex items-center space-x-2 overflow-hidden">
-                                {!isPresentationMode && <GripHorizontal className="w-4 h-4 text-gray-300 cursor-grab active:cursor-grabbing flex-shrink-0" />}
-                                <div className="min-w-0">
-                                  <h4 className="widget-title font-bold text-gray-800 truncate">{w.title}</h4>
-                                  <p className="widget-meta text-xs text-gray-500 capitalize truncate">
-                                    {w.type} {w.dimension ? `by ${w.dimension}` : ''}
-                                  </p>
+                                  {!isPresentationMode && (
+                                    <div
+                                      className="flex-shrink-0"
+                                      draggable
+                                      onDragStart={(e) => onDragStart(e, w.id, sectionIndex)}
+                                      onDragEnd={onDragEnd}
+                                      title="Move"
+                                    >
+                                      <GripHorizontal className="w-4 h-4 text-gray-300 cursor-grab active:cursor-grabbing" />
+                                    </div>
+                                  )}
+                                  <div className="min-w-0">
+                                    <h4 className="widget-title font-bold text-gray-800 truncate">{w.title}</h4>
+                                  </div>
                                 </div>
-                              </div>
                               {!isPresentationMode && (
                                 <div className="flex space-x-1 opacity-0 group-hover:opacity-100 transition-opacity">
                                   <button
-                                    onClick={() => handleExportWidget(w)}
-                                    className="p-1.5 text-gray-400 hover:text-emerald-600 hover:bg-emerald-50 rounded"
-                                    title="Export JSON"
+                                    onClick={() => handleDuplicateWidget(w)}
+                                    className="p-1.5 text-gray-400 hover:text-gray-700 hover:bg-gray-100 rounded"
+                                    title="Duplicate"
                                   >
-                                    <Download className="w-3.5 h-3.5" />
+                                    <Copy className="w-3.5 h-3.5" />
                                   </button>
                                   <button
                                     onClick={() => {
@@ -1245,7 +1259,7 @@ const DashboardMagic: React.FC<DashboardMagicProps> = ({ project, onUpdateProjec
                                     const colPx = Math.max(1, (width - paddingPx - gapPx) / 4);
                                     setResizing({ id: w.id, startX: e.clientX, startSpan: w.colSpan || 2, colPx });
                                   }}
-                                  title="Drag to resize width"
+                                  title="Resize"
                                 >
                                   <div className="w-1.5 h-8 bg-gray-200 rounded-full hover:bg-blue-400" />
                                 </div>

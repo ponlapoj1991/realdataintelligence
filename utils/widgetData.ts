@@ -218,9 +218,15 @@ const createMajorBucketMapper = (rows: RawRow[], column: string, major: number) 
   if (!kind) return null;
 
   if (kind === 'date') {
-    const dates = values.map(v => toDate(v)).filter((d): d is Date => !!d);
-    if (!dates.length) return null;
-    const min = new Date(Math.min(...dates.map(d => d.getTime())));
+    let minMs = Infinity;
+    for (const v of values) {
+      const d = toDate(v);
+      if (!d) continue;
+      const ms = d.getTime();
+      if (ms < minMs) minMs = ms;
+    }
+    if (!Number.isFinite(minMs)) return null;
+    const min = new Date(minMs);
     min.setHours(0, 0, 0, 0);
     const msPerDay = 24 * 60 * 60 * 1000;
     return (raw: any) => {
@@ -236,11 +242,13 @@ const createMajorBucketMapper = (rows: RawRow[], column: string, major: number) 
     };
   }
 
-  const nums = values
-    .map(v => Number(String(v)))
-    .filter((n) => Number.isFinite(n));
-  if (!nums.length) return null;
-  const min = Math.min(...nums);
+  let min = Infinity;
+  for (const v of values) {
+    const n = Number(String(v));
+    if (!Number.isFinite(n)) continue;
+    if (n < min) min = n;
+  }
+  if (!Number.isFinite(min)) return null;
   return (raw: any) => {
     const n = Number(String(raw));
     if (!Number.isFinite(n)) return '(Empty)';
@@ -316,7 +324,10 @@ export const aggregateWidgetData = (
           if (raw === null || raw === undefined) return;
           const s = String(raw).trim();
           if (!s) return;
-          counts[s] = (counts[s] || 0) + 1;
+          const tokens = widget.groupByString ? splitByString(s) : [s];
+          for (const token of tokens) {
+            counts[token] = (counts[token] || 0) + 1;
+          }
         });
 
         value = Object.entries(counts).reduce((sum, [cat, cnt]) => {
