@@ -233,6 +233,43 @@ export const buildDashboardChartPayload = (
   if (!filteredRows.length) return null;
 
   if (chartType === 'combo') {
+    // If no series defined yet, fallback to single-series bar chart (like other charts)
+    const hasSeries = widget.series && widget.series.length > 0 && widget.dimension;
+    if (!hasSeries) {
+      // Fallback: treat as column chart with default aggregation
+      const aggregated = aggregateWidgetData(widget, filteredRows);
+      if (!aggregated.data || aggregated.data.length === 0) return null;
+      const single = buildSingleSeries(aggregated.data, widget.title || widget.chartTitle);
+      const dataColors = aggregated.data.map((row: any, idx: number) =>
+        getCategoryColor(widget, String(row.name ?? row.label ?? idx), idx, theme)
+      );
+      return {
+        chartType: 'combo',
+        data: {
+          labels: single.labels,
+          legends: single.legends,
+          series: single.series,
+          dataColors,
+        },
+        options: {
+          seriesTypes: ['bar'],
+          legendEnabled: widget.legend?.enabled ?? widget.showLegend !== false,
+          legendPosition: widget.legend?.position,
+        },
+        theme: {
+          colors: palette,
+          textColor: theme.typography.axisColor,
+          lineColor: theme.background.grid
+        },
+        meta: {
+          widgetId: widget.id,
+          widgetTitle: widget.title,
+          widgetType: widget.type,
+          sourceDashboardId: opts?.sourceDashboardId
+        }
+      };
+    }
+
     const multiSeriesData = processMultiSeriesData(widget, filteredRows);
     if (!multiSeriesData.length) return null;
     const combo = buildComboSeries(widget, multiSeriesData, theme);
