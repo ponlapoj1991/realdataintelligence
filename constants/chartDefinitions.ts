@@ -30,6 +30,13 @@ export const CHART_DEFINITIONS: ChartDefinition[] = [
     icon: 'Percent',
     description: 'Normalize each column to 100% to compare proportions'
   },
+  {
+    type: 'compare-column',
+    category: 'column',
+    label: 'Compare Column',
+    icon: 'BarChart3',
+    description: 'Compare categories across multiple series'
+  },
 
   // ========================================
   // BAR CHARTS (Horizontal)

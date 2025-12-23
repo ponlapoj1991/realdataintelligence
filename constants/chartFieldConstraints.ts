@@ -114,6 +114,7 @@ const constraintsMap: Partial<Record<ChartType, FieldConstraint[]>> = {
   column: [baseDimension()],
   'stacked-column': [baseDimension(), stackConstraint],
   '100-stacked-column': [baseDimension(), stackConstraint],
+  'compare-column': [baseDimension('Category'), seriesByConstraint],
   bar: [baseDimension()],
   'stacked-bar': [baseDimension(), stackConstraint],
   '100-stacked-bar': [baseDimension(), stackConstraint],

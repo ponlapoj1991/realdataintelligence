@@ -459,6 +459,16 @@ export const aggregateWidgetData = (
     return splitByString(key);
   };
 
+  const excludedSeries = new Set(widget.seriesFilter || []);
+  const getSeriesKeys = (row: RawRow) => {
+    if (!widget.stackBy) return ['(Other)'];
+    const raw = row[widget.stackBy];
+    if (raw === null || raw === undefined) return ['(Other)'];
+    const key = normalizeKey(raw);
+    if (!widget.seriesGroupByString) return [key];
+    return splitByString(key);
+  };
+
   const inferredForLine = isLineFamily && widget.dimension
     ? inferTemporalOrSequential(rows.map(r => r[widget.dimension]))
     : null;
@@ -477,9 +487,6 @@ export const aggregateWidgetData = (
     const groups: Record<string, Record<string, number>> = {};
 
     rows.forEach(row => {
-      const stackVal = normalizeKey(row[widget.stackBy!] ?? '(Other)');
-
-      stackKeys.add(stackVal);
       const dimValues = getDimensionKeys(row);
       for (const dimVal of dimValues) {
         if (widget.categoryFilter && widget.categoryFilter.length > 0 && widget.categoryFilter.includes(dimVal)) {
@@ -487,15 +494,22 @@ export const aggregateWidgetData = (
         }
 
         if (!groups[dimVal]) groups[dimVal] = {};
-        if (!groups[dimVal][stackVal]) groups[dimVal][stackVal] = 0;
 
-        if (widget.measure === 'count') {
-          groups[dimVal][stackVal]++;
-        } else if (widget.measure === 'sum' && widget.measureCol) {
-          const val = Number(row[widget.measureCol]) || 0;
-          groups[dimVal][stackVal] += val;
-        } else if (widget.measure === 'avg' && widget.measureCol) {
-          groups[dimVal][stackVal] += Number(row[widget.measureCol]) || 0;
+        const seriesKeys = getSeriesKeys(row);
+        for (const stackVal of seriesKeys) {
+          if (excludedSeries.size > 0 && excludedSeries.has(stackVal)) continue;
+
+          stackKeys.add(stackVal);
+          if (!groups[dimVal][stackVal]) groups[dimVal][stackVal] = 0;
+
+          if (widget.measure === 'count') {
+            groups[dimVal][stackVal]++;
+          } else if (widget.measure === 'sum' && widget.measureCol) {
+            const val = Number(row[widget.measureCol]) || 0;
+            groups[dimVal][stackVal] += val;
+          } else if (widget.measure === 'avg' && widget.measureCol) {
+            groups[dimVal][stackVal] += Number(row[widget.measureCol]) || 0;
+          }
         }
       }
     });
@@ -546,7 +560,6 @@ export const aggregateWidgetData = (
   }
 
   if (widget.type === 'multi-line' && widget.stackBy) {
-    const seriesColumn = widget.stackBy;
     const seriesKeys = new Set<string>();
     const statsBySeries: Record<string, Record<string, { sum: number; count: number }>> = {};
     const measure = widget.measure || 'count';
@@ -604,19 +617,27 @@ export const aggregateWidgetData = (
 
     rows.forEach((row) => {
       const label = getLabel(row);
-      const seriesKey = normalizeKey(row[seriesColumn] ?? '(Other)');
-      seriesKeys.add(seriesKey);
+      if (widget.categoryFilter && widget.categoryFilter.length > 0 && widget.categoryFilter.includes(label)) {
+        return;
+      }
 
-      if (!statsBySeries[seriesKey]) statsBySeries[seriesKey] = {};
-      if (!statsBySeries[seriesKey][label]) statsBySeries[seriesKey][label] = { sum: 0, count: 0 };
+      const seriesKeyList = getSeriesKeys(row);
+      for (const seriesKey of seriesKeyList) {
+        if (excludedSeries.size > 0 && excludedSeries.has(seriesKey)) continue;
 
-      const cell = statsBySeries[seriesKey][label];
-      if (measure === 'count') {
-        cell.sum += 1;
-        cell.count += 1;
-      } else if ((measure === 'sum' || measure === 'avg') && widget.measureCol) {
-        cell.sum += Number(row[widget.measureCol]) || 0;
-        cell.count += 1;
+        seriesKeys.add(seriesKey);
+
+        if (!statsBySeries[seriesKey]) statsBySeries[seriesKey] = {};
+        if (!statsBySeries[seriesKey][label]) statsBySeries[seriesKey][label] = { sum: 0, count: 0 };
+
+        const cell = statsBySeries[seriesKey][label];
+        if (measure === 'count') {
+          cell.sum += 1;
+          cell.count += 1;
+        } else if ((measure === 'sum' || measure === 'avg') && widget.measureCol) {
+          cell.sum += Number(row[widget.measureCol]) || 0;
+          cell.count += 1;
+        }
       }
     });
 
@@ -663,6 +684,11 @@ export const aggregateWidgetData = (
       labels = applySorting(labelRows, resolvedSortBy, 'value').map((r) => r.name);
     }
 
+    if (widget.categoryFilter && widget.categoryFilter.length > 0) {
+      const excludedDim = new Set(widget.categoryFilter);
+      labels = labels.filter((l) => !excludedDim.has(l));
+    }
+
     const seriesKeyList = Array.from(seriesKeys).sort((a, b) => a.localeCompare(b));
     const data = labels.map((name) => {
       const row: any = { name };
@@ -680,6 +706,70 @@ export const aggregateWidgetData = (
     });
 
     return { data, isStack: false, stackKeys: seriesKeyList };
+  }
+
+  if (widget.type === 'compare-column' && widget.stackBy) {
+    const stackKeys = new Set<string>();
+    const groups: Record<string, Record<string, number>> = {};
+
+    rows.forEach((row) => {
+      const dimValues = getDimensionKeys(row);
+      const seriesKeys = getSeriesKeys(row);
+
+      for (const dimVal of dimValues) {
+        if (widget.categoryFilter && widget.categoryFilter.length > 0 && widget.categoryFilter.includes(dimVal)) {
+          continue;
+        }
+        if (!groups[dimVal]) groups[dimVal] = {};
+
+        for (const seriesKey of seriesKeys) {
+          if (excludedSeries.size > 0 && excludedSeries.has(seriesKey)) continue;
+          stackKeys.add(seriesKey);
+          if (!groups[dimVal][seriesKey]) groups[dimVal][seriesKey] = 0;
+
+          if (widget.measure === 'count') {
+            groups[dimVal][seriesKey]++;
+          } else if (widget.measure === 'sum' && widget.measureCol) {
+            const val = Number(row[widget.measureCol]) || 0;
+            groups[dimVal][seriesKey] += val;
+          } else if (widget.measure === 'avg' && widget.measureCol) {
+            groups[dimVal][seriesKey] += Number(row[widget.measureCol]) || 0;
+          }
+        }
+      }
+    });
+
+    const stackKeyList = Array.from(stackKeys).sort((a, b) => a.localeCompare(b));
+
+    const result = Object.keys(groups).map((dim) => {
+      const row: any = { name: dim, __total: 0 };
+      stackKeyList.forEach((key) => {
+        const value = groups[dim][key] || 0;
+        row[key] = value;
+        row.__total += value;
+      });
+      return row;
+    });
+
+    let finalRows = applySorting(result, resolvedSortBy, '__total');
+    finalRows = applyTopNLimiter(finalRows, widget, (overflow) => {
+      if (overflow.length === 0) return null;
+      const othersRow: any = { name: 'Others', __total: 0 };
+      stackKeyList.forEach((key) => {
+        const value = overflow.reduce((sum, row) => sum + (row[key] || 0), 0);
+        othersRow[key] = value;
+        othersRow.__total += value;
+      });
+      return othersRow;
+    });
+
+    finalRows = finalRows.map((row) => {
+      const clone = { ...row };
+      delete clone.__total;
+      return clone;
+    });
+
+    return { data: finalRows, isStack: false, stackKeys: stackKeyList };
   }
 
   const measure = widget.measure || 'count';
@@ -845,12 +935,14 @@ export const getTopNOverflowDimensionValues = (widget: DashboardWidget, rows: Ra
   if (!widget.dimension) return [];
 
   const excluded = new Set(widget.categoryFilter || []);
+  const excludedSeries = new Set(widget.seriesFilter || []);
 
   const isStackedChart = [
     'stacked-column', '100-stacked-column',
     'stacked-bar', '100-stacked-bar',
     'stacked-area', '100-stacked-area'
   ].includes(widget.type);
+  const isCompareColumn = widget.type === 'compare-column';
 
   const isLineFamily = ['line', 'smooth-line', 'multi-line', 'area', 'stacked-area', '100-stacked-area'].includes(widget.type);
   const major = widget.xAxis?.major ?? 0;
@@ -862,6 +954,19 @@ export const getTopNOverflowDimensionValues = (widget: DashboardWidget, rows: Ra
     const raw = row[widget.dimension];
     const base = majorBucket ? majorBucket(raw) : normalizeKey(raw);
     return base ? String(base) : '(Empty)';
+  };
+  const getDimensionKeys = (row: RawRow) => {
+    const key = getDimensionKey(row);
+    if (!widget.groupByString) return [key];
+    return splitByString(key);
+  };
+  const getSeriesKeys = (row: RawRow) => {
+    if (!widget.stackBy) return ['(Other)'];
+    const raw = row[widget.stackBy];
+    if (raw === null || raw === undefined) return ['(Other)'];
+    const key = normalizeKey(raw);
+    if (!widget.seriesGroupByString) return [key];
+    return splitByString(key);
   };
 
   const inferredForLine = isLineFamily && widget.dimension
@@ -924,29 +1029,33 @@ export const getTopNOverflowDimensionValues = (widget: DashboardWidget, rows: Ra
     return sorted.slice(limit).map((row: any) => String(row.name));
   }
 
-  if (isStackedChart && widget.stackBy) {
+  if ((isStackedChart || isCompareColumn) && widget.stackBy) {
     const stackKeys = new Set<string>();
     const groups: Record<string, Record<string, number>> = {};
 
     rows.forEach(row => {
-      const stackVal = normalizeKey(row[widget.stackBy!] ?? '(Other)');
-
-      stackKeys.add(stackVal);
       const dimValues = getDimensionKeys(row);
       for (const dimVal of dimValues) {
         if (excluded.has(dimVal)) continue;
 
         if (!groups[dimVal]) groups[dimVal] = {};
-        if (!groups[dimVal][stackVal]) groups[dimVal][stackVal] = 0;
 
-        if (widget.measure === 'count') {
-          groups[dimVal][stackVal]++;
-        } else if (widget.measure === 'sum' && widget.measureCol) {
-          const val = Number(row[widget.measureCol]) || 0;
-          groups[dimVal][stackVal] += val;
-        } else if (widget.measure === 'avg' && widget.measureCol) {
-          // Keep behavior consistent with aggregateWidgetData (sum-based for stacked avg).
-          groups[dimVal][stackVal] += Number(row[widget.measureCol]) || 0;
+        const seriesKeys = getSeriesKeys(row);
+        for (const stackVal of seriesKeys) {
+          if (excludedSeries.size > 0 && excludedSeries.has(stackVal)) continue;
+
+          stackKeys.add(stackVal);
+          if (!groups[dimVal][stackVal]) groups[dimVal][stackVal] = 0;
+
+          if (widget.measure === 'count') {
+            groups[dimVal][stackVal]++;
+          } else if (widget.measure === 'sum' && widget.measureCol) {
+            const val = Number(row[widget.measureCol]) || 0;
+            groups[dimVal][stackVal] += val;
+          } else if (widget.measure === 'avg' && widget.measureCol) {
+            // Keep behavior consistent with aggregateWidgetData (sum-based for stacked avg).
+            groups[dimVal][stackVal] += Number(row[widget.measureCol]) || 0;
+          }
         }
       }
     });

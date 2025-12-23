@@ -98,6 +98,16 @@ interface ChartConfigFormProps {
   onCategoryToggle: (cat: string) => void;
   onSelectAllCategories: () => void;
   onClearAllCategories: () => void;
+  // Series (for multi-series widgets)
+  seriesCategories: string[];
+  seriesFilter: string[];
+  seriesSearch: string;
+  setSeriesSearch: (val: string) => void;
+  onSeriesToggle: (cat: string) => void;
+  onSelectAllSeries: () => void;
+  onClearAllSeries: () => void;
+  seriesGroupByString: boolean;
+  setSeriesGroupByString: (val: boolean) => void;
   onSeriesChange: (id: string, changes: Partial<SeriesConfig>) => void;
 
   // Line chart grouping (Major interval) - stored on X axis
@@ -180,6 +190,15 @@ const ChartConfigForm: React.FC<ChartConfigFormProps> = ({
   onCategoryToggle,
   onSelectAllCategories,
   onClearAllCategories,
+  seriesCategories,
+  seriesFilter,
+  seriesSearch,
+  setSeriesSearch,
+  onSeriesToggle,
+  onSelectAllSeries,
+  onClearAllSeries,
+  seriesGroupByString,
+  setSeriesGroupByString,
   onSeriesChange,
   xAxisMajor,
   setXAxisMajor,
@@ -203,7 +222,12 @@ const ChartConfigForm: React.FC<ChartConfigFormProps> = ({
     chartType !== 'table' &&
     chartType !== 'kpi' &&
     allCategories.length > 0;
-  const showGroupByStringInSetup = supports.dimension && !canShowCategoryFilter && chartType !== 'multi-line';
+  const dimensionIsText = dimension ? columnProfiles[dimension]?.type === 'text' : false;
+  const showGroupByStringInSetup = supports.dimension && !canShowCategoryFilter && dimensionIsText;
+  const canShowSeriesFilter =
+    supports.stackBy &&
+    !!stackBy &&
+    seriesCategories.length > 0;
   const showBarSizeControl = useMemo(() => {
     const BAR_TYPES = new Set<ChartType>([
       'column',
@@ -515,6 +539,8 @@ const ChartConfigForm: React.FC<ChartConfigFormProps> = ({
             setDimension,
             chartType === 'multi-line'
               ? 'Date'
+              : chartType === 'compare-column'
+                ? 'Category'
               : `Dimension (${getDefaultOrientation(chartType) === 'vertical' ? 'X' : 'Y'}-Axis)`
           )}
           {showGroupByStringInSetup && (
@@ -555,7 +581,27 @@ const ChartConfigForm: React.FC<ChartConfigFormProps> = ({
           STACKED CHARTS - Stack By
           ======================================== */}
       {showStackBy && (
-        renderColumnSelect('stackBy', stackBy, setStackBy, chartType === 'multi-line' ? 'Series By' : 'Stack By (Breakdown Dimension)')
+        <div className="space-y-2">
+          {renderColumnSelect(
+            'stackBy',
+            stackBy,
+            setStackBy,
+            chartType === 'multi-line' || chartType === 'compare-column'
+              ? 'Series By'
+              : 'Stack By (Breakdown Dimension)'
+          )}
+          {!!stackBy && columnProfiles[stackBy]?.type === 'text' && (
+            <label className="flex items-center gap-2 text-xs text-gray-600">
+              <input
+                type="checkbox"
+                checked={seriesGroupByString}
+                onChange={(e) => setSeriesGroupByString(e.target.checked)}
+                className="rounded"
+              />
+              By String
+            </label>
+          )}
+        </div>
       )}
 
       {/* ========================================
@@ -966,15 +1012,17 @@ const ChartConfigForm: React.FC<ChartConfigFormProps> = ({
               Categories ({allCategories.length - categoryFilter.length} of {allCategories.length} visible)
             </label>
             <div className="flex items-center gap-3">
-              <label className="flex items-center gap-2 text-xs text-gray-600">
-                <input
-                  type="checkbox"
-                  checked={groupByString}
-                  onChange={(e) => setGroupByString(e.target.checked)}
-                  className="rounded"
-                />
-                By String
-              </label>
+              {dimensionIsText && (
+                <label className="flex items-center gap-2 text-xs text-gray-600">
+                  <input
+                    type="checkbox"
+                    checked={groupByString}
+                    onChange={(e) => setGroupByString(e.target.checked)}
+                    className="rounded"
+                  />
+                  By String
+                </label>
+              )}
               <div className="flex gap-2">
                 <button
                   onClick={onClearAllCategories}
@@ -998,7 +1046,6 @@ const ChartConfigForm: React.FC<ChartConfigFormProps> = ({
                 type="text"
                 value={categorySearch}
                 onChange={(e) => setCategorySearch(e.target.value)}
-                placeholder="Search categories..."
                 className="w-full px-3 py-2 border border-gray-300 rounded text-sm"
               />
             </div>
@@ -1022,6 +1069,60 @@ const ChartConfigForm: React.FC<ChartConfigFormProps> = ({
           </div>
           <p className="text-xs text-gray-500 mt-1">
             {categoryFilter.length === 0 ? 'All categories visible' : `${categoryFilter.length} hidden`}
+          </p>
+        </div>
+      )}
+
+      {/* ========================================
+          SERIES FILTER (for multi-series widgets)
+          ======================================== */}
+      {canShowSeriesFilter && (
+        <div>
+          <div className="flex items-center justify-between mb-2">
+            <label className="block text-sm font-medium text-gray-700">
+              Series ({seriesCategories.length - seriesFilter.length} of {seriesCategories.length} visible)
+            </label>
+            <div className="flex gap-2">
+              <button onClick={onClearAllSeries} className="text-xs text-blue-600 hover:text-blue-800">
+                Show All
+              </button>
+              <button onClick={onSelectAllSeries} className="text-xs text-gray-600 hover:text-gray-800">
+                Hide All
+              </button>
+            </div>
+          </div>
+
+          {seriesCategories.length > 5 && (
+            <div className="mb-2">
+              <input
+                type="text"
+                value={seriesSearch}
+                onChange={(e) => setSeriesSearch(e.target.value)}
+                className="w-full px-3 py-2 border border-gray-300 rounded text-sm"
+              />
+            </div>
+          )}
+
+          <div className="border border-gray-200 rounded p-3 max-h-48 overflow-y-auto bg-gray-50">
+            {seriesCategories
+              .filter((cat) => cat.toLowerCase().includes(seriesSearch.toLowerCase()))
+              .map((cat, idx) => (
+                <label
+                  key={idx}
+                  className="flex items-center py-1.5 px-2 hover:bg-gray-100 rounded cursor-pointer"
+                >
+                  <input
+                    type="checkbox"
+                    checked={!seriesFilter.includes(cat)}
+                    onChange={() => onSeriesToggle(cat)}
+                    className="mr-2"
+                  />
+                  <span className="text-sm text-gray-900">{cat}</span>
+                </label>
+              ))}
+          </div>
+          <p className="text-xs text-gray-500 mt-1">
+            {seriesFilter.length === 0 ? 'All series visible' : `${seriesFilter.length} hidden`}
           </p>
         </div>
       )}
