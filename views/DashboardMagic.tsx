@@ -719,12 +719,41 @@ const DashboardMagic: React.FC<DashboardMagicProps> = ({ project, onUpdateProjec
       'stacked-area', '100-stacked-area'
     ].includes(widget.type);
 
-    const stackColumn = isStackedChart ? widget.stackBy : undefined;
-    const stackLabel = stackColumn ? String(activeSeries ?? '').trim() : '';
+    const seriesColumn = (isStackedChart || widget.type === 'multi-line') ? widget.stackBy : undefined;
+    const seriesLabel = seriesColumn ? String(activeSeries ?? '').trim() : '';
     const normalizeStack = (raw: any) => {
       const s = String(raw ?? '').trim();
       if (s) return s;
       return raw === null || raw === undefined ? '(Other)' : '(Empty)';
+    };
+
+    const parseDateLabelRange = (raw: string) => {
+      const text = raw.trim();
+      if (!text) return null;
+      const parts = text.split(' - ');
+      if (parts.length === 2) {
+        const start = toDateValue(parts[0].trim());
+        const end = toDateValue(parts[1].trim());
+        if (!start || !end) return null;
+        start.setHours(0, 0, 0, 0);
+        end.setHours(23, 59, 59, 999);
+        return { startMs: start.getTime(), endMs: end.getTime() };
+      }
+      const d = toDateValue(text);
+      if (!d) return null;
+      d.setHours(0, 0, 0, 0);
+      return { startMs: d.getTime(), endMs: d.getTime() + 24 * 60 * 60 * 1000 - 1 };
+    };
+
+    const labelRange = parseDateLabelRange(label);
+    const matchesDimension = (row: RawRow) => {
+      if (labelRange) {
+        const d = toDateValue(row[filterColumn]);
+        if (!d) return false;
+        const ms = d.getTime();
+        return ms >= labelRange.startMs && ms <= labelRange.endMs;
+      }
+      return getDimValues(row).includes(label);
     };
 
     if (label === 'Others' && widget.topN && widget.groupOthers !== false) {
@@ -732,30 +761,30 @@ const DashboardMagic: React.FC<DashboardMagicProps> = ({ project, onUpdateProjec
       const overflowSet = new Set(overflowKeys);
       const clickedData = rowsForWidget.filter((row) => {
         if (!getDimValues(row).some((v) => overflowSet.has(v))) return false;
-        if (!stackColumn) return true;
-        return normalizeStack(row[stackColumn]) === stackLabel;
+        if (!seriesColumn) return true;
+        return normalizeStack(row[seriesColumn]) === seriesLabel;
       });
       setDrillDown({
         isOpen: true,
         title: `${widget.title} - Others`,
-        filterCol: stackColumn ? `${filterColumn} & ${stackColumn}` : filterColumn,
-        filterVal: `${overflowKeys.length ? `Others (${overflowKeys.length})` : 'Others'}${stackColumn ? ` / ${stackLabel}` : ''}`,
+        filterCol: seriesColumn ? `${filterColumn} & ${seriesColumn}` : filterColumn,
+        filterVal: `${overflowKeys.length ? `Others (${overflowKeys.length})` : 'Others'}${seriesColumn ? ` / ${seriesLabel}` : ''}`,
         data: clickedData,
       });
       return;
     }
 
     const clickedData = rowsForWidget.filter((row) => {
-      if (!getDimValues(row).includes(label)) return false;
-      if (!stackColumn) return true;
-      return normalizeStack(row[stackColumn]) === stackLabel;
+      if (!matchesDimension(row)) return false;
+      if (!seriesColumn) return true;
+      return normalizeStack(row[seriesColumn]) === seriesLabel;
     });
 
     setDrillDown({
       isOpen: true,
       title: `${widget.title} - ${label}`,
-      filterCol: stackColumn ? `${filterColumn} & ${stackColumn}` : filterColumn,
-      filterVal: stackColumn ? `${label} / ${stackLabel}` : label,
+      filterCol: seriesColumn ? `${filterColumn} & ${seriesColumn}` : filterColumn,
+      filterVal: seriesColumn ? `${label} / ${seriesLabel}` : label,
       data: clickedData,
     });
   };

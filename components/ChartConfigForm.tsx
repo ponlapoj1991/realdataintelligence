@@ -103,6 +103,8 @@ interface ChartConfigFormProps {
   // Line chart grouping (Major interval) - stored on X axis
   xAxisMajor: number;
   setXAxisMajor: (val: number) => void;
+  fillMode: 'gaps' | 'zero' | 'connect';
+  setFillMode: (val: 'gaps' | 'zero' | 'connect') => void;
 
   // KPI (Number)
   kpiCountMode: 'row' | 'group';
@@ -181,6 +183,8 @@ const ChartConfigForm: React.FC<ChartConfigFormProps> = ({
   onSeriesChange,
   xAxisMajor,
   setXAxisMajor,
+  fillMode,
+  setFillMode,
   kpiCountMode,
   setKpiCountMode,
   kpiCategories
@@ -199,7 +203,7 @@ const ChartConfigForm: React.FC<ChartConfigFormProps> = ({
     chartType !== 'table' &&
     chartType !== 'kpi' &&
     allCategories.length > 0;
-  const showGroupByStringInSetup = supports.dimension && !canShowCategoryFilter;
+  const showGroupByStringInSetup = supports.dimension && !canShowCategoryFilter && chartType !== 'multi-line';
   const showBarSizeControl = useMemo(() => {
     const BAR_TYPES = new Set<ChartType>([
       'column',
@@ -505,7 +509,14 @@ const ChartConfigForm: React.FC<ChartConfigFormProps> = ({
           ======================================== */}
       {!showBubble && !showScatterXY && !showPie && chartType !== 'kpi' && chartType !== 'table' && supports.dimension && (
         <div className="space-y-2">
-          {renderColumnSelect('dimension', dimension, setDimension, `Dimension (${getDefaultOrientation(chartType) === 'vertical' ? 'X' : 'Y'}-Axis)`)}
+          {renderColumnSelect(
+            'dimension',
+            dimension,
+            setDimension,
+            chartType === 'multi-line'
+              ? 'Date'
+              : `Dimension (${getDefaultOrientation(chartType) === 'vertical' ? 'X' : 'Y'}-Axis)`
+          )}
           {showGroupByStringInSetup && (
             <label className="flex items-center gap-2 text-xs text-gray-600">
               <input
@@ -544,7 +555,7 @@ const ChartConfigForm: React.FC<ChartConfigFormProps> = ({
           STACKED CHARTS - Stack By
           ======================================== */}
       {showStackBy && (
-        renderColumnSelect('stackBy', stackBy, setStackBy, 'Stack By (Breakdown Dimension)')
+        renderColumnSelect('stackBy', stackBy, setStackBy, chartType === 'multi-line' ? 'Series By' : 'Stack By (Breakdown Dimension)')
       )}
 
       {/* ========================================
@@ -854,7 +865,7 @@ const ChartConfigForm: React.FC<ChartConfigFormProps> = ({
                 Major (Group Interval)
               </label>
               <div className="flex items-center gap-3">
-               <input
+                <input
                   type="number"
                   min={0}
                   max={365}
@@ -863,6 +874,23 @@ const ChartConfigForm: React.FC<ChartConfigFormProps> = ({
                   className="w-28 px-3 py-2 border border-gray-300 rounded text-sm bg-white"
                 />
               </div>
+            </div>
+          )}
+
+          {showMajorControl && !['stacked-area', '100-stacked-area'].includes(chartType) && (
+            <div className="border border-gray-200 rounded-lg p-3 bg-gray-50">
+              <label className="block text-sm font-medium text-gray-700 mb-2">
+                Fill Mode
+              </label>
+              <select
+                value={fillMode}
+                onChange={(e) => setFillMode(e.target.value as any)}
+                className="w-full px-3 py-2 border border-gray-300 rounded text-sm bg-white"
+              >
+                <option value="gaps">Gaps</option>
+                <option value="zero">Zero</option>
+                <option value="connect">Connect</option>
+              </select>
             </div>
           )}
         </>

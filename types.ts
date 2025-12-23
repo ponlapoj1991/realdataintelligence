@@ -131,6 +131,7 @@ export type ChartType =
   // Line Charts
   | 'line'
   | 'smooth-line'
+  | 'multi-line'
   | 'area'
   | 'stacked-area'
   | '100-stacked-area'
@@ -306,6 +307,7 @@ export interface DashboardWidget {
   curveType?: 'linear' | 'monotone' | 'step';
   strokeWidth?: number;
   strokeStyle?: 'solid' | 'dashed' | 'dotted';
+  fillMode?: 'gaps' | 'zero' | 'connect';
 
   // KPI (Number) Specific
   kpiCountMode?: 'row' | 'group';

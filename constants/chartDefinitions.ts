@@ -73,6 +73,13 @@ export const CHART_DEFINITIONS: ChartDefinition[] = [
     icon: 'TrendingUp',
     description: 'Smooth line chart - show trends with curve interpolation'
   },
+  {
+    type: 'multi-line',
+    category: 'line',
+    label: 'Multi-Line',
+    icon: 'LineChart',
+    description: 'Multiple lines - compare series over time'
+  },
 
   // ========================================
   // AREA CHARTS

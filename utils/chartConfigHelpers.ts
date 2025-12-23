@@ -31,6 +31,7 @@ const SUPPORT_MATRIX: Record<ChartType, ChartSupports> = {
   '100-stacked-bar':   { dimension: true, stackBy: true,  multiSeries: false, measure: true,  bubble: false, scatterXY: false, pie: false, line: false, area: false, axes: true,  legend: true, dataLabels: true, sort: true, categoryFilter: true, categoryConfig: true },
   line:          { dimension: true, stackBy: false, multiSeries: false, measure: true,  bubble: false, scatterXY: false, pie: false, line: true,  area: false, axes: true,  legend: true, dataLabels: true, sort: true, categoryFilter: true, categoryConfig: true },
   'smooth-line': { dimension: true, stackBy: false, multiSeries: false, measure: true,  bubble: false, scatterXY: false, pie: false, line: true,  area: false, axes: true,  legend: true, dataLabels: true, sort: true, categoryFilter: true, categoryConfig: true },
+  'multi-line':  { dimension: true, stackBy: true,  multiSeries: false, measure: true,  bubble: false, scatterXY: false, pie: false, line: true,  area: false, axes: true,  legend: true, dataLabels: true, sort: false, categoryFilter: false, categoryConfig: true },
   area:          { dimension: true, stackBy: false, multiSeries: false, measure: true,  bubble: false, scatterXY: false, pie: false, line: false, area: true, axes: true,  legend: true, dataLabels: true, sort: true, categoryFilter: true, categoryConfig: true },
   'stacked-area':     { dimension: true, stackBy: true,  multiSeries: false, measure: true,  bubble: false, scatterXY: false, pie: false, line: false, area: true, axes: true,  legend: true, dataLabels: true, sort: true, categoryFilter: true, categoryConfig: true },
   '100-stacked-area': { dimension: true, stackBy: true,  multiSeries: false, measure: true,  bubble: false, scatterXY: false, pie: false, line: false, area: true, axes: true,  legend: true, dataLabels: true, sort: true, categoryFilter: true, categoryConfig: true },
@@ -90,7 +91,8 @@ export const isMultiSeriesChart = (type: ChartType): boolean => {
 export const isLineChart = (type: ChartType): boolean => {
   return [
     'line',
-    'smooth-line'
+    'smooth-line',
+    'multi-line'
   ].includes(type);
 };
 
@@ -145,12 +147,12 @@ export const validateChartConfig = (type: ChartType, config: any): string[] => {
     if (!config.yDimension) errors.push('กรุณาเลือก Y-Axis Dimension');
     if (type === 'bubble' && !config.sizeDimension) errors.push('กรุณาเลือก Bubble Size');
   } else if (supports.dimension && !config.dimension) {
-    errors.push('กรุณาเลือก Dimension');
+    errors.push(type === 'multi-line' ? 'Please select Date' : 'กรุณาเลือก Dimension');
   }
 
   // Stack By
   if (supports.stackBy && !config.stackBy) {
-    errors.push('กรุณาเลือก Stack By');
+    errors.push(type === 'multi-line' ? 'Please select Series By' : 'กรุณาเลือก Stack By');
   }
 
   // Series vs Measure
