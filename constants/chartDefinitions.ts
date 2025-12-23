@@ -106,6 +106,13 @@ export const CHART_DEFINITIONS: ChartDefinition[] = [
     description: 'Area chart - emphasize magnitude of change over time'
   },
   {
+    type: 'multi-area',
+    category: 'area',
+    label: 'Multi-Area',
+    icon: 'AreaChart',
+    description: 'Multiple areas - compare series over time'
+  },
+  {
     type: 'stacked-area',
     category: 'area',
     label: 'Stacked Area',

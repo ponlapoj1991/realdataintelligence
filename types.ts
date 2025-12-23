@@ -135,6 +135,7 @@ export type ChartType =
   | 'smooth-line'
   | 'multi-line'
   | 'area'
+  | 'multi-area'
   | 'stacked-area'
   | '100-stacked-area'
 

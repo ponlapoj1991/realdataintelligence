@@ -687,8 +687,8 @@ const [sortSeriesId, setSortSeriesId] = useState('');
   const allCategories = useMemo(() => {
     if (!dimension || data.length === 0) return [];
 
-    const isLineFamily = !!type && ['line', 'smooth-line', 'multi-line', 'area', 'stacked-area', '100-stacked-area'].includes(type);
-    const isMultiLine = type === 'multi-line';
+    const isLineFamily = !!type && ['line', 'smooth-line', 'multi-line', 'multi-area', 'area', 'stacked-area', '100-stacked-area'].includes(type);
+    const isMultiLine = type === 'multi-line' || type === 'multi-area';
     const major = typeof xAxis.major === 'number' ? xAxis.major : 0;
     const shouldBucket = isLineFamily && ((Number.isFinite(major) && major > 0) || isMultiLine);
 

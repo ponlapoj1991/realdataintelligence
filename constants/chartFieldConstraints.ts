@@ -122,6 +122,7 @@ const constraintsMap: Partial<Record<ChartType, FieldConstraint[]>> = {
   line: [baseDimension()],
   'smooth-line': [baseDimension()],
   'multi-line': [baseDimension('Date'), seriesByConstraint],
+  'multi-area': [baseDimension('Date'), seriesByConstraint],
   area: [baseDimension()],
   'stacked-area': [baseDimension(), stackConstraint],
   '100-stacked-area': [baseDimension(), stackConstraint],

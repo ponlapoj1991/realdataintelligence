@@ -34,6 +34,7 @@ const SUPPORT_MATRIX: Record<ChartType, ChartSupports> = {
   line:          { dimension: true, stackBy: false, multiSeries: false, measure: true,  bubble: false, scatterXY: false, pie: false, line: true,  area: false, axes: true,  legend: true, dataLabels: true, sort: true, categoryFilter: true, categoryConfig: true },
   'smooth-line': { dimension: true, stackBy: false, multiSeries: false, measure: true,  bubble: false, scatterXY: false, pie: false, line: true,  area: false, axes: true,  legend: true, dataLabels: true, sort: true, categoryFilter: true, categoryConfig: true },
   'multi-line':  { dimension: true, stackBy: true,  multiSeries: false, measure: true,  bubble: false, scatterXY: false, pie: false, line: true,  area: false, axes: true,  legend: true, dataLabels: true, sort: false, categoryFilter: true, categoryConfig: true },
+  'multi-area':  { dimension: true, stackBy: true,  multiSeries: false, measure: true,  bubble: false, scatterXY: false, pie: false, line: false, area: true,  axes: true,  legend: true, dataLabels: true, sort: false, categoryFilter: true, categoryConfig: true },
   area:          { dimension: true, stackBy: false, multiSeries: false, measure: true,  bubble: false, scatterXY: false, pie: false, line: false, area: true, axes: true,  legend: true, dataLabels: true, sort: true, categoryFilter: true, categoryConfig: true },
   'stacked-area':     { dimension: true, stackBy: true,  multiSeries: false, measure: true,  bubble: false, scatterXY: false, pie: false, line: false, area: true, axes: true,  legend: true, dataLabels: true, sort: true, categoryFilter: true, categoryConfig: true },
   '100-stacked-area': { dimension: true, stackBy: true,  multiSeries: false, measure: true,  bubble: false, scatterXY: false, pie: false, line: false, area: true, axes: true,  legend: true, dataLabels: true, sort: true, categoryFilter: true, categoryConfig: true },
@@ -103,6 +104,7 @@ export const isLineChart = (type: ChartType): boolean => {
 export const isAreaChart = (type: ChartType): boolean => {
   return [
     'area',
+    'multi-area',
     'stacked-area',
     '100-stacked-area'
   ].includes(type);
@@ -154,6 +156,8 @@ export const validateChartConfig = (type: ChartType, config: any): string[] => {
     errors.push(
       type === 'multi-line'
         ? 'Please select Date'
+        : type === 'multi-area'
+          ? 'Please select Date'
         : type === 'compare-column'
           ? 'Please select Category'
           : type === 'compare-bar'
@@ -165,7 +169,7 @@ export const validateChartConfig = (type: ChartType, config: any): string[] => {
   // Stack By
   if (supports.stackBy && !config.stackBy) {
     errors.push(
-      type === 'multi-line' || type === 'compare-column' || type === 'compare-bar'
+      type === 'multi-line' || type === 'multi-area' || type === 'compare-column' || type === 'compare-bar'
         ? 'Please select Series By'
         : 'กรุณาเลือก Stack By'
     );

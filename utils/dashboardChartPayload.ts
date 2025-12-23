@@ -137,6 +137,7 @@ const mapWidgetType = (widget: DashboardWidget): PptChartType | null => {
     case 'multi-line':
       return 'line';
     case 'area':
+    case 'multi-area':
     case 'stacked-area':
     case '100-stacked-area':
       return 'area';
@@ -418,7 +419,7 @@ export const buildDashboardChartPayload = (
     dataColors = scatter.dataColors;
   } else if (aggregated.stackKeys && aggregated.stackKeys.length) {
     const result =
-      widget.type === 'multi-line'
+      widget.type === 'multi-line' || widget.type === 'multi-area'
         ? buildMultiValueSeries(aggregated.data, aggregated.stackKeys)
         : buildStackedSeries(aggregated.data, aggregated.stackKeys);
     labels = result.labels;

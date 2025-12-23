@@ -442,7 +442,7 @@ export const aggregateWidgetData = (
     'stacked-area', '100-stacked-area'
   ].includes(widget.type);
 
-  const isLineFamily = ['line', 'smooth-line', 'multi-line', 'area', 'stacked-area', '100-stacked-area'].includes(widget.type);
+  const isLineFamily = ['line', 'smooth-line', 'multi-line', 'multi-area', 'area', 'stacked-area', '100-stacked-area'].includes(widget.type);
   const major = widget.xAxis?.major ?? 0;
   const majorBucket =
     isLineFamily && widget.dimension
@@ -559,7 +559,7 @@ export const aggregateWidgetData = (
     return { data: finalRows, isStack: isStackedChart, stackKeys: stackKeyList };
   }
 
-  if (widget.type === 'multi-line' && widget.stackBy) {
+  if ((widget.type === 'multi-line' || widget.type === 'multi-area') && widget.stackBy) {
     const seriesKeys = new Set<string>();
     const statsBySeries: Record<string, Record<string, { sum: number; count: number }>> = {};
     const measure = widget.measure || 'count';
@@ -890,7 +890,7 @@ export const processMultiSeriesData = (widget: DashboardWidget, rows: RawRow[]) 
   });
 
   const rowEntries = Object.values(result);
-  const isLineFamily = ['line', 'smooth-line', 'multi-line', 'area', 'stacked-area', '100-stacked-area'].includes(widget.type);
+  const isLineFamily = ['line', 'smooth-line', 'multi-line', 'multi-area', 'area', 'stacked-area', '100-stacked-area'].includes(widget.type);
   const inferredForLine = isLineFamily && widget.dimension
     ? inferTemporalOrSequential(rows.map(r => r[widget.dimension!]))
     : null;
@@ -944,7 +944,7 @@ export const getTopNOverflowDimensionValues = (widget: DashboardWidget, rows: Ra
   ].includes(widget.type);
   const isCompareColumn = widget.type === 'compare-column' || widget.type === 'compare-bar';
 
-  const isLineFamily = ['line', 'smooth-line', 'multi-line', 'area', 'stacked-area', '100-stacked-area'].includes(widget.type);
+  const isLineFamily = ['line', 'smooth-line', 'multi-line', 'multi-area', 'area', 'stacked-area', '100-stacked-area'].includes(widget.type);
   const major = widget.xAxis?.major ?? 0;
   const majorBucket =
     isLineFamily && widget.dimension

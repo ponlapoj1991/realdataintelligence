@@ -538,9 +538,9 @@ const ChartConfigForm: React.FC<ChartConfigFormProps> = ({
             'dimension',
             dimension,
             setDimension,
-            chartType === 'multi-line'
+            chartType === 'multi-line' || chartType === 'multi-area'
               ? 'Date'
-              : chartType === 'compare-column'
+              : chartType === 'compare-column' || chartType === 'compare-bar'
                 ? 'Category'
               : `Dimension (${getDefaultOrientation(chartType) === 'vertical' ? 'X' : 'Y'}-Axis)`
           )}
@@ -587,7 +587,7 @@ const ChartConfigForm: React.FC<ChartConfigFormProps> = ({
             'stackBy',
             stackBy,
             setStackBy,
-            chartType === 'multi-line' || chartType === 'compare-column'
+            chartType === 'multi-line' || chartType === 'multi-area' || chartType === 'compare-column' || chartType === 'compare-bar'
               ? 'Series By'
               : 'Stack By (Breakdown Dimension)'
           )}
