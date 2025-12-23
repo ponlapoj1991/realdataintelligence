@@ -345,6 +345,7 @@ export interface DashboardWidget {
   sectionIndex?: number; // 0-4 (New Grid System)
   topN?: number;
   groupOthers?: boolean;
+  groupByString?: boolean;
 }
 
 export interface ProjectDashboard {

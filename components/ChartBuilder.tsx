@@ -448,6 +448,7 @@ const ChartBuilder: React.FC<ChartBuilderProps> = ({
   const [topNEnabled, setTopNEnabled] = useState(false);
   const [topNCount, setTopNCount] = useState(5);
   const [groupOthers, setGroupOthers] = useState(true);
+  const [groupByString, setGroupByString] = useState(false);
   const [categoryFilter, setCategoryFilter] = useState<string[]>([]);
   const [categorySearch, setCategorySearch] = useState('');
 
@@ -515,6 +516,7 @@ const [sortSeriesId, setSortSeriesId] = useState('');
     setTopNEnabled(false);
     setTopNCount(5);
     setGroupOthers(true);
+    setGroupByString(false);
     setCategoryFilter([]);
     setCategorySearch('');
     setBarOrientation('vertical');
@@ -560,6 +562,7 @@ const [sortSeriesId, setSortSeriesId] = useState('');
         setTopNCount(5);
         setGroupOthers(true);
       }
+      setGroupByString(!!initialWidget.groupByString);
       setBarOrientation(initialWidget.barOrientation || 'vertical');
       setCategoryFilter(initialWidget.categoryFilter || []);
       setChartTitle(initialWidget.chartTitle || initialWidget.title);
@@ -663,12 +666,26 @@ const [sortSeriesId, setSortSeriesId] = useState('');
   const allCategories = useMemo(() => {
     if (!dimension || data.length === 0) return [];
     const unique = new Set<string>();
-    data.forEach(row => {
-      const val = String(row[dimension] ?? '').trim();
-      unique.add(val || '(Empty)');
-    });
+    const addTokens = (raw: any) => {
+      const s = String(raw ?? '').trim();
+      if (!s) {
+        unique.add('(Empty)');
+        return;
+      }
+      if (!groupByString) {
+        unique.add(s);
+        return;
+      }
+      const tokens = s.split(/[,\n;|]+/).map((t) => t.trim()).filter(Boolean);
+      if (tokens.length === 0) {
+        unique.add('(Empty)');
+        return;
+      }
+      tokens.forEach((t) => unique.add(t));
+    };
+    data.forEach(row => addTokens(row[dimension]));
     return Array.from(unique).sort((a, b) => a.localeCompare(b));
-  }, [dimension, data]);
+  }, [dimension, data, groupByString]);
 
   const stackKeys = useMemo(() => {
     if (!supports?.stackBy) return [];
@@ -773,6 +790,7 @@ const [sortSeriesId, setSortSeriesId] = useState('');
       categoryGap,
       topN: topNEnabled ? Math.max(1, topNCount) : undefined,
       groupOthers: topNEnabled ? groupOthers : undefined,
+      groupByString: groupByString || undefined,
       valueFormat,
       categoryConfig,
 
@@ -864,6 +882,12 @@ const [sortSeriesId, setSortSeriesId] = useState('');
     }
   };
 
+  const handleGroupByStringChange = (val: boolean) => {
+    setGroupByString(val);
+    setCategoryFilter([]);
+    setCategorySearch('');
+  };
+
   const handleSelectAllCategories = () => {
     if (type === 'kpi' && measure === 'count' && kpiCountMode === 'group') {
       setCategoryFilter([...kpiCategories]);
@@ -903,6 +927,7 @@ const [sortSeriesId, setSortSeriesId] = useState('');
     setMeasureCol('');
     setKpiCountMode('row');
     setCategoryFilter([]);
+    setGroupByString(false);
     setCategoryConfig({});
     setPrimaryColor(CLASSIC_ANALYTICS_THEME.palette[0] || '#3B82F6');
     setXDimension('');
@@ -1044,6 +1069,7 @@ const [sortSeriesId, setSortSeriesId] = useState('');
       categoryGap,
       topN: topNEnabled ? Math.max(1, topNCount) : undefined,
       groupOthers: topNEnabled ? groupOthers : undefined,
+      groupByString: groupByString || undefined,
       categoryConfig,
       filters: [],
       xAxis,
@@ -1089,6 +1115,7 @@ const [sortSeriesId, setSortSeriesId] = useState('');
     topNEnabled,
     topNCount,
     groupOthers,
+    groupByString,
     categoryConfig,
     xAxis,
     leftYAxis,
@@ -1336,6 +1363,8 @@ const [sortSeriesId, setSortSeriesId] = useState('');
                     setTopNCount={setTopNCount}
                     groupOthers={groupOthers}
                     setGroupOthers={setGroupOthers}
+                    groupByString={groupByString}
+                    setGroupByString={handleGroupByStringChange}
                     categoryFilter={categoryFilter}
                     setCategoryFilter={setCategoryFilter}
                     allCategories={allCategories}

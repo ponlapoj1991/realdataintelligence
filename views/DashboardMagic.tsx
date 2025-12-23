@@ -440,133 +440,31 @@ const DashboardMagic: React.FC<DashboardMagicProps> = ({ project, onUpdateProjec
   const dashboardRef = useRef<HTMLDivElement>(null);
   const editorScrollRef = useRef<HTMLDivElement>(null);
 
-  const SECTION_GAP_PX = 32; // space-y-8
-  const SECTION_BASE_PX = 220; // empty section dropzone height
-  const WIDGET_CARD_PX = 360; // minHeight in widget card
-  const WIDGET_HEADER_PX = 72; // title/meta + padding approximation
+  const MAX_SECTIONS = 20;
   const GRID_GAP_PX = 24; // gap-6
 
   const getSectionCount = useCallback((nextWidgets: DashboardWidget[]) => {
-    const maxIndex = nextWidgets.reduce((max, w) => Math.max(max, w.sectionIndex ?? 0), 0);
-    return Math.max(2, maxIndex + 2); // keep one empty tail section available
+    const maxIndex = nextWidgets.reduce((max, w) => Math.max(max, w.sectionIndex ?? 0), -1);
+    return Math.min(MAX_SECTIONS, Math.max(2, maxIndex + 2)); // keep one empty tail section available
   }, []);
 
-  const estimateSectionHeightPx = useCallback((sectionWidgets: DashboardWidget[]) => {
-    if (sectionWidgets.length === 0) return SECTION_BASE_PX;
+  const lastPopulatedSection = useMemo(() => {
+    return widgets.reduce((max, w) => Math.max(max, w.sectionIndex ?? 0), -1);
+  }, [widgets]);
 
-    // Estimate grid rows by packing widgets into 4 columns using colSpan
-    let rows = 1;
-    let filled = 0;
-    for (const w of sectionWidgets) {
-      const span = Math.max(1, Math.min(4, w.colSpan || (w.width === 'full' ? 4 : 2)));
-      if (filled + span > 4) {
-        rows += 1;
-        filled = 0;
-      }
-      filled += span;
-      if (filled >= 4) filled = 0;
-    }
+  const renderedSectionCount = useMemo(() => {
+    if (draggedWidget) return MAX_SECTIONS;
+    return getSectionCount(widgets);
+  }, [draggedWidget, getSectionCount, widgets]);
 
-    const rowHeight = WIDGET_CARD_PX + WIDGET_HEADER_PX;
-    const total = rows * rowHeight + Math.max(0, rows - 1) * GRID_GAP_PX + 2 * 16; // section padding
-    return Math.max(SECTION_BASE_PX, total);
-  }, []);
+  const visibleSectionCount = useMemo(() => {
+    if (draggedWidget) return renderedSectionCount;
+    return Math.min(renderedSectionCount, Math.max(2, lastPopulatedSection + 2));
+  }, [draggedWidget, lastPopulatedSection, renderedSectionCount]);
 
-  const [scrollState, setScrollState] = useState({ top: 0, height: 0 });
-  useEffect(() => {
-    if (mode !== 'editor') return;
-    const el = editorScrollRef.current;
-    if (!el) return;
-
-    let raf = 0;
-    const update = () => {
-      raf = 0;
-      setScrollState({ top: el.scrollTop, height: el.clientHeight });
-    };
-
-    const onScroll = () => {
-      if (raf) return;
-      raf = window.requestAnimationFrame(update);
-    };
-
-    update();
-    el.addEventListener('scroll', onScroll, { passive: true });
-    window.addEventListener('resize', update);
-    return () => {
-      if (raf) window.cancelAnimationFrame(raf);
-      el.removeEventListener('scroll', onScroll);
-      window.removeEventListener('resize', update);
-    };
-  }, [mode]);
-
-  const sectionCount = useMemo(() => getSectionCount(widgets), [widgets, getSectionCount]);
-  const sections = useMemo(() => Array.from({ length: sectionCount }, (_, i) => i), [sectionCount]);
-
-  const sectionHeights = useMemo(() => {
-    const heights: number[] = [];
-    for (let i = 0; i < sectionCount; i++) {
-      const sectionWidgets = widgets.filter((w) => (w.sectionIndex ?? 0) === i);
-      heights.push(estimateSectionHeightPx(sectionWidgets));
-    }
-    return heights;
-  }, [widgets, sectionCount, estimateSectionHeightPx]);
-
-  const sectionTops = useMemo(() => {
-    const tops: number[] = [];
-    let acc = 0;
-    for (let i = 0; i < sectionCount; i++) {
-      tops.push(acc);
-      acc += sectionHeights[i] + SECTION_GAP_PX;
-    }
-    return tops;
-  }, [sectionCount, sectionHeights]);
-
-  const totalHeight = useMemo(() => {
-    const last = sectionCount - 1;
-    if (last < 0) return 0;
-    return sectionTops[last] + sectionHeights[last];
-  }, [sectionCount, sectionTops, sectionHeights]);
-
-  const windowedSectionRange = useMemo(() => {
-    const { top: scrollTop, height: viewportHeight } = scrollState;
-    const bufferPx = 800;
-    const fromPx = Math.max(0, scrollTop - bufferPx);
-    const toPx = scrollTop + viewportHeight + bufferPx;
-
-    let startIdx = 0;
-    for (let i = 0; i < sectionCount; i++) {
-      const bottom = sectionTops[i] + sectionHeights[i];
-      if (bottom >= fromPx) {
-        startIdx = i;
-        break;
-      }
-    }
-
-    let endIdx = sectionCount - 1;
-    for (let i = sectionCount - 1; i >= 0; i--) {
-      if (sectionTops[i] <= toPx) {
-        endIdx = i;
-        break;
-      }
-    }
-
-    if (draggedWidget) {
-      startIdx = Math.min(startIdx, Math.max(0, draggedWidget.sectionIndex - 1));
-      endIdx = Math.max(endIdx, Math.min(sectionCount - 1, draggedWidget.sectionIndex + 1));
-    }
-
-    if (typeof dragOverSection === 'number') {
-      startIdx = Math.min(startIdx, Math.max(0, dragOverSection - 1));
-      endIdx = Math.max(endIdx, Math.min(sectionCount - 1, dragOverSection + 1));
-    }
-
-    return { startIdx, endIdx };
-  }, [scrollState, sectionCount, sectionTops, sectionHeights, draggedWidget, dragOverSection]);
-
-  const topSpacer = sectionTops[windowedSectionRange.startIdx] || 0;
-  const bottomSpacer = Math.max(
-    0,
-    totalHeight - (sectionTops[windowedSectionRange.endIdx] + sectionHeights[windowedSectionRange.endIdx])
+  const sections = useMemo(
+    () => Array.from({ length: visibleSectionCount }, (_, i) => i),
+    [visibleSectionCount]
   );
 
   const handleExportPPT = async () => {
@@ -615,6 +513,15 @@ const DashboardMagic: React.FC<DashboardMagicProps> = ({ project, onUpdateProjec
 
     setDragOverSection(sectionIndex);
 
+    const scrollEl = editorScrollRef.current;
+    if (scrollEl) {
+      const r = scrollEl.getBoundingClientRect();
+      const threshold = 90;
+      const delta = 24;
+      if (e.clientY < r.top + threshold) scrollEl.scrollTop = Math.max(0, scrollEl.scrollTop - delta);
+      else if (e.clientY > r.bottom - threshold) scrollEl.scrollTop += delta;
+    }
+
     const overWidget = (e.target as HTMLElement)?.closest?.('[data-widget-id]');
     if (overWidget) return;
 
@@ -627,22 +534,43 @@ const DashboardMagic: React.FC<DashboardMagicProps> = ({ project, onUpdateProjec
       return;
     }
 
-    const items = candidates
-      .map((el) => ({ id: el.dataset.widgetId!, rect: el.getBoundingClientRect() }))
-      .sort((a, b) => {
-        const topDiff = a.rect.top - b.rect.top;
-        if (Math.abs(topDiff) < 8) return a.rect.left - b.rect.left;
-        return topDiff;
-      });
+    const items = candidates.map((el) => ({ id: el.dataset.widgetId!, rect: el.getBoundingClientRect() }));
 
+    const rowThresholdPx = 16;
+    const rows: Array<{ top: number; items: typeof items }> = [];
+    for (const item of items) {
+      const row = rows.find((r) => Math.abs(r.top - item.rect.top) <= rowThresholdPx);
+      if (row) {
+        row.items.push(item);
+      } else {
+        rows.push({ top: item.rect.top, items: [item] });
+      }
+    }
+
+    rows.sort((a, b) => a.top - b.top);
+    for (const row of rows) {
+      row.items.sort((a, b) => a.rect.left - b.rect.left);
+    }
+
+    const x = e.clientX;
     const y = e.clientY;
-    const before = items.find((item) => y < item.rect.top + item.rect.height / 2);
-    if (before) {
-      setDropTarget({ sectionIndex, beforeId: before.id });
+
+    const bestRow = rows.reduce<{ idx: number; dist: number } | null>((best, row, idx) => {
+      const centers = row.items.map((i) => i.rect.top + i.rect.height / 2);
+      const centerY = centers.reduce((sum, c) => sum + c, 0) / Math.max(1, centers.length);
+      const dist = Math.abs(y - centerY);
+      if (!best || dist < best.dist) return { idx, dist };
+      return best;
+    }, null);
+
+    const rowItems = bestRow ? rows[bestRow.idx].items : rows[0].items;
+    const beforeInRow = rowItems.find((item) => x < item.rect.left + item.rect.width / 2);
+    if (beforeInRow) {
+      setDropTarget({ sectionIndex, beforeId: beforeInRow.id });
       return;
     }
 
-    setDropTarget({ sectionIndex, afterId: items[items.length - 1].id });
+    setDropTarget({ sectionIndex, afterId: rowItems[rowItems.length - 1].id });
   };
 
   const onDropSection = async (targetSection: number) => {
@@ -755,7 +683,7 @@ const DashboardMagic: React.FC<DashboardMagicProps> = ({ project, onUpdateProjec
 
 
   // --- Interaction Handler (Filter vs Drill) ---
-  const handleChartValueSelect = (widget: DashboardWidget, activeLabel?: string) => {
+  const handleChartValueSelect = (widget: DashboardWidget, activeLabel?: string, activeSeries?: string) => {
     const label = String(activeLabel ?? '').trim();
     if (!label) return;
 
@@ -766,30 +694,58 @@ const DashboardMagic: React.FC<DashboardMagicProps> = ({ project, onUpdateProjec
       const s = String(raw ?? '').trim();
       return s ? s : '(Empty)';
     };
+    const getDimValues = (row: RawRow) => {
+      const base = normalizeDim(row[filterColumn]);
+      if (!widget.groupByString) return [base];
+      const tokens = base.split(/[,\n;|]+/).map((t) => t.trim()).filter(Boolean);
+      return tokens.length ? tokens : ['(Empty)'];
+    };
 
     const rowsForWidget = applyWidgetFilters(filteredData, widget.filters);
+
+    const isStackedChart = [
+      'stacked-column', '100-stacked-column',
+      'stacked-bar', '100-stacked-bar',
+      'stacked-area', '100-stacked-area'
+    ].includes(widget.type);
+
+    const stackColumn = isStackedChart ? widget.stackBy : undefined;
+    const stackLabel = stackColumn ? String(activeSeries ?? '').trim() : '';
+    const normalizeStack = (raw: any) => {
+      const s = String(raw ?? '').trim();
+      if (s) return s;
+      return raw === null || raw === undefined ? '(Other)' : '(Empty)';
+    };
 
     if (label === 'Others' && widget.topN && widget.groupOthers !== false) {
       const overflowKeys = getTopNOverflowDimensionValues(widget, rowsForWidget);
       const overflowSet = new Set(overflowKeys);
-      const clickedData = rowsForWidget.filter((row) => overflowSet.has(normalizeDim(row[filterColumn])));
+      const clickedData = rowsForWidget.filter((row) => {
+        if (!getDimValues(row).some((v) => overflowSet.has(v))) return false;
+        if (!stackColumn) return true;
+        return normalizeStack(row[stackColumn]) === stackLabel;
+      });
       setDrillDown({
         isOpen: true,
         title: `${widget.title} - Others`,
-        filterCol: filterColumn,
-        filterVal: overflowKeys.length ? `Others (${overflowKeys.length})` : 'Others',
+        filterCol: stackColumn ? `${filterColumn} & ${stackColumn}` : filterColumn,
+        filterVal: `${overflowKeys.length ? `Others (${overflowKeys.length})` : 'Others'}${stackColumn ? ` / ${stackLabel}` : ''}`,
         data: clickedData,
       });
       return;
     }
 
-    const clickedData = rowsForWidget.filter((row) => normalizeDim(row[filterColumn]) === label);
+    const clickedData = rowsForWidget.filter((row) => {
+      if (!getDimValues(row).includes(label)) return false;
+      if (!stackColumn) return true;
+      return normalizeStack(row[stackColumn]) === stackLabel;
+    });
 
     setDrillDown({
       isOpen: true,
       title: `${widget.title} - ${label}`,
-      filterCol: filterColumn,
-      filterVal: label,
+      filterCol: stackColumn ? `${filterColumn} & ${stackColumn}` : filterColumn,
+      filterVal: stackColumn ? `${label} / ${stackLabel}` : label,
       data: clickedData,
     });
   };
@@ -1151,12 +1107,9 @@ const DashboardMagic: React.FC<DashboardMagicProps> = ({ project, onUpdateProjec
             />
           ) : (
             <div ref={dashboardRef} className="space-y-8 pb-20">
-              {topSpacer > 0 && <div style={{ height: topSpacer }} />}
-
-              {sections.slice(windowedSectionRange.startIdx, windowedSectionRange.endIdx + 1).map((sectionIndex) => {
+              {sections.map((sectionIndex) => {
                 const sectionWidgets = widgets.filter((w) => (w.sectionIndex ?? 0) === sectionIndex);
                 const isDropActive = !!draggedWidget && dragOverSection === sectionIndex;
-                const canShowSection = sectionWidgets.length > 0 || !!draggedWidget || sectionIndex < 2;
                 const target = dropTarget && dropTarget.sectionIndex === sectionIndex ? dropTarget : null;
                 const placeholder =
                   isDropActive && draggedWidget
@@ -1187,11 +1140,11 @@ const DashboardMagic: React.FC<DashboardMagicProps> = ({ project, onUpdateProjec
                     onDragOver={(e) => onDragOverSection(e, sectionIndex)}
                     onDragEnter={() => onDragEnterSection(sectionIndex)}
                     onDrop={() => onDropSection(sectionIndex)}
-                    className={`relative rounded-xl border-2 border-dashed transition-colors min-h-[220px] p-4 grid grid-cols-4 gap-6 ${
+                    className={`relative rounded-xl border-2 border-dashed transition-colors min-h-[280px] p-4 grid grid-cols-4 gap-6 ${
                       isDropActive
                         ? 'border-blue-300 bg-blue-50/30'
                         : 'border-transparent' // Invisible border when not dragging
-                    } ${!canShowSection ? 'hidden' : ''}`}
+                    }`}
                   >
                     {/* Section Label (Optional, for debugging or clarity) */}
                     {isPresentationMode ? null : (
@@ -1220,7 +1173,7 @@ const DashboardMagic: React.FC<DashboardMagicProps> = ({ project, onUpdateProjec
                             }`}
                             style={{
                               gridColumn: `span ${w.colSpan || 2} / span ${w.colSpan || 2}`,
-                              minHeight: '360px',
+                              minHeight: '420px',
                               cursor: isPresentationMode ? 'default' : 'grab'
                             }}
                           >
@@ -1275,7 +1228,7 @@ const DashboardMagic: React.FC<DashboardMagicProps> = ({ project, onUpdateProjec
                                 isEditing={!isPresentationMode}
                                 isInteracting={!!draggedWidget || !!resizing}
                                 workerClient={magicAggWorker}
-                                onValueClick={(val, w2) => handleChartValueSelect(w2, val)}
+                                onValueClick={(val, w2, meta) => handleChartValueSelect(w2, val, meta?.seriesName)}
                               />
 
                               {/* Resize Handle */}
@@ -1322,8 +1275,6 @@ const DashboardMagic: React.FC<DashboardMagicProps> = ({ project, onUpdateProjec
                   </div>
                 );
               })}
-
-              {bottomSpacer > 0 && <div style={{ height: bottomSpacer }} />}
             </div>
           )}
         </div>
