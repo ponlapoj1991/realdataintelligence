@@ -708,7 +708,7 @@ export const aggregateWidgetData = (
     return { data, isStack: false, stackKeys: seriesKeyList };
   }
 
-  if (widget.type === 'compare-column' && widget.stackBy) {
+  if ((widget.type === 'compare-column' || widget.type === 'compare-bar') && widget.stackBy) {
     const stackKeys = new Set<string>();
     const groups: Record<string, Record<string, number>> = {};
 
@@ -942,7 +942,7 @@ export const getTopNOverflowDimensionValues = (widget: DashboardWidget, rows: Ra
     'stacked-bar', '100-stacked-bar',
     'stacked-area', '100-stacked-area'
   ].includes(widget.type);
-  const isCompareColumn = widget.type === 'compare-column';
+  const isCompareColumn = widget.type === 'compare-column' || widget.type === 'compare-bar';
 
   const isLineFamily = ['line', 'smooth-line', 'multi-line', 'area', 'stacked-area', '100-stacked-area'].includes(widget.type);
   const major = widget.xAxis?.major ?? 0;

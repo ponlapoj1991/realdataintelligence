@@ -127,6 +127,7 @@ const mapWidgetType = (widget: DashboardWidget): PptChartType | null => {
     case '100-stacked-column':
     case 'compare-column':
       return 'column';
+    case 'compare-bar':
     case 'bar':
     case 'stacked-bar':
     case '100-stacked-bar':

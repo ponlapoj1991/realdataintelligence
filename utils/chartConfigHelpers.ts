@@ -28,6 +28,7 @@ const SUPPORT_MATRIX: Record<ChartType, ChartSupports> = {
   '100-stacked-column': { dimension: true, stackBy: true,  multiSeries: false, measure: true,  bubble: false, scatterXY: false, pie: false, line: false, area: false, axes: true,  legend: true, dataLabels: true, sort: true, categoryFilter: true, categoryConfig: true },
   'compare-column':     { dimension: true, stackBy: true,  multiSeries: false, measure: true,  bubble: false, scatterXY: false, pie: false, line: false, area: false, axes: true,  legend: true, dataLabels: true, sort: true, categoryFilter: true, categoryConfig: true },
   bar:           { dimension: true, stackBy: false, multiSeries: false, measure: true,  bubble: false, scatterXY: false, pie: false, line: false, area: false, axes: true,  legend: true, dataLabels: true, sort: true, categoryFilter: true, categoryConfig: true },
+  'compare-bar':        { dimension: true, stackBy: true,  multiSeries: false, measure: true,  bubble: false, scatterXY: false, pie: false, line: false, area: false, axes: true,  legend: true, dataLabels: true, sort: true, categoryFilter: true, categoryConfig: true },
   'stacked-bar':       { dimension: true, stackBy: true,  multiSeries: false, measure: true,  bubble: false, scatterXY: false, pie: false, line: false, area: false, axes: true,  legend: true, dataLabels: true, sort: true, categoryFilter: true, categoryConfig: true },
   '100-stacked-bar':   { dimension: true, stackBy: true,  multiSeries: false, measure: true,  bubble: false, scatterXY: false, pie: false, line: false, area: false, axes: true,  legend: true, dataLabels: true, sort: true, categoryFilter: true, categoryConfig: true },
   line:          { dimension: true, stackBy: false, multiSeries: false, measure: true,  bubble: false, scatterXY: false, pie: false, line: true,  area: false, axes: true,  legend: true, dataLabels: true, sort: true, categoryFilter: true, categoryConfig: true },
@@ -81,6 +82,7 @@ export const isVerticalChart = (type: ChartType): boolean => {
 export const isHorizontalChart = (type: ChartType): boolean => {
   return [
     'bar',
+    'compare-bar',
     'stacked-bar',
     '100-stacked-bar'
   ].includes(type);
@@ -154,6 +156,8 @@ export const validateChartConfig = (type: ChartType, config: any): string[] => {
         ? 'Please select Date'
         : type === 'compare-column'
           ? 'Please select Category'
+          : type === 'compare-bar'
+            ? 'Please select Category'
           : 'กรุณาเลือก Dimension'
     );
   }
@@ -161,7 +165,7 @@ export const validateChartConfig = (type: ChartType, config: any): string[] => {
   // Stack By
   if (supports.stackBy && !config.stackBy) {
     errors.push(
-      type === 'multi-line' || type === 'compare-column'
+      type === 'multi-line' || type === 'compare-column' || type === 'compare-bar'
         ? 'Please select Series By'
         : 'กรุณาเลือก Stack By'
     );

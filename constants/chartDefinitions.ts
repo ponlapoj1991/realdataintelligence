@@ -49,6 +49,13 @@ export const CHART_DEFINITIONS: ChartDefinition[] = [
     description: 'Horizontal version of clustered column for ranking'
   },
   {
+    type: 'compare-bar',
+    category: 'bar',
+    label: 'Compare Bar',
+    icon: 'BarChartHorizontal',
+    description: 'Compare categories across multiple series (horizontal)'
+  },
+  {
     type: 'stacked-bar',
     category: 'bar',
     label: 'Stacked Bar',

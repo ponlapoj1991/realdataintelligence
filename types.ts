@@ -128,6 +128,7 @@ export type ChartType =
   | 'bar'
   | 'stacked-bar'
   | '100-stacked-bar'
+  | 'compare-bar'
 
   // Line Charts
   | 'line'

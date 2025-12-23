@@ -720,7 +720,7 @@ const DashboardMagic: React.FC<DashboardMagicProps> = ({ project, onUpdateProjec
     ].includes(widget.type);
 
     const seriesColumn =
-      (isStackedChart || widget.type === 'multi-line' || widget.type === 'compare-column')
+      (isStackedChart || widget.type === 'multi-line' || widget.type === 'compare-column' || widget.type === 'compare-bar')
         ? widget.stackBy
         : undefined;
     const seriesLabel = seriesColumn ? String(activeSeries ?? '').trim() : '';
