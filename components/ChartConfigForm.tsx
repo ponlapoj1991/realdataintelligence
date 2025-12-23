@@ -223,6 +223,7 @@ const ChartConfigForm: React.FC<ChartConfigFormProps> = ({
     chartType !== 'kpi' &&
     allCategories.length > 0;
   const dimensionIsText = dimension ? columnProfiles[dimension]?.type === 'text' : false;
+  const seriesIsText = stackBy ? columnProfiles[stackBy]?.type === 'text' : false;
   const showGroupByStringInSetup = supports.dimension && !canShowCategoryFilter && dimensionIsText;
   const canShowSeriesFilter =
     supports.stackBy &&
@@ -589,17 +590,6 @@ const ChartConfigForm: React.FC<ChartConfigFormProps> = ({
             chartType === 'multi-line' || chartType === 'compare-column'
               ? 'Series By'
               : 'Stack By (Breakdown Dimension)'
-          )}
-          {!!stackBy && columnProfiles[stackBy]?.type === 'text' && (
-            <label className="flex items-center gap-2 text-xs text-gray-600">
-              <input
-                type="checkbox"
-                checked={seriesGroupByString}
-                onChange={(e) => setSeriesGroupByString(e.target.checked)}
-                className="rounded"
-              />
-              By String
-            </label>
           )}
         </div>
       )}
@@ -1082,13 +1072,26 @@ const ChartConfigForm: React.FC<ChartConfigFormProps> = ({
             <label className="block text-sm font-medium text-gray-700">
               Series ({seriesCategories.length - seriesFilter.length} of {seriesCategories.length} visible)
             </label>
-            <div className="flex gap-2">
-              <button onClick={onClearAllSeries} className="text-xs text-blue-600 hover:text-blue-800">
-                Show All
-              </button>
-              <button onClick={onSelectAllSeries} className="text-xs text-gray-600 hover:text-gray-800">
-                Hide All
-              </button>
+            <div className="flex items-center gap-3">
+              {seriesIsText && (
+                <label className="flex items-center gap-2 text-xs text-gray-600">
+                  <input
+                    type="checkbox"
+                    checked={seriesGroupByString}
+                    onChange={(e) => setSeriesGroupByString(e.target.checked)}
+                    className="rounded"
+                  />
+                  By String
+                </label>
+              )}
+              <div className="flex gap-2">
+                <button onClick={onClearAllSeries} className="text-xs text-blue-600 hover:text-blue-800">
+                  Show All
+                </button>
+                <button onClick={onSelectAllSeries} className="text-xs text-gray-600 hover:text-gray-800">
+                  Hide All
+                </button>
+              </div>
             </div>
           </div>
 
