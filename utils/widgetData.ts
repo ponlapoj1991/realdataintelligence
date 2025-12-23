@@ -408,11 +408,6 @@ export const aggregateWidgetData = (
     if (!widget.groupByString) return [key];
     return splitByString(key);
   };
-  const getDimensionKeys = (row: RawRow) => {
-    const key = getDimensionKey(row);
-    if (!widget.groupByString) return [key];
-    return splitByString(key);
-  };
 
   const inferredForLine = isLineFamily && widget.dimension
     ? inferTemporalOrSequential(rows.map(r => r[widget.dimension]))
