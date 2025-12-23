@@ -8,6 +8,11 @@ export interface AggregatedWidgetData {
 
 const MAX_TOP_N = 500;
 
+const normalizeKey = (raw: any, emptyLabel: string = '(Empty)') => {
+  const s = String(raw ?? '').trim();
+  return s ? s : emptyLabel;
+};
+
 const clampTopN = (value?: number | null) => {
   if (!value || value <= 0) return null;
   return Math.min(Math.max(1, value), MAX_TOP_N);
@@ -279,7 +284,7 @@ export const aggregateWidgetData = (
       const groups: Record<string, { count: number; xSum: number; ySum: number; sizeSum: number }> = {};
 
       rows.forEach(row => {
-        const dimVal = String(row[widget.dimension!] || '(Empty)');
+        const dimVal = normalizeKey(row[widget.dimension!]);
         if (!groups[dimVal]) {
           groups[dimVal] = { count: 0, xSum: 0, ySum: 0, sizeSum: 0 };
         }
@@ -359,8 +364,8 @@ export const aggregateWidgetData = (
       : null;
   const getDimensionKey = (row: RawRow) => {
     const raw = row[widget.dimension];
-    const base = majorBucket ? majorBucket(raw) : String(raw || '(Empty)');
-    return base || '(Empty)';
+    const base = majorBucket ? majorBucket(raw) : normalizeKey(raw);
+    return base ? String(base) : '(Empty)';
   };
 
   const is100Stacked = [
@@ -373,7 +378,7 @@ export const aggregateWidgetData = (
 
     rows.forEach(row => {
       const dimVal = getDimensionKey(row);
-      const stackVal = String(row[widget.stackBy!] || '(Other)');
+      const stackVal = normalizeKey(row[widget.stackBy!] ?? '(Other)');
 
       if (widget.categoryFilter && widget.categoryFilter.length > 0 && widget.categoryFilter.includes(dimVal)) {
         return;
@@ -506,7 +511,8 @@ export const processMultiSeriesData = (widget: DashboardWidget, rows: RawRow[]) 
   const majorBucket = createMajorBucketMapper(rows, widget.dimension, widget.xAxis?.major ?? 0);
   const getDimKey = (row: RawRow) => {
     const raw = row[widget.dimension!];
-    return majorBucket ? majorBucket(raw) : String(raw || 'N/A');
+    const base = majorBucket ? majorBucket(raw) : normalizeKey(raw);
+    return base ? String(base) : '(Empty)';
   };
 
   const result: Record<string, any> = {};
@@ -584,4 +590,157 @@ export const processMultiSeriesData = (widget: DashboardWidget, rows: RawRow[]) 
     });
     return clean;
   });
+};
+
+export const getTopNOverflowDimensionValues = (widget: DashboardWidget, rows: RawRow[]) => {
+  const limit = clampTopN(widget.topN);
+  if (!limit) return [];
+  if (widget.groupOthers === false) return [];
+  if (!widget.dimension) return [];
+
+  const excluded = new Set(widget.categoryFilter || []);
+
+  const isStackedChart = [
+    'stacked-column', '100-stacked-column',
+    'stacked-bar', '100-stacked-bar',
+    'stacked-area', '100-stacked-area'
+  ].includes(widget.type);
+
+  const isLineFamily = ['line', 'smooth-line', 'area', 'stacked-area', '100-stacked-area'].includes(widget.type);
+  const major = widget.xAxis?.major ?? 0;
+  const majorBucket =
+    isLineFamily && widget.dimension
+      ? createMajorBucketMapper(rows, widget.dimension, major)
+      : null;
+  const getDimensionKey = (row: RawRow) => {
+    const raw = row[widget.dimension];
+    const base = majorBucket ? majorBucket(raw) : normalizeKey(raw);
+    return base ? String(base) : '(Empty)';
+  };
+
+  if (widget.series && widget.series.length > 0) {
+    const result: Record<string, any> = {};
+    widget.series.forEach(series => {
+      let seriesRows = rows;
+      if (series.filters && series.filters.length > 0) {
+        seriesRows = applyWidgetFilters(seriesRows, series.filters);
+      }
+
+      seriesRows.forEach(row => {
+        const dimValue = getDimensionKey(row);
+        if (excluded.has(dimValue)) return;
+
+        if (!result[dimValue]) {
+          result[dimValue] = { [widget.dimension!]: dimValue, name: dimValue };
+        }
+
+        if (series.measure === 'count') {
+          result[dimValue][series.id] = (result[dimValue][series.id] || 0) + 1;
+        } else if (series.measure === 'sum' && series.measureCol) {
+          const val = parseFloat(String(row[series.measureCol])) || 0;
+          result[dimValue][series.id] = (result[dimValue][series.id] || 0) + val;
+        } else if (series.measure === 'avg' && series.measureCol) {
+          if (!result[dimValue][`${series.id}_sum`]) {
+            result[dimValue][`${series.id}_sum`] = 0;
+            result[dimValue][`${series.id}_count`] = 0;
+          }
+          const val = parseFloat(String(row[series.measureCol])) || 0;
+          result[dimValue][`${series.id}_sum`] += val;
+          result[dimValue][`${series.id}_count`] += 1;
+        }
+      });
+    });
+
+    Object.values(result).forEach(item => {
+      widget.series!.forEach(series => {
+        if (series.measure === 'avg') {
+          const count = item[`${series.id}_count`] || 0;
+          if (count > 0) {
+            item[series.id] = item[`${series.id}_sum`] / count;
+          }
+        }
+      });
+    });
+
+    const rowEntries = Object.values(result);
+    const sorted = sortMultiSeriesRows(rowEntries, widget);
+    return sorted.slice(limit).map((row: any) => String(row.name));
+  }
+
+  if (isStackedChart && widget.stackBy) {
+    const stackKeys = new Set<string>();
+    const groups: Record<string, Record<string, number>> = {};
+
+    rows.forEach(row => {
+      const dimVal = getDimensionKey(row);
+      if (excluded.has(dimVal)) return;
+      const stackVal = normalizeKey(row[widget.stackBy!] ?? '(Other)');
+
+      stackKeys.add(stackVal);
+      if (!groups[dimVal]) groups[dimVal] = {};
+      if (!groups[dimVal][stackVal]) groups[dimVal][stackVal] = 0;
+
+      if (widget.measure === 'count') {
+        groups[dimVal][stackVal]++;
+      } else if (widget.measure === 'sum' && widget.measureCol) {
+        const val = Number(row[widget.measureCol]) || 0;
+        groups[dimVal][stackVal] += val;
+      } else if (widget.measure === 'avg' && widget.measureCol) {
+        // Keep behavior consistent with aggregateWidgetData (sum-based for stacked avg).
+        groups[dimVal][stackVal] += Number(row[widget.measureCol]) || 0;
+      }
+    });
+
+    const result = Object.keys(groups).map(dim => {
+      const row: any = { name: dim };
+      let total = 0;
+      Object.keys(groups[dim]).forEach(stack => {
+        row[stack] = groups[dim][stack];
+        total += groups[dim][stack];
+      });
+      row.__total = total;
+      return row;
+    });
+
+    const sorted = applySorting(result, widget.sortBy, '__total');
+    return sorted.slice(limit).map((row: any) => String(row.name));
+  }
+
+  const measure = widget.measure || 'count';
+  const sums: Record<string, number> = {};
+  const counts: Record<string, number> = {};
+
+  rows.forEach(row => {
+    const key = getDimensionKey(row);
+    if (excluded.has(key)) return;
+
+    if (measure === 'count') {
+      sums[key] = (sums[key] || 0) + 1;
+      return;
+    }
+
+    if ((measure === 'sum' || measure === 'avg') && widget.measureCol) {
+      const n = Number(row[widget.measureCol]) || 0;
+      sums[key] = (sums[key] || 0) + n;
+      if (measure === 'avg') {
+        counts[key] = (counts[key] || 0) + 1;
+      }
+    }
+  });
+
+  let result = Object.keys(sums).map(key => ({
+    name: key,
+    value: measure === 'avg' ? (counts[key] ? sums[key] / counts[key] : 0) : sums[key]
+  }));
+
+  const inferredForLine = isLineFamily && widget.dimension
+    ? inferTemporalOrSequential(rows.map(r => r[widget.dimension]))
+    : null;
+  const sortOverride =
+    inferredForLine && (!widget.sortBy || widget.sortBy === 'original')
+      ? 'name-asc'
+      : widget.sortBy;
+  result = applySorting(result, sortOverride, 'value');
+
+  return result.slice(limit).map(r => String(r.name));
 };

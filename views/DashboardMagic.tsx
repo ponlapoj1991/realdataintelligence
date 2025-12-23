@@ -43,6 +43,7 @@ import { buildMagicEchartsOption } from '../utils/magicOptionBuilder';
 import { exportToExcel } from '../utils/excel';
 import { generatePowerPoint } from '../utils/report';
 import { useMagicAggregationWorker } from '../hooks/useMagicAggregationWorker';
+import { applyWidgetFilters, getTopNOverflowDimensionValues } from '../utils/widgetData';
 
 // --- Helper Functions (Ported from Analytics.tsx) ---
 const SAMPLE_SIZE = 50;
@@ -156,7 +157,7 @@ const DashboardMagic: React.FC<DashboardMagicProps> = ({ project, onUpdateProjec
 
   // Grid State
   const [draggedWidget, setDraggedWidget] = useState<{ id: string; sectionIndex: number; colSpan: number; heightPx: number } | null>(null);
-  const [resizing, setResizing] = useState<{ id: string; startX: number; startSpan: number } | null>(null);
+  const [resizing, setResizing] = useState<{ id: string; startX: number; startSpan: number; colPx: number } | null>(null);
   const [dragOverSection, setDragOverSection] = useState<number | null>(null);
   const [dropTarget, setDropTarget] = useState<{ sectionIndex: number; beforeId?: string; afterId?: string } | null>(null);
 
@@ -440,8 +441,8 @@ const DashboardMagic: React.FC<DashboardMagicProps> = ({ project, onUpdateProjec
   const editorScrollRef = useRef<HTMLDivElement>(null);
 
   const SECTION_GAP_PX = 32; // space-y-8
-  const SECTION_BASE_PX = 150; // empty section dropzone height
-  const WIDGET_CARD_PX = 300; // minHeight in widget card
+  const SECTION_BASE_PX = 220; // empty section dropzone height
+  const WIDGET_CARD_PX = 360; // minHeight in widget card
   const WIDGET_HEADER_PX = 72; // title/meta + padding approximation
   const GRID_GAP_PX = 24; // gap-6
 
@@ -607,9 +608,41 @@ const DashboardMagic: React.FC<DashboardMagicProps> = ({ project, onUpdateProjec
     // Transparent drag image if needed, or default
   };
 
-  const onDragOver = (e: React.DragEvent) => {
-    e.preventDefault(); // Allow drop
+  const onDragOverSection = (e: React.DragEvent, sectionIndex: number) => {
+    e.preventDefault();
     e.dataTransfer.dropEffect = 'move';
+    if (!draggedWidget) return;
+
+    setDragOverSection(sectionIndex);
+
+    const overWidget = (e.target as HTMLElement)?.closest?.('[data-widget-id]');
+    if (overWidget) return;
+
+    const sectionEl = e.currentTarget as HTMLElement;
+    const candidates = Array.from(sectionEl.querySelectorAll<HTMLElement>('[data-widget-id]'))
+      .filter((el) => el.dataset.widgetId && el.dataset.widgetId !== draggedWidget.id);
+
+    if (candidates.length === 0) {
+      setDropTarget({ sectionIndex });
+      return;
+    }
+
+    const items = candidates
+      .map((el) => ({ id: el.dataset.widgetId!, rect: el.getBoundingClientRect() }))
+      .sort((a, b) => {
+        const topDiff = a.rect.top - b.rect.top;
+        if (Math.abs(topDiff) < 8) return a.rect.left - b.rect.left;
+        return topDiff;
+      });
+
+    const y = e.clientY;
+    const before = items.find((item) => y < item.rect.top + item.rect.height / 2);
+    if (before) {
+      setDropTarget({ sectionIndex, beforeId: before.id });
+      return;
+    }
+
+    setDropTarget({ sectionIndex, afterId: items[items.length - 1].id });
   };
 
   const onDropSection = async (targetSection: number) => {
@@ -684,89 +717,79 @@ const DashboardMagic: React.FC<DashboardMagicProps> = ({ project, onUpdateProjec
   };
 
   // Resize Logic
-  useEffect(() => {
-    const handleMouseMove = (e: MouseEvent) => {
-      if (!resizing) return;
-      const { id, startX, startSpan } = resizing;
-      
-      // Calculate delta cells (1 cell approx 25% of container)
-      // We assume container width ~1200px or relative
-      // Easier: Use pixels. 1 Grid col ~ 300px?
-      // Let's use simple threshold: every 200px = 1 col change
-      const diff = e.clientX - startX;
-      const step = 150; // Sensitivity
-      const deltaCols = Math.round(diff / step);
-      
-      if (deltaCols === 0) return;
-
-      const newSpan = Math.max(1, Math.min(4, startSpan + deltaCols));
-      
-      setWidgets((prev) =>
-        prev.map((w) => (w.id === id ? { ...w, colSpan: newSpan } : w))
-      );
-    };
-
-    const handleMouseUp = async () => {
-      if (resizing) {
-        // Save final state
-        await handleSaveWidgets(widgets); // widgets state is updated via mousemove locally?
-        // Note: 'widgets' in this closure might be stale if we rely on it for saving.
-        // But setState callback uses latest.
-        // For saving, we should trigger a save effect or use a ref.
-        // For simplicity in this structure, we'll save on mouse up using the CURRENT widgets state?
-        // Actually, listeners close over old scope.
-        setResizing(null);
-      }
-    };
-
-    if (resizing) {
-      window.addEventListener('mousemove', handleMouseMove);
-      window.addEventListener('mouseup', handleMouseUp);
-    }
-    return () => {
-      window.removeEventListener('mousemove', handleMouseMove);
-      window.removeEventListener('mouseup', handleMouseUp);
-    };
-  }, [resizing]); // Re-bind when resizing state changes? No, widgets state updates might be lost.
-  
-  // FIX: MouseMove needs latest state or functional updates. Functional updates work for UI.
-  // But Saving needs latest data.
-  // We will save in a separate effect that detects changes? No, too many saves.
-  // Better: save on MouseUp logic needs access to latest widgets.
-  // We can use a ref to track widgets.
   const widgetsRef = useRef(widgets);
   useEffect(() => { widgetsRef.current = widgets; }, [widgets]);
 
   useEffect(() => {
-    const handleMouseUpGlobal = async () => {
-        if (resizing) {
-            setResizing(null);
-            await handleSaveWidgets(widgetsRef.current);
-        }
+    if (!resizing) return;
+    const { id, startX, startSpan, colPx } = resizing;
+    let raf = 0;
+
+    const handleMouseMove = (e: MouseEvent) => {
+      if (raf) return;
+      raf = window.requestAnimationFrame(() => {
+        raf = 0;
+        const diff = e.clientX - startX;
+        const step = colPx > 0 ? colPx : 1;
+        const deltaCols = Math.round(diff / step);
+        const newSpan = Math.max(1, Math.min(4, startSpan + deltaCols));
+        setWidgets((prev) => prev.map((w) => (w.id === id ? { ...w, colSpan: newSpan } : w)));
+      });
     };
-    if (resizing) {
-        window.addEventListener('mouseup', handleMouseUpGlobal);
-    }
+
+    const handleMouseUp = async () => {
+      if (raf) window.cancelAnimationFrame(raf);
+      raf = 0;
+      setResizing(null);
+      await handleSaveWidgets(widgetsRef.current);
+    };
+
+    window.addEventListener('mousemove', handleMouseMove);
+    window.addEventListener('mouseup', handleMouseUp, { once: true });
     return () => {
-        window.removeEventListener('mouseup', handleMouseUpGlobal);
-    }
-  }, [resizing]); // Only bind/unbind when drag status changes
+      if (raf) window.cancelAnimationFrame(raf);
+      window.removeEventListener('mousemove', handleMouseMove);
+      window.removeEventListener('mouseup', handleMouseUp);
+    };
+  }, [resizing, handleSaveWidgets]);
 
 
   // --- Interaction Handler (Filter vs Drill) ---
   const handleChartValueSelect = (widget: DashboardWidget, activeLabel?: string) => {
-    if (!activeLabel) return;
+    const label = String(activeLabel ?? '').trim();
+    if (!label) return;
 
     const filterColumn = widget.dimension;
     if (!filterColumn) return;
 
-    const clickedData = filteredData.filter((row) => String(row[filterColumn] ?? '').includes(activeLabel));
+    const normalizeDim = (raw: any) => {
+      const s = String(raw ?? '').trim();
+      return s ? s : '(Empty)';
+    };
+
+    const rowsForWidget = applyWidgetFilters(filteredData, widget.filters);
+
+    if (label === 'Others' && widget.topN && widget.groupOthers !== false) {
+      const overflowKeys = getTopNOverflowDimensionValues(widget, rowsForWidget);
+      const overflowSet = new Set(overflowKeys);
+      const clickedData = rowsForWidget.filter((row) => overflowSet.has(normalizeDim(row[filterColumn])));
+      setDrillDown({
+        isOpen: true,
+        title: `${widget.title} - Others`,
+        filterCol: filterColumn,
+        filterVal: overflowKeys.length ? `Others (${overflowKeys.length})` : 'Others',
+        data: clickedData,
+      });
+      return;
+    }
+
+    const clickedData = rowsForWidget.filter((row) => normalizeDim(row[filterColumn]) === label);
 
     setDrillDown({
       isOpen: true,
-      title: `${widget.title} - ${activeLabel}`,
+      title: `${widget.title} - ${label}`,
       filterCol: filterColumn,
-      filterVal: activeLabel,
+      filterVal: label,
       data: clickedData,
     });
   };
@@ -1160,10 +1183,11 @@ const DashboardMagic: React.FC<DashboardMagicProps> = ({ project, onUpdateProjec
                 return (
                   <div
                     key={sectionIndex}
-                    onDragOver={onDragOver}
+                    data-dashboard-section="true"
+                    onDragOver={(e) => onDragOverSection(e, sectionIndex)}
                     onDragEnter={() => onDragEnterSection(sectionIndex)}
                     onDrop={() => onDropSection(sectionIndex)}
-                    className={`relative rounded-xl border-2 border-dashed transition-colors min-h-[150px] p-4 grid grid-cols-4 gap-6 ${
+                    className={`relative rounded-xl border-2 border-dashed transition-colors min-h-[220px] p-4 grid grid-cols-4 gap-6 ${
                       isDropActive
                         ? 'border-blue-300 bg-blue-50/30'
                         : 'border-transparent' // Invisible border when not dragging
@@ -1186,6 +1210,7 @@ const DashboardMagic: React.FC<DashboardMagicProps> = ({ project, onUpdateProjec
                         nodes.push(
                           <div
                             key={w.id}
+                            data-widget-id={w.id}
                             draggable={!isPresentationMode}
                             onDragStart={(e) => onDragStart(e, w.id, sectionIndex)}
                             onDragEnd={onDragEnd}
@@ -1195,7 +1220,7 @@ const DashboardMagic: React.FC<DashboardMagicProps> = ({ project, onUpdateProjec
                             }`}
                             style={{
                               gridColumn: `span ${w.colSpan || 2} / span ${w.colSpan || 2}`,
-                              minHeight: '300px',
+                              minHeight: '360px',
                               cursor: isPresentationMode ? 'default' : 'grab'
                             }}
                           >
@@ -1260,7 +1285,12 @@ const DashboardMagic: React.FC<DashboardMagicProps> = ({ project, onUpdateProjec
                                   onMouseDown={(e) => {
                                     e.preventDefault();
                                     e.stopPropagation();
-                                    setResizing({ id: w.id, startX: e.clientX, startSpan: w.colSpan || 2 });
+                                    const sectionEl = (e.currentTarget as HTMLElement).closest('[data-dashboard-section]') as HTMLElement | null;
+                                    const width = sectionEl?.getBoundingClientRect().width ?? 1200;
+                                    const paddingPx = 16 * 2; // p-4 (left + right)
+                                    const gapPx = GRID_GAP_PX * 3; // 4 columns -> 3 gaps
+                                    const colPx = Math.max(1, (width - paddingPx - gapPx) / 4);
+                                    setResizing({ id: w.id, startX: e.clientX, startSpan: w.colSpan || 2, colPx });
                                   }}
                                   title="Drag to resize width"
                                 >
@@ -1281,7 +1311,7 @@ const DashboardMagic: React.FC<DashboardMagicProps> = ({ project, onUpdateProjec
                     
                     {/* Empty state for section (keep minimal; avoid instructional text) */}
                     {sectionWidgets.length === 0 && !placeholder && (
-                      <div className="col-span-4 h-24 flex items-center justify-center border-2 border-dashed border-gray-100 rounded-xl text-gray-300 text-sm italic">
+                      <div className="col-span-4 h-32 flex items-center justify-center border-2 border-dashed border-gray-100 rounded-xl text-gray-300 text-sm italic">
                         Empty section
                       </div>
                     )}
@@ -1366,7 +1396,7 @@ const DashboardMagic: React.FC<DashboardMagicProps> = ({ project, onUpdateProjec
               </table>
               {drillDown.data.length > 200 && (
                 <div className="p-4 text-center text-gray-500 text-sm bg-gray-50 border-t">
-                  Showing first 200 rows. Export to see all {drillDown.data.length} rows.
+                  Preview: 200 of {drillDown.data.length} rows.
                 </div>
               )}
             </div>

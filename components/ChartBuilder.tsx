@@ -664,10 +664,10 @@ const [sortSeriesId, setSortSeriesId] = useState('');
     if (!dimension || data.length === 0) return [];
     const unique = new Set<string>();
     data.forEach(row => {
-      const val = String(row[dimension] || 'N/A');
-      unique.add(val);
+      const val = String(row[dimension] ?? '').trim();
+      unique.add(val || '(Empty)');
     });
-    return Array.from(unique).sort();
+    return Array.from(unique).sort((a, b) => a.localeCompare(b));
   }, [dimension, data]);
 
   const stackKeys = useMemo(() => {
