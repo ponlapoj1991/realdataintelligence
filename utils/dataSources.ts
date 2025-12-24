@@ -1,6 +1,7 @@
 import { ColumnConfig, DataSource, DataSourceKind, Project, RawRow } from '../types';
 
 const CHUNK_SIZE = 1000;
+const normalizeNameKey = (name: string) => name.trim().toLowerCase();
 
 const createDefaultSource = (project: Project): DataSource => ({
   id: project.id + '-primary',
@@ -178,4 +179,61 @@ export const addDerivedDataSource = (
 export const getDataSourcesByKind = (project: Project, kind: DataSourceKind) => {
   const { project: normalized } = ensureDataSources(project);
   return (normalized.dataSources || []).filter((s) => s.kind === kind);
+};
+
+export const isDataSourceNameTaken = (
+  project: Project,
+  params: { kind: DataSourceKind; name: string; excludeId?: string }
+): boolean => {
+  const { project: normalized } = ensureDataSources(project);
+  const needle = normalizeNameKey(params.name);
+  if (!needle) return false;
+  return (normalized.dataSources || []).some((s) => {
+    if (s.kind !== params.kind) return false;
+    if (params.excludeId && s.id === params.excludeId) return false;
+    return normalizeNameKey(s.name) === needle;
+  });
+};
+
+export type ColumnMismatch = {
+  key: string;
+  expectedType?: ColumnConfig['type'];
+  actualType?: ColumnConfig['type'];
+};
+
+export const diffColumns = (params: {
+  expected: ColumnConfig[];
+  actual: ColumnConfig[];
+}): {
+  missing: string[];
+  extra: string[];
+  typeMismatches: ColumnMismatch[];
+} => {
+  const expectedMap = new Map(params.expected.map((c) => [c.key, c.type] as const));
+  const actualMap = new Map(params.actual.map((c) => [c.key, c.type] as const));
+
+  const missing: string[] = [];
+  const extra: string[] = [];
+  const typeMismatches: ColumnMismatch[] = [];
+
+  for (const [key, expectedType] of expectedMap) {
+    if (!actualMap.has(key)) {
+      missing.push(key);
+      continue;
+    }
+    const actualType = actualMap.get(key);
+    if (expectedType && actualType && expectedType !== actualType) {
+      typeMismatches.push({ key, expectedType, actualType });
+    }
+  }
+
+  for (const key of actualMap.keys()) {
+    if (!expectedMap.has(key)) extra.push(key);
+  }
+
+  missing.sort();
+  extra.sort();
+  typeMismatches.sort((a, b) => a.key.localeCompare(b.key));
+
+  return { missing, extra, typeMismatches };
 };

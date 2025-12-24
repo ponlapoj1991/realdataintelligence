@@ -1,11 +1,17 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { Plus, Save, Loader2, Search, Settings, Eraser, Trash2, Zap } from 'lucide-react';
+import { Plus, Save, Loader2, Search, Eraser, Trash2, Filter } from 'lucide-react';
 import { ColumnConfig, DataSource, Project, RawRow } from '../types';
-import { ensureDataSources, getDataSourcesByKind, updateDataSourceRows, addDerivedDataSource } from '../utils/dataSources';
+import {
+  ensureDataSources,
+  getDataSourcesByKind,
+  updateDataSourceRows,
+  addDerivedDataSource,
+  isDataSourceNameTaken,
+} from '../utils/dataSources';
 import { getProjectLight, hydrateProjectDataSourceRows, saveProject } from '../utils/storage-compat';
-import { smartParseDate } from '../utils/excel';
 import { useToast } from '../components/ToastProvider';
 import { useTransformPipelineWorker } from '../hooks/useTransformPipelineWorker';
+import TableColumnFilter from '../components/TableColumnFilter';
 
 interface CleansingDataProps {
   project: Project;
@@ -36,15 +42,14 @@ const CleansingData: React.FC<CleansingDataProps> = ({ project, onUpdateProject 
   const [nameError, setNameError] = useState('');
 
   const [searchQuery, setSearchQuery] = useState('');
-  const [activeToolMode, setActiveToolMode] = useState<'none' | 'cleaner' | 'transform'>('none');
+  const [activeToolMode, setActiveToolMode] = useState<'none' | 'cleaner'>('none');
   const [findText, setFindText] = useState('');
   const [replaceText, setReplaceText] = useState('');
   const [targetCol, setTargetCol] = useState<string>('all');
-  const [transformAction, setTransformAction] = useState<'date' | 'explode'>('date');
-  const [transformCol, setTransformCol] = useState<string>('');
-  const [delimiter, setDelimiter] = useState<string>(',');
-  const [editingCol, setEditingCol] = useState<string | null>(null);
   const [isSaving, setIsSaving] = useState(false);
+  const [openFilterCol, setOpenFilterCol] = useState<string | null>(null);
+  const [filters, setFilters] = useState<Record<string, string[] | null>>({});
+  const [filterOptions, setFilterOptions] = useState<Record<string, string[]>>({});
 
   const { showToast } = useToast();
   const transformWorker = useTransformPipelineWorker();
@@ -81,6 +86,7 @@ const CleansingData: React.FC<CleansingDataProps> = ({ project, onUpdateProject 
             sourceId: selectedSource.id,
             searchQuery,
             limit: 50,
+            filters,
           });
           if (reqId !== previewReqRef.current) return;
           setPreviewRows(resp.rows);
@@ -89,6 +95,9 @@ const CleansingData: React.FC<CleansingDataProps> = ({ project, onUpdateProject 
         }
 
         const q = searchQuery.trim().toLowerCase();
+        const activeFilters = Object.entries(filters).filter(([, v]) => Array.isArray(v) && v.length > 0) as Array<
+          [string, string[]]
+        >;
         const rows: RawRow[] = [];
         const indices: number[] = [];
         for (let i = 0; i < workingRows.length && rows.length < 50; i++) {
@@ -96,6 +105,19 @@ const CleansingData: React.FC<CleansingDataProps> = ({ project, onUpdateProject 
           const match =
             !q || Object.values(row).some((val) => String(val ?? '').toLowerCase().includes(q));
           if (!match) continue;
+
+          if (activeFilters.length > 0) {
+            let ok = true;
+            for (const [colKey, allowed] of activeFilters) {
+              const raw = (row as any)[colKey];
+              const normalized = raw === null || raw === undefined || raw === '' ? '(Blank)' : String(raw);
+              if (!allowed.includes(normalized)) {
+                ok = false;
+                break;
+              }
+            }
+            if (!ok) continue;
+          }
           rows.push(row);
           indices.push(i);
         }
@@ -114,6 +136,7 @@ const CleansingData: React.FC<CleansingDataProps> = ({ project, onUpdateProject 
   }, [
     selectedSource?.id,
     searchQuery,
+    filters,
     previewVersion,
     normalizedProject.id,
     transformWorker.isSupported,
@@ -123,6 +146,44 @@ const CleansingData: React.FC<CleansingDataProps> = ({ project, onUpdateProject 
   ]);
 
   const displayRows = previewRows;
+  const hasActiveFilters = Object.values(filters).some((v) => Array.isArray(v) && v.length > 0);
+
+  useEffect(() => {
+    if (!openFilterCol || !selectedSource) return;
+    if (filterOptions[openFilterCol]?.length) return;
+
+    const run = async () => {
+      try {
+        if (transformWorker.isSupported) {
+          const options = await transformWorker.cleanColumnOptions({
+            projectId: normalizedProject.id,
+            sourceId: selectedSource.id,
+            columnKey: openFilterCol,
+            limitRows: 20000,
+            limitValues: 500,
+          });
+          setFilterOptions((prev) => ({ ...prev, [openFilterCol]: options }));
+          return;
+        }
+
+        const values = new Set<string>();
+        let sawBlank = false;
+        for (const row of workingRows) {
+          const raw = (row as any)[openFilterCol];
+          if (raw === null || raw === undefined || raw === '') sawBlank = true;
+          else values.add(String(raw));
+          if (values.size >= 500) break;
+        }
+        const out = Array.from(values).sort();
+        if (sawBlank) out.unshift('(Blank)');
+        setFilterOptions((prev) => ({ ...prev, [openFilterCol]: out }));
+      } catch (e) {
+        console.error('[CleansingData] filter options failed:', e);
+      }
+    };
+
+    void run();
+  }, [openFilterCol, selectedSource, filterOptions, transformWorker.isSupported, transformWorker.cleanColumnOptions, normalizedProject.id, workingRows]);
 
   const persistSource = async (rows: RawRow[], columns: ColumnConfig[] = workingColumns) => {
     if (!selectedSource) return;
@@ -134,32 +195,15 @@ const CleansingData: React.FC<CleansingDataProps> = ({ project, onUpdateProject 
   const handleSelect = (source: DataSource) => {
     setSelectedSourceId(source.id);
     setShowPicker(false);
+    setOpenFilterCol(null);
+    setFilters({});
+    setFilterOptions({});
     if (!transformWorker.isSupported) {
       void (async () => {
         const hydrated = await hydrateProjectDataSourceRows(normalizedProject, source.id);
         onUpdateProject(hydrated);
       })();
     }
-  };
-
-  const updateColumnType = async (key: string, type: ColumnConfig['type']) => {
-    setEditingCol(null);
-
-    if (selectedSource && transformWorker.isSupported) {
-      await transformWorker.cleanUpdateColumnType({
-        projectId: normalizedProject.id,
-        sourceId: selectedSource.id,
-        columnKey: key,
-        columnType: type,
-      });
-      const refreshed = await getProjectLight(normalizedProject.id);
-      if (refreshed) onUpdateProject(refreshed);
-      setPreviewVersion((v) => v + 1);
-      return;
-    }
-
-    const next = workingColumns.map((c) => (c.key === key ? { ...c, type } : c));
-    await persistSource(workingRows, next);
   };
 
   const handleFindReplace = async () => {
@@ -191,56 +235,6 @@ const CleansingData: React.FC<CleansingDataProps> = ({ project, onUpdateProject 
     await persistSource(newRows, workingColumns);
   };
 
-  const handleTransform = async () => {
-    if (!transformCol) return;
-    if (selectedSource && transformWorker.isSupported) {
-      if (transformAction === 'date') {
-        await transformWorker.cleanApplyTransformDate({
-          projectId: normalizedProject.id,
-          sourceId: selectedSource.id,
-          columnKey: transformCol,
-        });
-      } else if (transformAction === 'explode') {
-        await transformWorker.cleanApplyExplode({
-          projectId: normalizedProject.id,
-          sourceId: selectedSource.id,
-          columnKey: transformCol,
-          delimiter,
-        });
-      }
-      const refreshed = await getProjectLight(normalizedProject.id);
-      if (refreshed) onUpdateProject(refreshed);
-      setTransformCol('');
-      setPreviewVersion((v) => v + 1);
-      return;
-    }
-    let newRows = [...workingRows];
-    let newCols = [...workingColumns];
-    if (transformAction === 'date') {
-      newRows = newRows.map((row) => {
-        const val = row[transformCol];
-        if (typeof val === 'string') {
-          const parsed = smartParseDate(val);
-          return { ...row, [transformCol]: parsed || val };
-        }
-        return row;
-      });
-      newCols = newCols.map((c) => (c.key === transformCol ? { ...c, type: 'date' } : c));
-    } else if (transformAction === 'explode') {
-      newRows = newRows.map((row) => {
-        const val = row[transformCol];
-        if (typeof val === 'string') {
-          const parts = val.split(delimiter).map((s) => s.trim()).filter(Boolean);
-          return { ...row, [transformCol]: JSON.stringify(parts) };
-        }
-        return row;
-      });
-      newCols = newCols.map((c) => (c.key === transformCol ? { ...c, type: 'tag_array' } : c));
-    }
-    await persistSource(newRows, newCols);
-    setTransformCol('');
-  };
-
   const handleDeleteRow = async (index: number) => {
     if (selectedSource && transformWorker.isSupported) {
       await transformWorker.cleanDeleteRow({
@@ -267,7 +261,11 @@ const CleansingData: React.FC<CleansingDataProps> = ({ project, onUpdateProject 
   const confirmSave = async () => {
     const trimmed = tableName.trim();
     if (!trimmed) {
-      setNameError('Please enter a name.');
+      setNameError('Name required.');
+      return;
+    }
+    if (isDataSourceNameTaken(normalizedProject, { kind: 'prepared', name: trimmed })) {
+      setNameError('Name exists.');
       return;
     }
     if (!selectedSource) return;
@@ -310,7 +308,6 @@ const CleansingData: React.FC<CleansingDataProps> = ({ project, onUpdateProject 
       <div className="flex items-center justify-between mb-6">
         <div>
           <h1 className="text-xl font-semibold text-gray-900">Cleansing Data</h1>
-          <p className="text-sm text-gray-500">Pick a table and clean directly on it.</p>
         </div>
         <div className="flex items-center space-x-3">
           {selectedSource && (
@@ -328,7 +325,7 @@ const CleansingData: React.FC<CleansingDataProps> = ({ project, onUpdateProject 
             className="inline-flex items-center px-4 py-2 border border-gray-300 rounded-lg shadow-sm text-sm font-medium text-gray-800 hover:bg-gray-50"
           >
             <Plus className="w-4 h-4 mr-2" />
-            Create
+            Tables
           </button>
         </div>
       </div>
@@ -336,9 +333,7 @@ const CleansingData: React.FC<CleansingDataProps> = ({ project, onUpdateProject 
       {!selectedSource && (
         <div className="flex-1 flex flex-col items-center justify-center text-gray-400">
           <div className="flex flex-col items-center space-y-2">
-            <Settings className="w-8 h-8 text-gray-300" strokeWidth={1.5} />
             <p className="text-sm font-medium text-gray-500">No data source selected</p>
-            <p className="text-xs text-gray-400">Please select a table from the top right menu to begin cleansing.</p>
           </div>
         </div>
       )}
@@ -365,6 +360,21 @@ const CleansingData: React.FC<CleansingDataProps> = ({ project, onUpdateProject 
                   placeholder="Search rows"
                 />
               </div>
+              {hasActiveFilters && (
+                <div className="flex items-center gap-2 px-3 py-2 rounded-lg border border-gray-200 bg-gray-50 text-xs text-gray-700">
+                  <Filter className="w-3.5 h-3.5 text-gray-400" />
+                  <span>Filters</span>
+                  <button
+                    onClick={() => {
+                      setFilters({});
+                      setPreviewVersion((v) => v + 1);
+                    }}
+                    className="text-red-600 hover:text-red-700 font-medium"
+                  >
+                    Clear
+                  </button>
+                </div>
+              )}
               <div className="flex bg-gray-100 rounded-lg p-0.5">
                 <button
                   onClick={() => setActiveToolMode(activeToolMode === 'cleaner' ? 'none' : 'cleaner')}
@@ -374,15 +384,6 @@ const CleansingData: React.FC<CleansingDataProps> = ({ project, onUpdateProject 
                 >
                   <Eraser className="w-3 h-3 mr-1" />
                   Find & Replace
-                </button>
-                <button
-                  onClick={() => setActiveToolMode(activeToolMode === 'transform' ? 'none' : 'transform')}
-                  className={`px-3 py-1 text-xs font-medium rounded-md flex items-center ${
-                    activeToolMode === 'transform' ? 'bg-white shadow text-purple-700' : 'text-gray-600'
-                  }`}
-                >
-                  <Zap className="w-3 h-3 mr-1" />
-                  Transform
                 </button>
               </div>
             </div>
@@ -424,82 +425,45 @@ const CleansingData: React.FC<CleansingDataProps> = ({ project, onUpdateProject 
             </div>
           )}
 
-          {activeToolMode === 'transform' && (
-            <div className="px-6 py-3 bg-purple-50 border-b border-purple-100 flex items-center space-x-3">
-              <span className="text-sm font-semibold text-purple-900">Transform</span>
-              <div className="flex bg-white rounded-lg border p-0.5">
-                <button
-                  onClick={() => setTransformAction('date')}
-                  className={`px-3 py-1 text-xs font-medium rounded ${
-                    transformAction === 'date' ? 'bg-purple-100 text-purple-800' : 'text-gray-600'
-                  }`}
-                >
-                  Date
-                </button>
-                <button
-                  onClick={() => setTransformAction('explode')}
-                  className={`px-3 py-1 text-xs font-medium rounded ${
-                    transformAction === 'explode' ? 'bg-purple-100 text-purple-800' : 'text-gray-600'
-                  }`}
-                >
-                  Explode tags
-                </button>
-              </div>
-              <select
-                className="px-3 py-2 text-sm border rounded-lg w-44"
-                value={transformCol}
-                onChange={(e) => setTransformCol(e.target.value)}
-              >
-                <option value="">Select column</option>
-                {workingColumns.map((c) => (
-                  <option key={c.key} value={c.key}>
-                    {c.key}
-                  </option>
-                ))}
-              </select>
-              {transformAction === 'explode' && (
-                <input
-                  className="px-3 py-2 text-sm border rounded-lg w-24"
-                  value={delimiter}
-                  onChange={(e) => setDelimiter(e.target.value)}
-                  placeholder="," 
-                />
-              )}
-              <button
-                onClick={handleTransform}
-                className="px-3 py-2 bg-purple-600 text-white text-sm rounded-lg hover:bg-purple-700"
-              >
-                Apply
-              </button>
-            </div>
-          )}
-
-          <div className="flex-1 overflow-auto">
+          <div className="flex-1 overflow-auto" onClick={() => setOpenFilterCol(null)}>
             <table className="w-full text-sm text-left text-gray-700">
               <thead className="text-xs text-gray-600 uppercase bg-gray-50 sticky top-0 z-10">
                 <tr>
                   <th className="px-4 py-3 w-10 border-b border-gray-200">#</th>
                   {workingColumns.map((col) => (
-                    <th key={col.key} className="px-6 py-3 border-b border-gray-200 font-semibold whitespace-nowrap min-w-[140px]">
+                    <th
+                      key={col.key}
+                      className="px-6 py-3 border-b border-gray-200 font-semibold whitespace-nowrap min-w-[140px] relative"
+                    >
                       <div className="flex items-center justify-between">
                         <span>{col.key}</span>
-                        <button onClick={() => setEditingCol(editingCol === col.key ? null : col.key)} className="text-gray-400 hover:text-gray-600">
-                          <Settings className="w-3 h-3" />
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setOpenFilterCol((prev) => (prev === col.key ? null : col.key));
+                          }}
+                          className={`p-1 rounded hover:bg-gray-100 ${
+                            Array.isArray(filters[col.key]) && (filters[col.key] || []).length > 0
+                              ? 'text-blue-600'
+                              : 'text-gray-400 hover:text-gray-600'
+                          }`}
+                          aria-label={`Filter ${col.key}`}
+                        >
+                          <Filter className="w-3.5 h-3.5" />
                         </button>
                       </div>
-                      {editingCol === col.key && (
-                        <div className="absolute mt-2 bg-white border shadow-lg rounded p-2 z-20">
-                          <select
-                            className="text-xs p-1 border rounded w-full"
-                            value={col.type}
-                            onChange={(e) => updateColumnType(col.key, e.target.value as any)}
-                          >
-                            <option value="string">String</option>
-                            <option value="number">Number</option>
-                            <option value="date">Date</option>
-                            <option value="tag_array">Tag array</option>
-                          </select>
-                        </div>
+                      {openFilterCol === col.key && (
+                        <TableColumnFilter
+                          column={col.key}
+                          data={workingRows}
+                          options={filterOptions[col.key]}
+                          activeFilters={filters[col.key] ?? null}
+                          onApply={(selected) => {
+                            setFilters((prev) => ({ ...prev, [col.key]: selected }));
+                            setPreviewVersion((v) => v + 1);
+                          }}
+                          onClose={() => setOpenFilterCol(null)}
+                        />
                       )}
                     </th>
                   ))}
@@ -560,7 +524,7 @@ const CleansingData: React.FC<CleansingDataProps> = ({ project, onUpdateProject 
                   </div>
                 </button>
               ))}
-              {allSources.length === 0 && <p className="text-sm text-gray-500">No tables available. Upload data first.</p>}
+              {allSources.length === 0 && <p className="text-sm text-gray-500">No tables</p>}
             </div>
             <div className="flex justify-end space-x-3">
               <button
@@ -579,7 +543,7 @@ const CleansingData: React.FC<CleansingDataProps> = ({ project, onUpdateProject 
           <div className="bg-white rounded-xl shadow-2xl max-w-md w-full p-6 space-y-4">
             <div className="space-y-1">
               <p className="text-sm uppercase tracking-wide text-blue-600 font-semibold">Prepared table</p>
-              <h3 className="text-xl font-bold text-gray-900">Name this table</h3>
+              <h3 className="text-xl font-bold text-gray-900">Table Name</h3>
             </div>
             <div className="space-y-2">
               <label className="text-sm font-medium text-gray-700">Table name</label>
@@ -597,7 +561,7 @@ const CleansingData: React.FC<CleansingDataProps> = ({ project, onUpdateProject 
                   }
                 }}
                 className={`w-full rounded-lg border ${nameError ? 'border-red-300 focus:ring-red-200' : 'border-gray-200 focus:ring-blue-200'} px-3 py-2 text-sm shadow-sm focus:outline-none focus:ring-2`}
-                placeholder="Cleaned table"
+                placeholder="Table"
               />
               {nameError && <p className="text-xs text-red-600">{nameError}</p>}
             </div>

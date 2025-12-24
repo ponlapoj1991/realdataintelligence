@@ -53,6 +53,15 @@ type BuildMultiMessage = {
   sources: Array<{ sourceId: string; rules: TransformationRule[] }>
 }
 
+type BuildMultiToTargetMessage = {
+  type: 'buildMultiToTarget'
+  requestId: string
+  projectId: string
+  targetSourceId: string
+  mode: 'append' | 'replace'
+  sources: Array<{ sourceId: string; rules: TransformationRule[] }>
+}
+
 type AnalyzeColumnMessage = {
   type: 'analyzeColumn'
   requestId: string
@@ -79,6 +88,7 @@ type CleanPreviewMessage = {
   sourceId: string
   searchQuery: string
   limit: number
+  filters?: Record<string, string[] | null>
 }
 
 type CleanApplyFindReplaceMessage = {
@@ -125,6 +135,16 @@ type CleanUpdateColumnTypeMessage = {
   columnType: ColumnConfig['type']
 }
 
+type CleanColumnOptionsMessage = {
+  type: 'cleanColumnOptions'
+  requestId: string
+  projectId: string
+  sourceId: string
+  columnKey: string
+  limitRows: number
+  limitValues: number
+}
+
 type CloneSourceMessage = {
   type: 'cloneSource'
   requestId: string
@@ -139,6 +159,7 @@ type WorkerMessage =
   | PreviewMultiMessage
   | BuildSingleMessage
   | BuildMultiMessage
+  | BuildMultiToTargetMessage
   | AnalyzeColumnMessage
   | UniqueValuesMessage
   | CleanPreviewMessage
@@ -147,6 +168,7 @@ type WorkerMessage =
   | CleanApplyExplodeMessage
   | CleanDeleteRowMessage
   | CleanUpdateColumnTypeMessage
+  | CleanColumnOptionsMessage
   | CloneSourceMessage
 
 type PreviewResponse = {
@@ -198,6 +220,12 @@ type CleanDoneResponse = {
   rowCount: number
   chunkCount: number
   updatedAt: number
+}
+
+type CleanColumnOptionsResponse = {
+  type: 'cleanColumnOptions'
+  requestId: string
+  values: string[]
 }
 
 type ErrorResponse = {
@@ -533,6 +561,150 @@ const buildMulti = async (msg: BuildMultiMessage): Promise<BuildResponse> => {
   }
 }
 
+const mergeColumnsPreferExisting = (existing: ColumnConfig[], incoming: ColumnConfig[]): ColumnConfig[] => {
+  const map = new Map<string, ColumnConfig>()
+  for (const col of existing) map.set(col.key, col)
+  for (const col of incoming) {
+    if (!map.has(col.key)) map.set(col.key, col)
+  }
+  return Array.from(map.values())
+}
+
+const buildMultiToTarget = async (msg: BuildMultiToTargetMessage): Promise<BuildResponse> => {
+  const metadata = await getProjectMetadata(msg.projectId)
+  if (!metadata) throw new Error('Project not found')
+
+  const target = Array.isArray(metadata.dataSources)
+    ? (metadata.dataSources as any[]).find((s) => s?.id === msg.targetSourceId)
+    : null
+  if (!target) throw new Error('Target table not found')
+
+  const now = Date.now()
+
+  let totalRows = 0
+  for (const src of msg.sources) {
+    const { rowCount } = getSourceStats(metadata, src.sourceId)
+    totalRows += rowCount
+  }
+
+  const mergedColumns: ColumnConfig[] = []
+  const seen = new Set<string>()
+  for (const src of msg.sources) {
+    for (const col of columnsFromRules(src.rules)) {
+      if (seen.has(col.key)) continue
+      seen.add(col.key)
+      mergedColumns.push(col)
+    }
+  }
+
+  const existingColumns = Array.isArray(target.columns) ? (target.columns as ColumnConfig[]) : []
+  const nextColumns =
+    msg.mode === 'replace' ? mergedColumns : mergeColumnsPreferExisting(existingColumns, mergedColumns)
+
+  if (msg.mode === 'replace') {
+    await deleteAllDataSourceChunksForSource(msg.projectId, msg.targetSourceId)
+  }
+
+  const existingRowCount = typeof target.rowCount === 'number' ? target.rowCount : 0
+  const existingChunkCount =
+    typeof target.chunkCount === 'number' ? target.chunkCount : Math.ceil(existingRowCount / CHUNK_SIZE)
+
+  let outIndex = 0
+  let buffer: RawRow[] = []
+
+  if (msg.mode === 'append' && existingRowCount > 0) {
+    const remainder = existingRowCount % CHUNK_SIZE
+    if (remainder === 0) {
+      outIndex = existingChunkCount
+    } else {
+      outIndex = Math.max(0, existingChunkCount - 1)
+      buffer = await safeGetSourceChunk({
+        metadata,
+        projectId: msg.projectId,
+        sourceId: msg.targetSourceId,
+        chunkIndex: outIndex,
+      })
+    }
+  }
+
+  const flushRemainder = async () => {
+    if (buffer.length === 0) return
+    await saveDataSourceChunk(msg.projectId, msg.targetSourceId, outIndex, buffer)
+    outIndex += 1
+    buffer = []
+  }
+
+  const pushRow = async (row: RawRow) => {
+    buffer.push(row)
+    while (buffer.length >= CHUNK_SIZE) {
+      const head = buffer.slice(0, CHUNK_SIZE)
+      await saveDataSourceChunk(msg.projectId, msg.targetSourceId, outIndex, head)
+      outIndex += 1
+      buffer = buffer.slice(CHUNK_SIZE)
+    }
+  }
+
+  if (msg.mode === 'replace') {
+    outIndex = 0
+    buffer = []
+  }
+
+  for (const src of msg.sources) {
+    const { chunkCount: srcChunks } = getSourceStats(metadata, src.sourceId)
+    for (let i = 0; i < srcChunks; i++) {
+      const chunk = await safeGetSourceChunk({
+        metadata,
+        projectId: msg.projectId,
+        sourceId: src.sourceId,
+        chunkIndex: i,
+      })
+      if (!chunk.length) continue
+      const transformed = applyTransformation(chunk, src.rules)
+      for (const row of transformed) {
+        await pushRow(row)
+      }
+    }
+  }
+  await flushRemainder()
+
+  const nextRowCount = msg.mode === 'append' ? existingRowCount + totalRows : totalRows
+  const nextChunkCount = Math.ceil(nextRowCount / CHUNK_SIZE)
+
+  const sources = Array.isArray(metadata?.dataSources) ? metadata.dataSources : []
+  const nextSources = sources.map((s: any) => {
+    if (s?.id !== msg.targetSourceId) return s
+    return {
+      ...s,
+      columns: nextColumns,
+      rowCount: nextRowCount,
+      chunkCount: nextChunkCount,
+      updatedAt: now,
+      rows: [],
+    }
+  })
+
+  await saveProjectMetadata({
+    ...metadata,
+    dataSources: nextSources,
+    lastModified: now,
+  })
+
+  return {
+    type: 'buildDone',
+    requestId: msg.requestId,
+    source: {
+      id: msg.targetSourceId,
+      name: String(target.name || ''),
+      kind: target.kind as DataSourceKind,
+      rowCount: nextRowCount,
+      chunkCount: nextChunkCount,
+      columns: nextColumns,
+      createdAt: typeof target.createdAt === 'number' ? target.createdAt : now,
+      updatedAt: now,
+    },
+  }
+}
+
 const smartParseDateLite = (val: any): string | null => {
   if (val === null || val === undefined || val === '') return null
 
@@ -591,6 +763,10 @@ const cleanPreview = async (msg: CleanPreviewMessage): Promise<CleanPreviewRespo
 
   const rows: RawRow[] = []
   const rowIndices: number[] = []
+  const filters = msg.filters && typeof msg.filters === 'object' ? msg.filters : {}
+  const filterEntries = Object.entries(filters).filter(([, v]) => Array.isArray(v) && v.length > 0) as Array<
+    [string, string[]]
+  >
 
   for (let i = 0; i < chunkCount && rows.length < limit; i++) {
     const chunk = await safeGetSourceChunk({
@@ -603,6 +779,18 @@ const cleanPreview = async (msg: CleanPreviewMessage): Promise<CleanPreviewRespo
 
     for (let j = 0; j < chunk.length; j++) {
       const row = chunk[j]
+      if (filterEntries.length) {
+        let ok = true
+        for (const [col, allowed] of filterEntries) {
+          const raw = (row as any)[col]
+          const strVal = raw === null || raw === undefined || raw === '' ? '(Blank)' : String(raw)
+          if (!allowed.includes(strVal)) {
+            ok = false
+            break
+          }
+        }
+        if (!ok) continue
+      }
       const match =
         !search ||
         Object.values(row).some((v) => String(v ?? '').toLowerCase().includes(search))
@@ -620,6 +808,48 @@ const cleanPreview = async (msg: CleanPreviewMessage): Promise<CleanPreviewRespo
     rows,
     rowIndices,
     totalRows: rowCount,
+  }
+}
+
+const cleanColumnOptions = async (msg: CleanColumnOptionsMessage): Promise<CleanColumnOptionsResponse> => {
+  const metadata = await getProjectMetadata(msg.projectId)
+  if (!metadata) throw new Error('Project not found')
+
+  const { chunkCount } = getSourceStats(metadata, msg.sourceId)
+  const limitRows = Math.max(0, msg.limitRows || 0)
+  const limitValues = Math.max(0, msg.limitValues || 0)
+
+  const values = new Set<string>()
+  let scanned = 0
+  let sawBlank = false
+
+  for (let i = 0; i < chunkCount && scanned < limitRows && values.size < limitValues; i++) {
+    const chunk = await safeGetSourceChunk({
+      metadata,
+      projectId: msg.projectId,
+      sourceId: msg.sourceId,
+      chunkIndex: i,
+    })
+    if (!chunk.length) continue
+    for (const row of chunk) {
+      const raw = (row as any)[msg.columnKey]
+      if (raw === null || raw === undefined || raw === '') {
+        sawBlank = true
+      } else {
+        values.add(String(raw))
+      }
+      scanned += 1
+      if (scanned >= limitRows || values.size >= limitValues) break
+    }
+  }
+
+  const out = Array.from(values).sort()
+  if (sawBlank) out.unshift('(Blank)')
+
+  return {
+    type: 'cleanColumnOptions',
+    requestId: msg.requestId,
+    values: out,
   }
 }
 
@@ -926,6 +1156,11 @@ self.onmessage = (event: MessageEvent<WorkerMessage>) => {
         self.postMessage(resp satisfies BuildResponse)
         return
       }
+      if (msg.type === 'buildMultiToTarget') {
+        const resp = await buildMultiToTarget(msg)
+        self.postMessage(resp satisfies BuildResponse)
+        return
+      }
       if (msg.type === 'analyzeColumn') {
         const resp = await analyzeColumn(msg)
         self.postMessage(resp satisfies ColumnAnalysisResponse)
@@ -966,6 +1201,11 @@ self.onmessage = (event: MessageEvent<WorkerMessage>) => {
         self.postMessage(resp satisfies CleanDoneResponse)
         return
       }
+      if (msg.type === 'cleanColumnOptions') {
+        const resp = await cleanColumnOptions(msg)
+        self.postMessage(resp satisfies CleanColumnOptionsResponse)
+        return
+      }
       if (msg.type === 'cloneSource') {
         const resp = await cloneSource(msg)
         self.postMessage(resp satisfies BuildResponse)
@@ -991,5 +1231,6 @@ export type {
   UniqueValuesResponse,
   CleanPreviewResponse,
   CleanDoneResponse,
+  CleanColumnOptionsResponse,
   ErrorResponse,
 }

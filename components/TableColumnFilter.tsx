@@ -1,10 +1,11 @@
 
 import React, { useState, useMemo, useEffect } from 'react';
-import { Search, Check, X, Filter } from 'lucide-react';
+import { Search, X } from 'lucide-react';
 
 interface TableColumnFilterProps {
   column: string;
   data: any[]; // The full dataset to extract unique values from
+  options?: string[]; // Optional precomputed options list
   activeFilters: string[] | null; // Current selected values (null means all)
   onApply: (selected: string[] | null) => void;
   onClose: () => void;
@@ -13,6 +14,7 @@ interface TableColumnFilterProps {
 const TableColumnFilter: React.FC<TableColumnFilterProps> = ({
   column,
   data,
+  options,
   activeFilters,
   onApply,
   onClose
@@ -22,11 +24,14 @@ const TableColumnFilter: React.FC<TableColumnFilterProps> = ({
 
   // Extract unique values from data
   const uniqueValues = useMemo(() => {
+    if (Array.isArray(options) && options.length > 0) {
+      return options;
+    }
     const values = new Set<string>();
     data.forEach(row => {
       const val = row[column];
       // Convert to string for filtering consistencies
-      const strVal = val === null || val === undefined ? '(Blank)' : String(val);
+      const strVal = val === null || val === undefined || val === '' ? '(Blank)' : String(val);
       values.add(strVal);
     });
     return Array.from(values).sort();

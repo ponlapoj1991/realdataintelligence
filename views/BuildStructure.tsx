@@ -1,7 +1,8 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { Plus, Save, Play, Loader2, Table2, Layers, ChevronUp, ChevronDown, X, ArrowRight } from 'lucide-react';
+import { Plus, Save, Play, Loader2, Table2, Layers, ChevronUp, ChevronDown, ChevronLeft, X, ArrowRight, Trash2 } from 'lucide-react';
 import {
   BuildStructureConfig,
+  ColumnConfig,
   DataSource,
   Project,
   RawRow,
@@ -9,7 +10,7 @@ import {
   TransformationRule,
   TransformMethod,
 } from '../types';
-import { ensureDataSources, getDataSourcesByKind } from '../utils/dataSources';
+import { diffColumns, ensureDataSources, getDataSourcesByKind, isDataSourceNameTaken } from '../utils/dataSources';
 import { getProjectLight, saveProject } from '../utils/storage-compat';
 import { analyzeSourceColumn, applyTransformation, getAllUniqueValues } from '../utils/transform';
 import { useToast } from '../components/ToastProvider';
@@ -46,6 +47,7 @@ const BuildStructure: React.FC<BuildStructureProps> = ({ project, onUpdateProjec
 
   const [configs, setConfigs] = useState<BuildStructureConfig[]>(normalizedProject.buildStructureConfigs || []);
   const [activeConfigId, setActiveConfigId] = useState<string | null>(normalizedProject.activeBuildConfigId || null);
+  const [view, setView] = useState<'list' | 'detail'>('list');
   const [showConfigModal, setShowConfigModal] = useState(false);
   const [configName, setConfigName] = useState('');
 
@@ -64,8 +66,19 @@ const BuildStructure: React.FC<BuildStructureProps> = ({ project, onUpdateProjec
   const [newRuleName, setNewRuleName] = useState('');
 
   const [showSaveModal, setShowSaveModal] = useState(false);
+  const [saveMode, setSaveMode] = useState<'new' | 'overwrite'>('new');
   const [saveName, setSaveName] = useState('');
-  const [saveError, setSaveError] = useState('');
+  const [overwriteTargetId, setOverwriteTargetId] = useState<string>('');
+  const [overwriteWriteMode, setOverwriteWriteMode] = useState<'append' | 'replace'>('replace');
+  const [saveError, setSaveError] = useState<string>('');
+
+  const [isQueryModalOpen, setIsQueryModalOpen] = useState(false);
+  const [confirm, setConfirm] = useState<{
+    title: string;
+    lines: string[];
+    confirmLabel: string;
+    onConfirm: () => void;
+  } | null>(null);
 
   type RuleDraft = {
     sourceId: string;
@@ -107,8 +120,13 @@ const BuildStructure: React.FC<BuildStructureProps> = ({ project, onUpdateProjec
 
   // Sync configs from project changes
   useEffect(() => {
-    setConfigs(normalizedProject.buildStructureConfigs || []);
-    setActiveConfigId(normalizedProject.activeBuildConfigId || normalizedProject.buildStructureConfigs?.[0]?.id || null);
+    const nextConfigs = normalizedProject.buildStructureConfigs || [];
+    const nextActiveId = normalizedProject.activeBuildConfigId || nextConfigs[0]?.id || null;
+    setConfigs(nextConfigs);
+    setActiveConfigId(nextActiveId);
+    if (!nextActiveId) {
+      setView('list');
+    }
   }, [normalizedProject.buildStructureConfigs, normalizedProject.activeBuildConfigId]);
 
   const activeConfig = useMemo(
@@ -266,6 +284,7 @@ const BuildStructure: React.FC<BuildStructureProps> = ({ project, onUpdateProjec
     };
     const nextConfigs = [...configs, newConfig];
     setActiveConfigId(newConfig.id);
+    setView('detail');
     setShowConfigModal(false);
     await persistConfigs(nextConfigs, newConfig.id);
   };
@@ -288,7 +307,7 @@ const BuildStructure: React.FC<BuildStructureProps> = ({ project, onUpdateProjec
 
   const openAddRule = () => {
     if (!selectedSources.length) {
-      showToast('Select sources first', 'Choose one or more tables before adding columns.', 'warning');
+      showToast('Setup incomplete', 'Tables required.', 'warning');
       return;
     }
     setEditingTargetName(null);
@@ -423,11 +442,12 @@ const BuildStructure: React.FC<BuildStructureProps> = ({ project, onUpdateProjec
   const runQuery = async (silent = false, overrideRules?: StructureRule[]) => {
     const workingRules = overrideRules || rules;
     if (!selectedSources.length || !workingRules.length) {
-      showToast('Setup incomplete', 'Choose sources and add mappings before querying.', 'warning');
+      showToast('Setup incomplete', 'Mappings required.', 'warning');
       return;
     }
     if (!silent) {
       setIsRunning(true);
+      setIsQueryModalOpen(true);
     }
 
     const sourcesPayload = selectedSources
@@ -440,7 +460,7 @@ const BuildStructure: React.FC<BuildStructureProps> = ({ project, onUpdateProjec
       .filter((v): v is { sourceId: string; rules: TransformationRule[] } => !!v);
 
     if (sourcesPayload.length === 0) {
-      showToast('Setup incomplete', 'Add at least one mapping before querying.', 'warning');
+      showToast('Setup incomplete', 'Mappings required.', 'warning');
       if (!silent) setIsRunning(false);
       return;
     }
@@ -453,8 +473,14 @@ const BuildStructure: React.FC<BuildStructureProps> = ({ project, onUpdateProjec
       });
       setResultRows(preview.rows);
       setPreviewTotal(preview.totalRows);
+    } catch (e: any) {
+      console.error('[BuildStructure] query failed:', e);
+      showToast('Query failed', e?.message || 'Failed to query', 'error');
+      setResultRows([]);
+      setPreviewTotal(0);
     } finally {
       if (!silent) {
+        setIsQueryModalOpen(false);
         setTimeout(() => setIsRunning(false), 150);
       }
     }
@@ -463,83 +489,247 @@ const BuildStructure: React.FC<BuildStructureProps> = ({ project, onUpdateProjec
     }
   };
 
-  const openSaveModal = () => {
-    if (!resultRows.length) {
-      showToast('No results', 'Run Query before saving.', 'warning');
-      return;
-    }
-    const defaultName = activeConfig ? `${activeConfig.name} output` : `Structured ${selectedSources.length} files`;
-    setSaveName(defaultName);
-    setSaveError('');
-    setShowSaveModal(true);
-  };
-
-  const handleSave = async () => {
-    const trimmed = saveName.trim();
-    if (!trimmed) {
-      setSaveError('Please enter a table name.');
-      return;
-    }
-    setIsSaving(true);
-
-    const sourcesPayload = selectedSources
+  const buildSourcesPayload = (workingRules: StructureRule[]) => {
+    return selectedSources
       .map((sourceId) => {
-        const scopedRules = rules.filter((r) => r.sourceId === sourceId);
+        const scopedRules = workingRules.filter((r) => r.sourceId === sourceId);
         if (!scopedRules.length) return null;
         const baseRules = scopedRules.map(({ sourceId: _sid, ...rest }) => rest) as TransformationRule[];
         return { sourceId, rules: baseRules };
       })
       .filter((v): v is { sourceId: string; rules: TransformationRule[] } => !!v);
+  };
 
-    try {
-      await transformWorker.buildMulti({
-        projectId: normalizedProject.id,
-        name: trimmed,
-        kind: 'prepared',
-        sources: sourcesPayload,
-      });
+  const buildOutputColumns = (sourcesPayload: Array<{ sourceId: string; rules: TransformationRule[] }>): ColumnConfig[] => {
+    const seen = new Set<string>();
+    const cols: ColumnConfig[] = [];
+    for (const src of sourcesPayload) {
+      for (const r of src.rules) {
+        const key = r.targetName;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        cols.push({ key, type: 'string', visible: true, label: key });
+      }
+    }
+    return cols;
+  };
 
-      const refreshed = await getProjectLight(normalizedProject.id);
-      if (refreshed) {
-        onUpdateProject(refreshed);
+  const openSaveModal = () => {
+    if (!activeConfig) return;
+    if (!selectedSources.length || !rules.length) {
+      showToast('Setup incomplete', 'Query required.', 'warning');
+      return;
+    }
+    if (!resultRows.length) {
+      showToast('No preview', 'Query required.', 'warning');
+      return;
+    }
+    setSaveMode('new');
+    setSaveName('');
+    setSaveError('');
+    setOverwriteTargetId('');
+    setOverwriteWriteMode('replace');
+    setShowSaveModal(true);
+  };
+
+  const handleSave = async () => {
+    const sourcesPayload = buildSourcesPayload(rules);
+    if (sourcesPayload.length === 0) {
+      showToast('Setup incomplete', 'Mappings required.', 'warning');
+      return;
+    }
+
+    if (saveMode === 'new') {
+      const trimmed = saveName.trim();
+      if (!trimmed) {
+        setSaveError('Name required');
+        return;
+      }
+      if (isDataSourceNameTaken(normalizedProject, { kind: 'prepared', name: trimmed })) {
+        setSaveError('Name exists');
+        return;
       }
 
-      showToast('Saved', `${trimmed} stored in Preparation Data.`, 'success');
-      setShowSaveModal(false);
-    } catch (e: any) {
-      showToast('Save failed', e?.message || 'Failed to save', 'error');
-    } finally {
-      setTimeout(() => setIsSaving(false), 400);
+      setIsSaving(true);
+      try {
+        await transformWorker.buildMulti({
+          projectId: normalizedProject.id,
+          name: trimmed,
+          kind: 'prepared',
+          sources: sourcesPayload,
+        });
+        const refreshed = await getProjectLight(normalizedProject.id);
+        if (refreshed) onUpdateProject(refreshed);
+        showToast('Saved', trimmed, 'success');
+        setShowSaveModal(false);
+      } catch (e: any) {
+        showToast('Save failed', e?.message || 'Failed to save', 'error');
+      } finally {
+        setTimeout(() => setIsSaving(false), 400);
+      }
+      return;
     }
+
+    const target = preparedSources.find((s) => s.id === overwriteTargetId) || null;
+    if (!target) {
+      setSaveError('Target required');
+      return;
+    }
+
+    const outputColumns = buildOutputColumns(sourcesPayload);
+    const existingColumns = Array.isArray(target.columns) ? target.columns : [];
+    const diff = diffColumns({ expected: existingColumns, actual: outputColumns });
+    const columnsMatch = diff.missing.length === 0 && diff.extra.length === 0 && diff.typeMismatches.length === 0;
+
+    const openConfirm = (payload: { title: string; lines: string[]; confirmLabel: string; onConfirm: () => void }) => {
+      setConfirm(payload);
+    };
+
+    if (overwriteWriteMode === 'replace') {
+      openConfirm({
+        title: 'Replace',
+        lines: ['Table will be cleared and rewritten.'],
+        confirmLabel: 'Replace',
+        onConfirm: () => {
+          setConfirm(null);
+          void (async () => {
+            setIsSaving(true);
+            try {
+              await transformWorker.buildMultiToTarget({
+                projectId: normalizedProject.id,
+                targetSourceId: target.id,
+                mode: 'replace',
+                sources: sourcesPayload,
+              });
+              const refreshed = await getProjectLight(normalizedProject.id);
+              if (refreshed) onUpdateProject(refreshed);
+              showToast('Saved', target.name, 'success');
+              setShowSaveModal(false);
+            } catch (e: any) {
+              showToast('Save failed', e?.message || 'Failed to save', 'error');
+            } finally {
+              setTimeout(() => setIsSaving(false), 400);
+            }
+          })();
+        },
+      });
+      return;
+    }
+
+    const lines: string[] = [];
+    if (columnsMatch) {
+      lines.push('Columns match.');
+    } else {
+      lines.push('Columns mismatch.');
+      if (diff.missing.length) lines.push(`Missing: ${diff.missing.join(', ')}`);
+      if (diff.extra.length) lines.push(`Extra: ${diff.extra.join(', ')}`);
+      if (diff.typeMismatches.length) {
+        const types = diff.typeMismatches.map((m) => `${m.key} (${m.expectedType} → ${m.actualType})`);
+        lines.push(`Types: ${types.join(', ')}`);
+      }
+    }
+
+    openConfirm({
+      title: columnsMatch ? 'Columns Match' : 'Columns Mismatch',
+      lines,
+      confirmLabel: 'Append',
+      onConfirm: () => {
+        setConfirm(null);
+        void (async () => {
+          setIsSaving(true);
+          try {
+            await transformWorker.buildMultiToTarget({
+              projectId: normalizedProject.id,
+              targetSourceId: target.id,
+              mode: 'append',
+              sources: sourcesPayload,
+            });
+            const refreshed = await getProjectLight(normalizedProject.id);
+            if (refreshed) onUpdateProject(refreshed);
+            showToast('Saved', target.name, 'success');
+            setShowSaveModal(false);
+          } catch (e: any) {
+            showToast('Save failed', e?.message || 'Failed to save', 'error');
+          } finally {
+            setTimeout(() => setIsSaving(false), 400);
+          }
+        })();
+      },
+    });
   };
 
   const hasConfig = Boolean(activeConfig);
   const previewRowCount = resultRows.length || previewTotal || 0;
+  const activeName = activeConfig?.name || 'Config';
+
+  const currentSourcesPayload = useMemo(() => buildSourcesPayload(rules), [rules, selectedSources]);
+  const currentOutputColumns = useMemo(() => buildOutputColumns(currentSourcesPayload), [currentSourcesPayload]);
+  const overwriteTarget = useMemo(
+    () => preparedSources.find((s) => s.id === overwriteTargetId) || null,
+    [preparedSources, overwriteTargetId]
+  );
+  const overwriteSchema = useMemo(() => {
+    if (!overwriteTarget) return null;
+    const expected = Array.isArray(overwriteTarget.columns) ? overwriteTarget.columns : [];
+    return diffColumns({ expected, actual: currentOutputColumns });
+  }, [overwriteTarget, currentOutputColumns]);
+  const overwriteSchemaMatch = Boolean(
+    overwriteSchema &&
+      overwriteSchema.missing.length === 0 &&
+      overwriteSchema.extra.length === 0 &&
+      overwriteSchema.typeMismatches.length === 0
+  );
+
+  const openConfig = async (id: string) => {
+    setActiveConfigId(id);
+    setView('detail');
+    await persistConfigs(configs, id);
+  };
+
+  const requestDeleteConfig = (id: string) => {
+    const cfg = configs.find((c) => c.id === id);
+    if (!cfg) return;
+    setConfirm({
+      title: 'Delete Config',
+      lines: [cfg.name],
+      confirmLabel: 'Delete',
+      onConfirm: () => {
+        setConfirm(null);
+        void (async () => {
+          const nextConfigs = configs.filter((c) => c.id !== id);
+          const nextActiveId =
+            activeConfigId === id ? (nextConfigs[0]?.id || null) : activeConfigId;
+          setConfigs(nextConfigs);
+          setActiveConfigId(nextActiveId);
+          if (!nextActiveId) setView('list');
+          await persistConfigs(nextConfigs, nextActiveId);
+        })();
+      },
+    });
+  };
 
   return (
     <div className="h-full flex flex-col px-10 py-8 overflow-y-auto">
       <div className="flex items-center justify-between mb-6">
         <div className="flex items-center space-x-3">
-          <h1 className="text-xl font-semibold text-gray-900">Build Structure</h1>
-          {configs.length > 0 && (
-            <select
-              value={activeConfig?.id || ''}
-              onChange={async (e) => {
-                setActiveConfigId(e.target.value);
-                await persistConfigs(configs, e.target.value);
-              }}
-              className="text-sm border border-gray-200 rounded-lg px-3 py-2 bg-white shadow-sm"
+          {view === 'detail' && (
+            <button
+              onClick={() => setView('list')}
+              className="inline-flex items-center px-3 py-2 border border-gray-300 rounded-lg shadow-sm text-sm font-medium text-gray-800 hover:bg-gray-50"
             >
-              {configs.map((cfg) => (
-                <option key={cfg.id} value={cfg.id}>
-                  {cfg.name}
-                </option>
-              ))}
-            </select>
+              <ChevronLeft className="w-4 h-4 mr-2" />
+              Back
+            </button>
+          )}
+          <h1 className="text-xl font-semibold text-gray-900">Build Structure</h1>
+          {view === 'detail' && hasConfig && (
+            <span className="text-sm font-medium text-gray-500 truncate max-w-[320px]" title={activeName}>
+              {activeName}
+            </span>
           )}
         </div>
         <div className="flex items-center space-x-3">
-          {hasConfig && (
+          {view === 'detail' && hasConfig && (
             <button
               onClick={openSaveModal}
               disabled={isSaving}
@@ -552,6 +742,7 @@ const BuildStructure: React.FC<BuildStructureProps> = ({ project, onUpdateProjec
           <button
             onClick={() => {
               setConfigName(`Structure ${configs.length + 1}`);
+              setSelectedSources([]);
               setShowConfigModal(true);
             }}
             className="inline-flex items-center px-4 py-2 border border-gray-300 rounded-lg shadow-sm text-sm font-medium text-gray-800 hover:bg-gray-50"
@@ -562,13 +753,62 @@ const BuildStructure: React.FC<BuildStructureProps> = ({ project, onUpdateProjec
         </div>
       </div>
 
-      {!hasConfig && (
-        <div className="flex-1 border border-dashed border-gray-200 rounded-xl bg-white/60 flex items-center justify-center text-gray-400 text-sm">
-          Create a configuration to start.
+      {view === 'list' && (
+        <div className="flex-1">
+          {configs.length === 0 ? (
+            <div className="border border-dashed border-gray-200 rounded-xl bg-white/60">
+              <EmptyState
+                icon={Table2}
+                title="No configs"
+                description=""
+                actionLabel="Create"
+                onAction={() => {
+                  setConfigName(`Structure ${configs.length + 1}`);
+                  setSelectedSources([]);
+                  setShowConfigModal(true);
+                }}
+                className="border-0 bg-transparent"
+              />
+            </div>
+          ) : (
+            <div className="border border-gray-200 rounded-xl bg-white shadow-sm overflow-hidden">
+              <div className="grid grid-cols-12 gap-3 text-sm font-semibold text-gray-500 px-5 py-3 border-b border-gray-100 bg-gray-50">
+                <span className="col-span-6">Config</span>
+                <span className="col-span-3">Tables</span>
+                <span className="col-span-3 text-right">Actions</span>
+              </div>
+              <div className="divide-y divide-gray-100">
+                {configs
+                  .slice()
+                  .sort((a, b) => b.updatedAt - a.updatedAt)
+                  .map((cfg) => (
+                    <div key={cfg.id} className="grid grid-cols-12 gap-3 items-center px-5 py-3 hover:bg-gray-50">
+                      <div className="col-span-6">
+                        <p className="font-medium text-gray-900 truncate" title={cfg.name}>
+                          {cfg.name}
+                        </p>
+                        <p className="text-xs text-gray-500">{new Date(cfg.updatedAt).toLocaleString()}</p>
+                      </div>
+                      <div className="col-span-3 text-sm text-gray-800">
+                        {(cfg.sourceIds || []).length.toLocaleString()}
+                      </div>
+                      <div className="col-span-3 flex items-center justify-end space-x-3 text-sm">
+                        <button onClick={() => void openConfig(cfg.id)} className="text-blue-600 hover:text-blue-700 font-medium">
+                          Open
+                        </button>
+                        <button onClick={() => requestDeleteConfig(cfg.id)} className="text-gray-400 hover:text-red-500">
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+              </div>
+            </div>
+          )}
         </div>
       )}
 
-      {hasConfig && (
+      {view === 'detail' && hasConfig && (
         <div className="space-y-6">
           <div className="border border-gray-200 rounded-xl bg-white shadow-sm p-5">
             <div className="flex items-center justify-between mb-4">
@@ -642,7 +882,7 @@ const BuildStructure: React.FC<BuildStructureProps> = ({ project, onUpdateProjec
                   <EmptyState
                     icon={Table2}
                     title="No columns"
-                    description="Add mappings for each source before querying."
+                    description=""
                     actionLabel="Add column"
                     onAction={openAddRule}
                     className="border-0 bg-transparent"
@@ -709,7 +949,7 @@ const BuildStructure: React.FC<BuildStructureProps> = ({ project, onUpdateProjec
                   {resultRows.length === 0 && (
                     <tr>
                       <td className="px-4 py-6 text-center text-gray-400" colSpan={Math.max(Object.keys(resultRows[0] || {}).length, 1)}>
-                        Run Query to preview structured data.
+                        No preview.
                       </td>
                     </tr>
                   )}
@@ -752,7 +992,7 @@ const BuildStructure: React.FC<BuildStructureProps> = ({ project, onUpdateProjec
                   </label>
                 );
               })}
-              {allSources.length === 0 && <p className="text-sm text-gray-500">Upload data before creating a structure.</p>}
+              {allSources.length === 0 && <p className="text-sm text-gray-500">No tables</p>}
             </div>
             <div className="flex justify-end space-x-3">
               <button onClick={() => setShowSourcePicker(false)} className="px-4 py-2 text-sm text-gray-600 rounded-lg hover:bg-gray-50">
@@ -818,7 +1058,7 @@ const BuildStructure: React.FC<BuildStructureProps> = ({ project, onUpdateProjec
                       </label>
                     );
                   })}
-                  {allSources.length === 0 && <p className="text-sm text-gray-500">Upload data before creating a structure.</p>}
+                  {allSources.length === 0 && <p className="text-sm text-gray-500">No tables</p>}
                 </div>
               </div>
             </div>
@@ -1121,14 +1361,14 @@ const BuildStructure: React.FC<BuildStructureProps> = ({ project, onUpdateProjec
                           <div className="p-4 space-y-4">
                             {/* 1. Selector */}
                             <div className="space-y-2">
-                              <label className="text-xs font-medium text-gray-500">Pick value to map</label>
+                              <label className="text-xs font-medium text-gray-500">Source Value</label>
                               <div className="flex space-x-2">
                                 <select
                                   className="flex-1 border border-gray-300 rounded-lg px-2 py-1.5 text-xs bg-white focus:outline-none focus:ring-1 focus:ring-blue-500"
                                   value={draft.manualKey}
                                   onChange={(e) => updateDraft(draft.sourceId, (curr) => ({ ...curr, manualKey: e.target.value }))}
                                 >
-                                  <option value="">-- Select value --</option>
+                                  <option value="">None</option>
                                   {draft.uniqueValues
                                     .filter((v) => !draft.valueMap.hasOwnProperty(v))
                                     .map((v) => (
@@ -1138,7 +1378,7 @@ const BuildStructure: React.FC<BuildStructureProps> = ({ project, onUpdateProjec
                                     ))}
                                   {!draft.valueMap.hasOwnProperty('__NULL_VALUE__') && (
                                     <option value="__NULL_VALUE__" className="text-red-600 font-semibold">
-                                      Null value (No match found)
+                                      Null (No match)
                                     </option>
                                   )}
                                 </select>
@@ -1157,7 +1397,7 @@ const BuildStructure: React.FC<BuildStructureProps> = ({ project, onUpdateProjec
                                   <ArrowRight className="w-3 h-3 text-gray-400" />
                                   <input
                                     className="flex-1 border border-gray-300 rounded px-2 py-1 text-xs focus:outline-none focus:border-blue-500"
-                                    placeholder={draft.manualKey === '__NULL_VALUE__' ? 'Fallback value (e.g. Other)' : 'New value'}
+                                    placeholder={draft.manualKey === '__NULL_VALUE__' ? 'Fallback' : 'Mapped value'}
                                     value={draft.manualValue}
                                     onChange={(e) =>
                                       updateDraft(draft.sourceId, (curr) => ({ ...curr, manualValue: e.target.value }))
@@ -1293,7 +1533,7 @@ const BuildStructure: React.FC<BuildStructureProps> = ({ project, onUpdateProjec
                                   {draft.uniqueValues.length === 0 && Object.keys(draft.valueMap).length === 0 && (
                                     <tr>
                                       <td className="px-4 py-3 text-xs text-gray-400" colSpan={2}>
-                                        No mapped values yet. Add mappings below.
+                                        No mapped values.
                                       </td>
                                     </tr>
                                   )}
@@ -1302,7 +1542,7 @@ const BuildStructure: React.FC<BuildStructureProps> = ({ project, onUpdateProjec
                             </div>
 
                             <div className="px-4 py-3 bg-gray-50 border-t border-gray-200">
-                              <div className="text-[10px] text-gray-500 mb-2 font-medium">Add custom map (if value not found)</div>
+                              <div className="text-[10px] text-gray-500 mb-2 font-medium">Custom Map</div>
                               <div className="flex space-x-2">
                                 <input
                                   className="flex-1 px-2 py-1.5 border border-gray-300 rounded text-xs outline-none"
@@ -1364,7 +1604,7 @@ const BuildStructure: React.FC<BuildStructureProps> = ({ project, onUpdateProjec
           <div className="bg-white rounded-xl shadow-2xl w-full max-w-lg p-6">
             <div className="flex items-center justify-between mb-4">
               <div>
-                <p className="text-xs uppercase tracking-wide text-blue-600 font-semibold">Save structured output</p>
+                <p className="text-xs uppercase tracking-wide text-blue-600 font-semibold">Save</p>
                 <h3 className="text-lg font-semibold text-gray-900">Preparation Data</h3>
               </div>
               <button onClick={() => setShowSaveModal(false)} className="text-gray-400 hover:text-gray-600">
@@ -1372,17 +1612,126 @@ const BuildStructure: React.FC<BuildStructureProps> = ({ project, onUpdateProjec
               </button>
             </div>
 
-            <div className="space-y-2">
-              <label className="text-sm font-medium text-gray-700">Table name</label>
-              <input
-                value={saveName}
-                onChange={(e) => {
-                  setSaveName(e.target.value);
-                  setSaveError('');
-                }}
-                className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-200"
-                placeholder="Structured table name"
-              />
+            <div className="space-y-4">
+              <div className="flex bg-gray-100 p-1 rounded-lg">
+                <button
+                  onClick={() => {
+                    setSaveMode('new');
+                    setSaveError('');
+                  }}
+                  className={`flex-1 px-3 py-2 rounded-md text-sm font-medium transition-all ${
+                    saveMode === 'new' ? 'bg-white text-blue-600 shadow-sm' : 'text-gray-600 hover:text-gray-900'
+                  }`}
+                >
+                  Save As New
+                </button>
+                <button
+                  onClick={() => {
+                    setSaveMode('overwrite');
+                    setSaveError('');
+                  }}
+                  className={`flex-1 px-3 py-2 rounded-md text-sm font-medium transition-all ${
+                    saveMode === 'overwrite' ? 'bg-white text-blue-600 shadow-sm' : 'text-gray-600 hover:text-gray-900'
+                  }`}
+                >
+                  Overwrite
+                </button>
+              </div>
+
+              {saveMode === 'new' ? (
+                <div className="space-y-2">
+                  <label className="text-sm font-medium text-gray-700">Table Name</label>
+                  <input
+                    value={saveName}
+                    onChange={(e) => {
+                      setSaveName(e.target.value);
+                      setSaveError('');
+                    }}
+                    className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-200"
+                  />
+                </div>
+              ) : (
+                <div className="space-y-4">
+                  <div className="space-y-2">
+                    <label className="text-sm font-medium text-gray-700">Target Table</label>
+                    <select
+                      value={overwriteTargetId}
+                      onChange={(e) => {
+                        setOverwriteTargetId(e.target.value);
+                        setSaveError('');
+                      }}
+                      className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm bg-white shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-200"
+                    >
+                      <option value="">None</option>
+                      {preparedSources
+                        .slice()
+                        .sort((a, b) => b.updatedAt - a.updatedAt)
+                        .map((src) => (
+                          <option key={src.id} value={src.id}>
+                            {src.name}
+                          </option>
+                        ))}
+                    </select>
+                  </div>
+
+                  <div className="space-y-2">
+                    <label className="text-sm font-medium text-gray-700">Write Mode</label>
+                    <div className="flex bg-gray-100 p-1 rounded-lg">
+                      <button
+                        onClick={() => setOverwriteWriteMode('append')}
+                        className={`flex-1 px-3 py-2 rounded-md text-sm font-medium transition-all ${
+                          overwriteWriteMode === 'append'
+                            ? 'bg-white text-blue-600 shadow-sm'
+                            : 'text-gray-600 hover:text-gray-900'
+                        }`}
+                      >
+                        Append
+                      </button>
+                      <button
+                        onClick={() => setOverwriteWriteMode('replace')}
+                        className={`flex-1 px-3 py-2 rounded-md text-sm font-medium transition-all ${
+                          overwriteWriteMode === 'replace'
+                            ? 'bg-white text-blue-600 shadow-sm'
+                            : 'text-gray-600 hover:text-gray-900'
+                        }`}
+                      >
+                        Replace
+                      </button>
+                    </div>
+                  </div>
+
+                  {overwriteTarget && overwriteWriteMode === 'append' && overwriteSchema && (
+                    <div
+                      className={`rounded-lg border p-3 text-xs ${
+                        overwriteSchemaMatch
+                          ? 'bg-emerald-50 border-emerald-100 text-emerald-700'
+                          : 'bg-amber-50 border-amber-100 text-amber-700'
+                      }`}
+                    >
+                      <div className="font-semibold mb-1">
+                        {overwriteSchemaMatch ? 'Columns Match' : 'Columns Mismatch'}
+                      </div>
+                      {!overwriteSchemaMatch && (
+                        <div className="space-y-1">
+                          {overwriteSchema.missing.length > 0 && (
+                            <div>Missing: {overwriteSchema.missing.join(', ')}</div>
+                          )}
+                          {overwriteSchema.extra.length > 0 && <div>Extra: {overwriteSchema.extra.join(', ')}</div>}
+                          {overwriteSchema.typeMismatches.length > 0 && (
+                            <div>
+                              Types:{' '}
+                              {overwriteSchema.typeMismatches
+                                .map((m) => `${m.key} (${m.expectedType} → ${m.actualType})`)
+                                .join(', ')}
+                            </div>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+              )}
+
               {saveError && <p className="text-xs text-red-500">{saveError}</p>}
             </div>
 
@@ -1399,6 +1748,44 @@ const BuildStructure: React.FC<BuildStructureProps> = ({ project, onUpdateProjec
                 Save
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {confirm && (
+        <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 px-4">
+          <div className="bg-white rounded-xl shadow-2xl w-full max-w-lg p-6">
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-lg font-semibold text-gray-900">{confirm.title}</h3>
+              <button onClick={() => setConfirm(null)} className="text-gray-400 hover:text-gray-600">
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+            <div className="space-y-2 text-sm text-gray-700">
+              {confirm.lines.map((line, idx) => (
+                <div key={idx}>{line}</div>
+              ))}
+            </div>
+            <div className="flex justify-end space-x-3 mt-6">
+              <button onClick={() => setConfirm(null)} className="px-4 py-2 text-sm text-gray-600 rounded-lg hover:bg-gray-50">
+                Cancel
+              </button>
+              <button
+                onClick={confirm.onConfirm}
+                className="px-4 py-2 text-sm font-medium text-white bg-blue-600 rounded-lg shadow-sm hover:bg-blue-700 flex items-center"
+              >
+                {confirm.confirmLabel}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {isQueryModalOpen && (
+        <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 px-4">
+          <div className="bg-white rounded-xl shadow-2xl w-full max-w-md p-6 flex items-center space-x-3">
+            <Loader2 className="w-5 h-5 animate-spin text-blue-600" />
+            <div className="text-sm font-medium text-gray-900">Processing Query</div>
           </div>
         </div>
       )}

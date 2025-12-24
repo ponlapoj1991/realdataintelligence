@@ -63,6 +63,12 @@ type CleanDoneResponse = {
   updatedAt: number
 }
 
+type CleanColumnOptionsResponse = {
+  type: 'cleanColumnOptions'
+  requestId: string
+  values: string[]
+}
+
 type ErrorResponse = {
   type: 'error'
   requestId: string
@@ -76,6 +82,7 @@ type WorkerResponse =
   | UniqueValuesResponse
   | CleanPreviewResponse
   | CleanDoneResponse
+  | CleanColumnOptionsResponse
   | ErrorResponse
 
 export interface TransformPipelineWorkerClient {
@@ -104,6 +111,12 @@ export interface TransformPipelineWorkerClient {
     kind: DataSourceKind
     sources: Array<{ sourceId: string; rules: TransformationRule[] }>
   }) => Promise<BuildDoneResponse['source']>
+  buildMultiToTarget: (params: {
+    projectId: string
+    targetSourceId: string
+    mode: 'append' | 'replace'
+    sources: Array<{ sourceId: string; rules: TransformationRule[] }>
+  }) => Promise<BuildDoneResponse['source']>
   analyzeColumn: (params: {
     projectId: string
     sourceId: string
@@ -122,7 +135,15 @@ export interface TransformPipelineWorkerClient {
     sourceId: string
     searchQuery: string
     limit: number
+    filters?: Record<string, string[] | null>
   }) => Promise<{ rows: RawRow[]; rowIndices: number[]; totalRows: number }>
+  cleanColumnOptions: (params: {
+    projectId: string
+    sourceId: string
+    columnKey: string
+    limitRows: number
+    limitValues: number
+  }) => Promise<string[]>
   cleanApplyFindReplace: (params: {
     projectId: string
     sourceId: string
@@ -264,6 +285,20 @@ export function useTransformPipelineWorker(): TransformPipelineWorkerClient {
     [call]
   )
 
+  const buildMultiToTarget: TransformPipelineWorkerClient['buildMultiToTarget'] = useCallback(
+    async ({ projectId, targetSourceId, mode, sources }) => {
+      const resp = (await call({
+        type: 'buildMultiToTarget',
+        projectId,
+        targetSourceId,
+        mode,
+        sources,
+      })) as BuildDoneResponse
+      return resp.source
+    },
+    [call]
+  )
+
   const analyzeColumn: TransformPipelineWorkerClient['analyzeColumn'] = useCallback(
     async ({ projectId, sourceId, key }) => {
       const resp = (await call({
@@ -294,15 +329,31 @@ export function useTransformPipelineWorker(): TransformPipelineWorkerClient {
   )
 
   const cleanPreview: TransformPipelineWorkerClient['cleanPreview'] = useCallback(
-    async ({ projectId, sourceId, searchQuery, limit }) => {
+    async ({ projectId, sourceId, searchQuery, limit, filters }) => {
       const resp = (await call({
         type: 'cleanPreview',
         projectId,
         sourceId,
         searchQuery,
         limit,
+        filters,
       })) as CleanPreviewResponse
       return { rows: resp.rows, rowIndices: resp.rowIndices, totalRows: resp.totalRows }
+    },
+    [call]
+  )
+
+  const cleanColumnOptions: TransformPipelineWorkerClient['cleanColumnOptions'] = useCallback(
+    async ({ projectId, sourceId, columnKey, limitRows, limitValues }) => {
+      const resp = (await call({
+        type: 'cleanColumnOptions',
+        projectId,
+        sourceId,
+        columnKey,
+        limitRows,
+        limitValues,
+      })) as CleanColumnOptionsResponse
+      return resp.values
     },
     [call]
   )
@@ -396,9 +447,11 @@ export function useTransformPipelineWorker(): TransformPipelineWorkerClient {
     previewMulti,
     buildSingle,
     buildMulti,
+    buildMultiToTarget,
     analyzeColumn,
     uniqueValues,
     cleanPreview,
+    cleanColumnOptions,
     cleanApplyFindReplace,
     cleanApplyTransformDate,
     cleanApplyExplode,
