@@ -386,6 +386,8 @@ export interface DrillDownState {
   filterCol: string;
   filterVal: string;
   data: RawRow[];
+  isLoading?: boolean;
+  error?: string;
 }
 
 // --- Report Builder Types (Phase 5) ---

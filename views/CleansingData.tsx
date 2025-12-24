@@ -626,7 +626,7 @@ const CleansingData: React.FC<CleansingDataProps> = ({ project, onUpdateProject 
             </div>
           )}
 
-          <div className="flex-1 overflow-hidden" onClick={() => setOpenFilterCol(null)}>
+          <div className="flex-1 overflow-x-hidden overflow-y-visible" onClick={() => setOpenFilterCol(null)}>
             <div
               className="h-full flex flex-col"
               onWheel={(e) => {
