@@ -734,12 +734,22 @@ const DashboardMagic: React.FC<DashboardMagicProps> = ({ project, onUpdateProjec
       'stacked-area', '100-stacked-area'
     ].includes(widget.type);
 
-    const seriesColumn = (isStackedChart || widget.type === 'multi-line') ? widget.stackBy : undefined;
+    const seriesColumn =
+      (isStackedChart || widget.type === 'multi-line' || widget.type === 'multi-area' || widget.type === 'compare-column' || widget.type === 'compare-bar')
+        ? widget.stackBy
+        : undefined;
     const seriesLabel = seriesColumn ? String(activeSeries ?? '').trim() : '';
     const normalizeStack = (raw: any) => {
       const s = String(raw ?? '').trim();
       if (s) return s;
       return raw === null || raw === undefined ? '(Other)' : '(Empty)';
+    };
+    const getSeriesValues = (row: RawRow) => {
+      if (!seriesColumn) return [];
+      const base = normalizeStack(row[seriesColumn]);
+      if (!widget.seriesGroupByString) return [base];
+      const tokens = base.split(/[,\n;|]+/).map((t) => t.trim()).filter(Boolean);
+      return tokens.length ? tokens : ['(Empty)'];
     };
 
     const parseDateLabelRange = (raw: string) => {
@@ -777,7 +787,8 @@ const DashboardMagic: React.FC<DashboardMagicProps> = ({ project, onUpdateProjec
       const clickedData = rowsForWidget.filter((row) => {
         if (!getDimValues(row).some((v) => overflowSet.has(v))) return false;
         if (!seriesColumn) return true;
-        return normalizeStack(row[seriesColumn]) === seriesLabel;
+        if (!seriesLabel) return true;
+        return getSeriesValues(row).includes(seriesLabel);
       });
       setDrillDown({
         isOpen: true,
@@ -792,7 +803,8 @@ const DashboardMagic: React.FC<DashboardMagicProps> = ({ project, onUpdateProjec
     const clickedData = rowsForWidget.filter((row) => {
       if (!matchesDimension(row)) return false;
       if (!seriesColumn) return true;
-      return normalizeStack(row[seriesColumn]) === seriesLabel;
+      if (!seriesLabel) return true;
+      return getSeriesValues(row).includes(seriesLabel);
     });
 
     setDrillDown({

@@ -126,17 +126,20 @@ export type ChartType =
   | 'column'
   | 'stacked-column'
   | '100-stacked-column'
+  | 'compare-column'
 
   // Bar Charts (horizontal)
   | 'bar'
   | 'stacked-bar'
   | '100-stacked-bar'
+  | 'compare-bar'
 
   // Line Charts
   | 'line'
   | 'smooth-line'
   | 'multi-line'
   | 'area'
+  | 'multi-area'
   | 'stacked-area'
   | '100-stacked-area'
 
@@ -290,6 +293,10 @@ export interface DashboardWidget {
   measureCol?: string;
   stackBy?: string;       // For stacked charts (stacked-column, stacked-bar, stacked-area)
   filters?: DashboardFilter[];
+  /** Hide specific series values (applies when chart uses Series By). */
+  seriesFilter?: string[];
+  /** Split series values by separators (",", ";", "|", newline). */
+  seriesGroupByString?: boolean;
 
   // Bubble Chart Specific
   xDimension?: string;    // X-axis dimension for bubble/scatter

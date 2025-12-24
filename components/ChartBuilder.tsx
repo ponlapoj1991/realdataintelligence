@@ -41,6 +41,7 @@ import { buildColumnProfiles } from '../utils/columnProfiles';
 import { buildFieldErrors, getConstraintsForType, hasBlockingErrors } from '../utils/chartValidation';
 import { useMagicAggregationWorker, type MagicAggregationWorkerSource } from '../hooks/useMagicAggregationWorker';
 import { useTransformPipelineWorker } from '../hooks/useTransformPipelineWorker';
+import { toDate } from '../utils/widgetData';
 
 interface ChartBuilderProps {
   isOpen: boolean;
@@ -458,6 +459,9 @@ const ChartBuilder: React.FC<ChartBuilderProps> = ({
   const [groupByString, setGroupByString] = useState(false);
   const [categoryFilter, setCategoryFilter] = useState<string[]>([]);
   const [categorySearch, setCategorySearch] = useState('');
+  const [seriesGroupByString, setSeriesGroupByString] = useState(false);
+  const [seriesFilter, setSeriesFilter] = useState<string[]>([]);
+  const [seriesSearch, setSeriesSearch] = useState('');
 
   // Bar Orientation (deprecated - now determined by chart type)
   const [barOrientation, setBarOrientation] = useState<'vertical' | 'horizontal'>('vertical');
@@ -527,6 +531,9 @@ const [sortSeriesId, setSortSeriesId] = useState('');
     setGroupByString(false);
     setCategoryFilter([]);
     setCategorySearch('');
+    setSeriesGroupByString(false);
+    setSeriesFilter([]);
+    setSeriesSearch('');
     setBarOrientation('vertical');
     setSeries([]);
     setSortSeriesId('');
@@ -582,6 +589,8 @@ const [sortSeriesId, setSortSeriesId] = useState('');
       setGroupByString(!!initialWidget.groupByString);
       setBarOrientation(initialWidget.barOrientation || 'vertical');
       setCategoryFilter(initialWidget.categoryFilter || []);
+      setSeriesFilter(initialWidget.seriesFilter || []);
+      setSeriesGroupByString(!!initialWidget.seriesGroupByString);
       setChartTitle(initialWidget.chartTitle || initialWidget.title);
       setSubtitle(initialWidget.subtitle || '');
       setKpiCountMode(initialWidget.kpiCountMode || 'row');
@@ -683,11 +692,106 @@ const [sortSeriesId, setSortSeriesId] = useState('');
   // Get all unique categories from data
   const allCategories = useMemo(() => {
     if (!dimension || data.length === 0) return [];
+
+    const isLineFamily = !!type && ['line', 'smooth-line', 'multi-line', 'multi-area', 'area', 'stacked-area', '100-stacked-area'].includes(type);
+    const isMultiLine = type === 'multi-line' || type === 'multi-area';
+    const major = typeof xAxis.major === 'number' ? xAxis.major : 0;
+    const shouldBucket = isLineFamily && ((Number.isFinite(major) && major > 0) || isMultiLine);
+
+    const inferKind = () => {
+      const sample = data
+        .map((row) => row[dimension])
+        .filter((v) => v !== null && v !== undefined && v !== '')
+        .slice(0, 50);
+      if (sample.length < 3) return null;
+      const dateCount = sample.filter((v) => !!toDate(v)).length;
+      if (dateCount / sample.length >= 0.6) return 'date' as const;
+      const numCount = sample.filter((v) => Number.isFinite(Number(String(v)))).length;
+      if (numCount / sample.length >= 0.6) return 'number' as const;
+      return null;
+    };
+
+    const kind = shouldBucket ? inferKind() : null;
+
+    const toISODate = (d: Date) => {
+      const year = d.getFullYear();
+      const month = String(d.getMonth() + 1).padStart(2, '0');
+      const day = String(d.getDate()).padStart(2, '0');
+      return `${year}-${month}-${day}`;
+    };
+
+    const bucketMapper = (() => {
+      if (!shouldBucket || !kind) return null;
+
+      if (kind === 'date') {
+        if (isMultiLine && (!Number.isFinite(major) || major <= 0)) {
+          return (raw: any) => {
+            const d = toDate(raw);
+            if (!d) return '(Empty)';
+            const date = new Date(d);
+            date.setHours(0, 0, 0, 0);
+            return toISODate(date);
+          };
+        }
+
+        if (!Number.isFinite(major) || major <= 0) return null;
+
+        let minMs = Infinity;
+        for (const row of data) {
+          const d = toDate(row[dimension]);
+          if (!d) continue;
+          const ms = d.getTime();
+          if (ms < minMs) minMs = ms;
+        }
+        if (!Number.isFinite(minMs)) return null;
+        const min = new Date(minMs);
+        min.setHours(0, 0, 0, 0);
+        const msPerDay = 24 * 60 * 60 * 1000;
+        const majorDays = major;
+        return (raw: any) => {
+          const d = toDate(raw);
+          if (!d) return '(Empty)';
+          const date = new Date(d);
+          date.setHours(0, 0, 0, 0);
+          const diffDays = Math.floor((date.getTime() - min.getTime()) / msPerDay);
+          const bucketIndex = Math.max(0, Math.floor(diffDays / majorDays));
+          const start = new Date(min.getTime() + bucketIndex * majorDays * msPerDay);
+          const end = new Date(start.getTime() + (majorDays - 1) * msPerDay);
+          return `${toISODate(start)} - ${toISODate(end)}`;
+        };
+      }
+
+      let min = Infinity;
+      for (const row of data) {
+        const n = Number(String(row[dimension]));
+        if (!Number.isFinite(n)) continue;
+        if (n < min) min = n;
+      }
+      if (!Number.isFinite(min)) return null;
+      if (!Number.isFinite(major) || major <= 0) return null;
+      const majorStep = major;
+      return (raw: any) => {
+        const n = Number(String(raw));
+        if (!Number.isFinite(n)) return '(Empty)';
+        const bucketIndex = Math.max(0, Math.floor((n - min) / majorStep));
+        const start = min + bucketIndex * majorStep;
+        const end = start + (majorStep - 1);
+        const startText = Number.isInteger(start) ? String(start) : start.toFixed(2);
+        const endText = Number.isInteger(end) ? String(end) : end.toFixed(2);
+        return `${startText}-${endText}`;
+      };
+    })();
+
     const unique = new Set<string>();
     const addTokens = (raw: any) => {
-      const s = String(raw ?? '').trim();
+      const base = bucketMapper ? bucketMapper(raw) : String(raw ?? '').trim();
+      const s = String(base ?? '').trim();
       if (!s) {
         unique.add('(Empty)');
+        return;
+      }
+      if (bucketMapper) {
+        unique.add(s);
         return;
       }
       if (!groupByString) {
@@ -703,20 +807,39 @@ const [sortSeriesId, setSortSeriesId] = useState('');
     };
     data.forEach(row => addTokens(row[dimension]));
     return Array.from(unique).sort((a, b) => a.localeCompare(b));
-  }, [dimension, data, groupByString]);
+  }, [dimension, data, groupByString, type, xAxis.major]);
 
   const stackKeys = useMemo(() => {
     if (!supports?.stackBy) return [];
     if (!stackBy) return [];
     if (data.length === 0) return [];
     const unique = new Set<string>();
-    data.forEach((row) => {
-      const raw = row[stackBy];
-      const s = String(raw ?? '(Other)').trim();
-      unique.add(s || '(Empty)');
-    });
+    const addTokens = (raw: any) => {
+      if (raw === null || raw === undefined) {
+        unique.add('(Other)');
+        return;
+      }
+      const base = String(raw ?? '').trim();
+      if (!base) {
+        unique.add('(Empty)');
+        return;
+      }
+      if (!seriesGroupByString) {
+        unique.add(base);
+        return;
+      }
+      const tokens = base.split(/[,\n;|]+/).map((t) => t.trim()).filter(Boolean);
+      if (tokens.length === 0) {
+        unique.add('(Empty)');
+        return;
+      }
+      tokens.forEach((t) => unique.add(t));
+    };
+    data.forEach((row) => addTokens(row[stackBy]));
     return Array.from(unique).sort((a, b) => a.localeCompare(b));
-  }, [supports?.stackBy, stackBy, data]);
+  }, [supports?.stackBy, stackBy, data, seriesGroupByString]);
+
+  const seriesCategories = stackKeys;
 
   const kpiCategories = useMemo(() => {
     if (type !== 'kpi') return [];
@@ -826,6 +949,8 @@ const [sortSeriesId, setSortSeriesId] = useState('');
 
       // Stacked charts
       stackBy: stackBy || undefined,
+      seriesFilter: stackBy && seriesFilter.length > 0 ? seriesFilter : undefined,
+      seriesGroupByString: stackBy ? (seriesGroupByString || undefined) : undefined,
 
       // Bubble/Scatter
       xDimension: xDimension || undefined,
@@ -913,6 +1038,28 @@ const [sortSeriesId, setSortSeriesId] = useState('');
     setGroupByString(val);
     setCategoryFilter([]);
     setCategorySearch('');
+  };
+
+  const handleSeriesToggle = (cat: string) => {
+    if (seriesFilter.includes(cat)) {
+      setSeriesFilter(seriesFilter.filter((c) => c !== cat));
+    } else {
+      setSeriesFilter([...seriesFilter, cat]);
+    }
+  };
+
+  const handleSeriesGroupByStringChange = (val: boolean) => {
+    setSeriesGroupByString(val);
+    setSeriesFilter([]);
+    setSeriesSearch('');
+  };
+
+  const handleSelectAllSeries = () => {
+    setSeriesFilter(seriesCategories);
+  };
+
+  const handleClearAllSeries = () => {
+    setSeriesFilter([]);
   };
 
   const handleSelectAllCategories = () => {
@@ -1106,6 +1253,8 @@ const [sortSeriesId, setSortSeriesId] = useState('');
       width,
       dimension: supports?.dimension ? dimension : '',
       stackBy: stackBy || undefined,
+      seriesFilter: stackBy && seriesFilter.length > 0 ? seriesFilter : undefined,
+      seriesGroupByString: stackBy ? (seriesGroupByString || undefined) : undefined,
       measure,
       measureCol: measureCol || undefined,
       series: series.length > 0 ? series : undefined,
@@ -1190,7 +1339,9 @@ const [sortSeriesId, setSortSeriesId] = useState('');
     showGrid,
     valueFormat,
     sortSeriesId,
-    kpiCountMode
+    kpiCountMode,
+    seriesFilter,
+    seriesGroupByString
   ]);
   const showAxes = Boolean(supports?.axes);
   const isComboChart = type === 'combo';
@@ -1367,7 +1518,12 @@ const [sortSeriesId, setSortSeriesId] = useState('');
                     dimension={dimension}
                     setDimension={setDimension}
                     stackBy={stackBy}
-                    setStackBy={setStackBy}
+                    setStackBy={(val) => {
+                      setStackBy(val);
+                      setSeriesFilter([]);
+                      setSeriesSearch('');
+                      setSeriesGroupByString(false);
+                    }}
                     measure={measure}
                     setMeasure={setMeasure}
                     measureCol={measureCol}
@@ -1428,6 +1584,15 @@ const [sortSeriesId, setSortSeriesId] = useState('');
                     onCategoryToggle={handleCategoryToggle}
                     onSelectAllCategories={handleSelectAllCategories}
                     onClearAllCategories={handleClearAllCategories}
+                    seriesCategories={seriesCategories}
+                    seriesFilter={seriesFilter}
+                    seriesSearch={seriesSearch}
+                    setSeriesSearch={setSeriesSearch}
+                    onSeriesToggle={handleSeriesToggle}
+                    onSelectAllSeries={handleSelectAllSeries}
+                    onClearAllSeries={handleClearAllSeries}
+                    seriesGroupByString={seriesGroupByString}
+                    setSeriesGroupByString={handleSeriesGroupByStringChange}
                     onSeriesChange={handleSeriesChange}
                     xAxisMajor={typeof xAxis.major === 'number' ? xAxis.major : 0}
                     setXAxisMajor={(val) => setXAxis({ ...xAxis, major: val > 0 ? val : undefined })}
