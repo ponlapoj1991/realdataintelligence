@@ -542,28 +542,29 @@ const MagicWidgetRenderer: React.FC<MagicWidgetRendererProps> = ({
     }
   }, [payload, isInView, widget.colSpan, isEditing]);
 
-  // Click binding (doesn't need to re-init chart)
+  // Click binding (rebind when chart/payload becomes ready)
   useEffect(() => {
     const chart = chartRef.current;
     if (!chart) return;
+    if (!isInView) return;
     if (!onValueClick) return;
-    if (payload?.type === 'kpi') return;
+    if (!payload || payload.type === 'kpi') return;
 
     const handler = (params: any) => {
       const rawLabel =
-        params.name ??
-        params.axisValue ??
-        (Array.isArray(params.value) ? params.value[0] : params.value);
+        params?.name ??
+        params?.axisValue ??
+        (Array.isArray(params?.value) ? params.value[0] : params?.value);
       if (rawLabel === undefined || rawLabel === null) return;
-      onValueClick(String(rawLabel), widget, { seriesName: params.seriesName });
+      onValueClick(String(rawLabel), widget, { seriesName: params?.seriesName });
     };
 
     chart.off('click');
     chart.on('click', handler);
     return () => {
-      chart.off('click');
+      chart.off('click', handler);
     };
-  }, [onValueClick, widget, payload?.type]);
+  }, [onValueClick, widget, payload, isInView]);
 
   // Final cleanup
   useEffect(() => {
