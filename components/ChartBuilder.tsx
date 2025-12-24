@@ -39,7 +39,7 @@ import { getChartSupports, getDefaultOrientation, validateChartConfig } from '..
 import MagicWidgetRenderer from './MagicWidgetRenderer';
 import { buildColumnProfiles } from '../utils/columnProfiles';
 import { buildFieldErrors, getConstraintsForType, hasBlockingErrors } from '../utils/chartValidation';
-import { useMagicAggregationWorker } from '../hooks/useMagicAggregationWorker';
+import { useMagicAggregationWorker, type MagicAggregationWorkerSource } from '../hooks/useMagicAggregationWorker';
 
 interface ChartBuilderProps {
   isOpen: boolean;
@@ -49,6 +49,7 @@ interface ChartBuilderProps {
   initialWidget?: DashboardWidget | null;
   data: RawRow[];
   chartTheme?: ChartTheme;
+  workerSource?: MagicAggregationWorkerSource;
 }
 
 const generateId = () => 'w-' + Date.now().toString(36) + Math.random().toString(36).substring(2, 9);
@@ -404,9 +405,10 @@ const ChartBuilder: React.FC<ChartBuilderProps> = ({
   availableColumns,
   initialWidget,
   data,
-  chartTheme = CLASSIC_ANALYTICS_THEME
+  chartTheme = CLASSIC_ANALYTICS_THEME,
+  workerSource
 }) => {
-  const previewWorker = useMagicAggregationWorker(data, chartTheme);
+  const previewWorker = useMagicAggregationWorker(workerSource ?? data, chartTheme);
   // UI State
   const [showTypeSelector, setShowTypeSelector] = useState(true); // Show type selector first
   const [activeTab, setActiveTab] = useState<'setup' | 'customize'>('setup');

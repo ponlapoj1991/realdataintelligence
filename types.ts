@@ -74,6 +74,10 @@ export interface DataSource {
   name: string;
   kind: DataSourceKind;
   rows: RawRow[];
+  /** Optional: stored in IndexedDB v2+ without loading rows into memory */
+  rowCount?: number;
+  /** Optional: chunk count for the stored rows */
+  chunkCount?: number;
   columns: ColumnConfig[];
   createdAt: number;
   updatedAt: number;
@@ -482,6 +486,8 @@ export interface Project {
   lastModified: number;
   data: RawRow[];          // Legacy active data snapshot
   columns: ColumnConfig[]; // Legacy active schema
+  /** Optional: v2 metadata row count (avoids loading all rows just to show counts) */
+  rowCount?: number;
 
   dataSources?: DataSource[]; // Multi-table support
   activeDataSourceId?: string; // Which table powers features

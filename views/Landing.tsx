@@ -20,7 +20,7 @@ import {
   AlertCircle
 } from 'lucide-react';
 import { Project } from '../types';
-import { getProjects, deleteProject, saveProject } from '../utils/storage-compat';
+import { getProjects, deleteProject, saveProject, getProjectFull } from '../utils/storage-compat';
 import Skeleton from '../components/Skeleton';
 import EmptyState from '../components/EmptyState';
 import {
@@ -40,6 +40,7 @@ const Landing: React.FC<LandingProps> = ({ onSelectProject, onOpenSettings }) =>
   const [projects, setProjects] = useState<Project[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isCreating, setIsCreating] = useState(false);
+  const [openingProjectId, setOpeningProjectId] = useState<string | null>(null);
   const [newProjectName, setNewProjectName] = useState('');
   const [newProjectDesc, setNewProjectDesc] = useState('');
   const [activeMenu, setActiveMenu] = useState('overview');
@@ -72,14 +73,31 @@ const Landing: React.FC<LandingProps> = ({ onSelectProject, onOpenSettings }) =>
     loadProjects();
   }, []);
 
+  const getRowsCount = (project: Project) => {
+    return typeof project.rowCount === 'number' ? project.rowCount : project.data.length;
+  };
+
   const stats = useMemo(() => {
     const totalProjects = projects.length;
-    const totalRows = projects.reduce((acc, p) => acc + p.data.length, 0);
+    const totalRows = projects.reduce((acc, p) => acc + getRowsCount(p), 0);
     const lastActive = projects.length > 0 
         ? new Date(Math.max(...projects.map(p => p.lastModified))).toLocaleDateString() 
         : '-';
     return { totalProjects, totalRows, lastActive };
   }, [projects]);
+
+  const handleOpenProject = async (project: Project) => {
+    setOpeningProjectId(project.id);
+    try {
+      const full = await getProjectFull(project.id);
+      onSelectProject(full ?? project);
+    } catch (e) {
+      console.error('Failed to open project:', e);
+      onSelectProject(project);
+    } finally {
+      setOpeningProjectId(null);
+    }
+  };
 
   const handleCreate = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -391,7 +409,7 @@ const Landing: React.FC<LandingProps> = ({ onSelectProject, onOpenSettings }) =>
                 {projects.map((project) => (
                 <div
                     key={project.id}
-                    onClick={() => onSelectProject(project)}
+                    onClick={() => handleOpenProject(project)}
                     className="group bg-white rounded-xl border border-gray-200 p-6 cursor-pointer transition-all hover:shadow-lg hover:border-blue-200 relative overflow-hidden"
                 >
                     {/* Action Buttons: Export and Delete */}
@@ -436,7 +454,14 @@ const Landing: React.FC<LandingProps> = ({ onSelectProject, onOpenSettings }) =>
                         {new Date(project.lastModified).toLocaleDateString()}
                     </div>
                     <div className="flex items-center text-xs text-blue-600 font-medium bg-blue-50 px-2 py-1 rounded-md">
-                        {project.data.length} rows
+                        {openingProjectId === project.id ? (
+                          <span className="inline-flex items-center gap-1.5">
+                            <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                            Opening
+                          </span>
+                        ) : (
+                          <span>{getRowsCount(project)} rows</span>
+                        )}
                     </div>
                     </div>
                 </div>

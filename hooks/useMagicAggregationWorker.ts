@@ -1,7 +1,11 @@
 import { useEffect, useMemo, useRef, useCallback, useState } from 'react'
-import type { DashboardFilter, DashboardWidget, RawRow } from '../types'
+import type { DashboardFilter, DashboardWidget, RawRow, TransformationRule } from '../types'
 import type { ChartTheme } from '../constants/chartTheme'
 import type { MagicChartPayload } from '../utils/magicChartPayload'
+
+export type MagicAggregationWorkerSource =
+  | { mode: 'rows'; rows: RawRow[] }
+  | { mode: 'dataSource'; projectId: string; dataSourceId?: string; dataVersion?: number; transformRules?: TransformationRule[] }
 
 type PayloadResponse = {
   type: 'payload'
@@ -29,7 +33,12 @@ export interface MagicAggregationWorkerClient {
   }) => Promise<MagicChartPayload | null>
 }
 
-export function useMagicAggregationWorker(rows: RawRow[], theme?: ChartTheme): MagicAggregationWorkerClient {
+export function useMagicAggregationWorker(rows: RawRow[], theme?: ChartTheme): MagicAggregationWorkerClient
+export function useMagicAggregationWorker(source: MagicAggregationWorkerSource, theme?: ChartTheme): MagicAggregationWorkerClient
+export function useMagicAggregationWorker(
+  arg: RawRow[] | MagicAggregationWorkerSource,
+  theme?: ChartTheme
+): MagicAggregationWorkerClient {
   const workerRef = useRef<Worker | null>(null)
   const [ready, setReady] = useState(false)
   const rowsVersionRef = useRef(0)
@@ -107,8 +116,27 @@ export function useMagicAggregationWorker(rows: RawRow[], theme?: ChartTheme): M
 
     rowsVersionRef.current += 1
     const rowsVersion = rowsVersionRef.current
-    worker.postMessage({ type: 'setRows', rows, rowsVersion })
-  }, [rows, isSupported, ready])
+
+    if (Array.isArray(arg)) {
+      worker.postMessage({ type: 'setRows', rows: arg, rowsVersion })
+      return
+    }
+
+    const source: MagicAggregationWorkerSource = arg
+    if (source.mode === 'rows') {
+      worker.postMessage({ type: 'setRows', rows: source.rows, rowsVersion })
+      return
+    }
+
+    worker.postMessage({
+      type: 'setSource',
+      projectId: source.projectId,
+      dataSourceId: source.dataSourceId,
+      dataVersion: source.dataVersion,
+      transformRules: source.transformRules,
+      rowsVersion,
+    })
+  }, [arg, isSupported, ready])
 
   const requestPayload: MagicAggregationWorkerClient['requestPayload'] = useCallback(
     ({ widget, filters, theme: themeOverride, isEditing }) => {

@@ -208,7 +208,7 @@ const DashboardMagic: React.FC<DashboardMagicProps> = ({ project, onUpdateProjec
   }, [editingDashboard?.id]);
 
   // --- Data Logic (Moved from Analytics.tsx) ---
-  const { rows: baseData, availableColumns } = useMemo(() => {
+  const { rows: baseData, availableColumns, dataSourceId: baseDataSourceId } = useMemo(() => {
     return resolveDashboardBaseData(normalizedProject, editingDashboard ?? null);
   }, [
     // Keep base data stable while editing widgets to avoid re-sending huge rows to the worker.
@@ -217,6 +217,21 @@ const DashboardMagic: React.FC<DashboardMagicProps> = ({ project, onUpdateProjec
     normalizedProject.transformRules,
     editingDashboard?.dataSourceId,
   ]);
+
+  const workerSource = useMemo(() => {
+    const resolvedSource =
+      (baseDataSourceId && normalizedProject.dataSources?.find((s) => s.id === baseDataSourceId)) ||
+      (normalizedProject.activeDataSourceId && normalizedProject.dataSources?.find((s) => s.id === normalizedProject.activeDataSourceId)) ||
+      normalizedProject.dataSources?.[0];
+
+    return {
+      mode: 'dataSource' as const,
+      projectId: normalizedProject.id,
+      dataSourceId: baseDataSourceId || resolvedSource?.id,
+      dataVersion: resolvedSource?.updatedAt ?? normalizedProject.lastModified,
+      transformRules: normalizedProject.transformRules,
+    };
+  }, [baseDataSourceId, normalizedProject.dataSources, normalizedProject.activeDataSourceId, normalizedProject.id, normalizedProject.lastModified, normalizedProject.transformRules]);
 
   const columnTypeMap = useMemo(() => {
     const sampleRows = baseData.slice(0, SAMPLE_SIZE);
@@ -254,7 +269,7 @@ const DashboardMagic: React.FC<DashboardMagicProps> = ({ project, onUpdateProjec
     return baseData.filter(row => filters.every(f => matchesFilterCondition(row, f)));
   }, [baseData, filters, matchesFilterCondition]);
 
-  const magicAggWorker = useMagicAggregationWorker(baseData, REALPPTX_CHART_THEME);
+  const magicAggWorker = useMagicAggregationWorker(workerSource, REALPPTX_CHART_THEME);
 
   const persistProject = useCallback(
     async (updated: Project) => {
@@ -1308,6 +1323,7 @@ const DashboardMagic: React.FC<DashboardMagicProps> = ({ project, onUpdateProjec
         initialWidget={editingWidget}
         data={filteredData}
         chartTheme={REALPPTX_CHART_THEME}
+        workerSource={workerSource}
       />
 
       {/* Drill Down Modal */}
