@@ -202,7 +202,9 @@ const CleansingData: React.FC<CleansingDataProps> = ({ project, onUpdateProject 
               <p className="text-xs uppercase tracking-wide text-gray-500">Working source</p>
               <div className="flex items-center space-x-2 text-gray-900 font-semibold">
                 <span>{selectedSource.name}</span>
-                <span className="text-xs font-medium text-gray-500">{selectedSource.rows.length.toLocaleString()} rows</span>
+                <span className="text-xs font-medium text-gray-500">
+                  {(typeof selectedSource.rowCount === 'number' ? selectedSource.rowCount : selectedSource.rows.length).toLocaleString()} rows
+                </span>
               </div>
             </div>
             <div className="flex items-center space-x-2 text-sm text-gray-600">
@@ -401,7 +403,9 @@ const CleansingData: React.FC<CleansingDataProps> = ({ project, onUpdateProject 
                       <p className="font-medium text-gray-900">{src.name}</p>
                       <p className="text-xs text-gray-500">{src.kind === 'ingestion' ? 'Ingestion' : 'Preparation'} data</p>
                     </div>
-                    <span className="text-xs text-gray-500">{src.rows.length.toLocaleString()} rows</span>
+                    <span className="text-xs text-gray-500">
+                      {(typeof src.rowCount === 'number' ? src.rowCount : src.rows.length).toLocaleString()} rows
+                    </span>
                   </div>
                 </button>
               ))}

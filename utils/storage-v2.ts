@@ -510,6 +510,45 @@ export const getDataPaginated = async (
   };
 };
 
+/**
+ * Paginated data retrieval for a specific DataSource (v3+).
+ * Falls back to empty if the datasource chunks are missing.
+ */
+export const getDataSourcePaginated = async (
+  projectId: string,
+  sourceId: string,
+  page: number = 0,
+  pageSize: number = 1000,
+  opts?: { totalRows?: number; totalChunks?: number }
+): Promise<PaginationResult> => {
+  const total = typeof opts?.totalRows === 'number' ? opts.totalRows : 0;
+  const chunkCount = typeof opts?.totalChunks === 'number' ? opts.totalChunks : Math.ceil(total / CHUNK_SIZE);
+
+  const startRow = page * pageSize;
+  const endRow = startRow + pageSize;
+
+  const startChunk = Math.floor(startRow / CHUNK_SIZE);
+  const endChunk = Math.ceil(endRow / CHUNK_SIZE);
+
+  const rows: RawRow[] = [];
+
+  for (let i = startChunk; i < endChunk && i < chunkCount; i++) {
+    const chunkData = await getDataSourceChunk(projectId, sourceId, i);
+    rows.push(...chunkData);
+  }
+
+  const offsetInFirstChunk = startRow % CHUNK_SIZE;
+  const slicedRows = rows.slice(offsetInFirstChunk, offsetInFirstChunk + pageSize);
+
+  return {
+    rows: slicedRows,
+    total,
+    page,
+    pageSize,
+    hasMore: endRow < total
+  };
+};
+
 // --- Cache Operations ---
 
 export const getCachedResult = async (projectId: string, cacheKey: string): Promise<any | null> => {

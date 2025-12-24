@@ -126,7 +126,8 @@ const BuildStructure: React.FC<BuildStructureProps> = ({ project, onUpdateProjec
     setResultRows([]);
     const sum = (activeConfig?.sourceIds || []).reduce((acc, id) => {
       const src = allSources.find((s) => s.id === id);
-      return acc + (src?.rows.length || 0);
+      const count = src ? (typeof src.rowCount === 'number' ? src.rowCount : src.rows.length) : 0;
+      return acc + count;
     }, 0);
     setPreviewTotal(sum);
   }, [activeConfig]);
@@ -553,7 +554,7 @@ const BuildStructure: React.FC<BuildStructureProps> = ({ project, onUpdateProjec
                       .map((id) => {
                         const src = allSources.find((s) => s.id === id);
                         if (!src) return null;
-                        return `${src.name} (${src.rows.length.toLocaleString()})`;
+                        return `${src.name} (${(typeof src.rowCount === 'number' ? src.rowCount : src.rows.length).toLocaleString()})`;
                       })
                       .filter(Boolean)
                       .join(' + ')}
@@ -750,7 +751,7 @@ const BuildStructure: React.FC<BuildStructureProps> = ({ project, onUpdateProjec
                         <h4 className="font-semibold text-gray-900">{src.name}</h4>
                       </div>
                       <div className="text-xs text-gray-600 bg-white border border-gray-200 rounded-full px-3 py-1">
-                        {src.rows.length.toLocaleString()} rows
+                        {(typeof src.rowCount === 'number' ? src.rowCount : src.rows.length).toLocaleString()} rows
                       </div>
                     </div>
                     <div className="grid grid-cols-2 gap-4">
