@@ -8,7 +8,7 @@ import {
     Database, UploadCloud, Filter, Trash2, Settings, Edit3, Command,
     MousePointer2, Table2
 } from 'lucide-react';
-import { saveProject } from '../utils/storage-compat';
+import { hydrateProjectDataSourceRows, saveProject } from '../utils/storage-compat';
 import { exportToExcel, parseExcelFile, inferColumns } from '../utils/excel';
 import { processAiAgentAction, askAiAgent } from '../utils/ai';
 import { getDataSourcesByKind } from '../utils/dataSources';
@@ -71,6 +71,7 @@ const AiAgent: React.FC<AiAgentProps> = ({ project, onUpdateProject }) => {
   const [columns, setColumns] = useState<string[]>([]);
   const [activeSourceId, setActiveSourceId] = useState<string | null>(null);
   const [showSourceSelector, setShowSourceSelector] = useState(false);
+  const hydratingSourceRef = useRef(false);
   
   const ingestionSources = useMemo(() => getDataSourcesByKind(project, 'ingestion'), [project]);
   const preparedSources = useMemo(() => getDataSourcesByKind(project, 'prepared'), [project]);
@@ -120,6 +121,18 @@ const AiAgent: React.FC<AiAgentProps> = ({ project, onUpdateProject }) => {
           if (activeSourceId) {
               const source = project.dataSources?.find(s => s.id === activeSourceId);
               if (source) {
+                  const expected = typeof source.rowCount === 'number' ? source.rowCount : 0;
+                  if (!hydratingSourceRef.current && (!source.rows || source.rows.length === 0) && expected > 0) {
+                      hydratingSourceRef.current = true;
+                      void (async () => {
+                          try {
+                              const hydrated = await hydrateProjectDataSourceRows(project, activeSourceId);
+                              onUpdateProject(hydrated);
+                          } finally {
+                              hydratingSourceRef.current = false;
+                          }
+                      })();
+                  }
                   setGridData(source.rows);
                   setColumns(source.columns.map(c => c.key));
                   setFilters({}); // Reset filters on source change

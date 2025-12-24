@@ -11,7 +11,7 @@ import {
   TransformMethod,
 } from '../types';
 import { ensureDataSources, getDataSourcesByKind, addDerivedDataSource } from '../utils/dataSources';
-import { saveProject } from '../utils/storage-compat';
+import { hydrateProjectDataSourceRows, saveProject } from '../utils/storage-compat';
 import { inferColumns } from '../utils/excel';
 import { analyzeSourceColumn, applyTransformation, getAllUniqueValues } from '../utils/transform';
 import { useToast } from '../components/ToastProvider';
@@ -44,6 +44,28 @@ const BuildStructure: React.FC<BuildStructureProps> = ({ project, onUpdateProjec
     () => [...ingestionSources, ...preparedSources].sort((a, b) => b.updatedAt - a.updatedAt),
     [ingestionSources, preparedSources]
   );
+
+  const getSourcesFromProject = (p: Project): DataSource[] => {
+    const ing = getDataSourcesByKind(p, 'ingestion');
+    const prep = getDataSourcesByKind(p, 'prepared');
+    return [...ing, ...prep].sort((a, b) => b.updatedAt - a.updatedAt);
+  };
+
+  const hydrateSourcesIfNeeded = async (sourceIds: string[]) => {
+    let nextProject = normalizedProject;
+    for (const sourceId of sourceIds) {
+      const src = nextProject.dataSources?.find((s) => s.id === sourceId);
+      const expected = typeof src?.rowCount === 'number' ? src.rowCount : 0;
+      const hasRows = Array.isArray(src?.rows) && src.rows.length > 0;
+      if (!hasRows && expected > 0) {
+        nextProject = await hydrateProjectDataSourceRows(nextProject, sourceId);
+      }
+    }
+    if (nextProject !== normalizedProject) {
+      onUpdateProject(nextProject);
+    }
+    return nextProject;
+  };
 
   const [configs, setConfigs] = useState<BuildStructureConfig[]>(normalizedProject.buildStructureConfigs || []);
   const [activeConfigId, setActiveConfigId] = useState<string | null>(normalizedProject.activeBuildConfigId || null);
@@ -132,8 +154,8 @@ const BuildStructure: React.FC<BuildStructureProps> = ({ project, onUpdateProjec
     setPreviewTotal(sum);
   }, [activeConfig]);
 
-  const buildDraftForSource = (sourceId: string, existing?: StructureRule): RuleDraft => {
-    const src = allSources.find((s) => s.id === sourceId);
+  const buildDraftForSource = (sourceId: string, sources: DataSource[], existing?: StructureRule): RuleDraft => {
+    const src = sources.find((s) => s.id === sourceId);
     const firstCol = existing?.sourceKey || src?.columns[0]?.key || '';
     const analysis = src && firstCol ? analyzeSourceColumn(src.rows, firstCol) : null;
     const inferredMethod: TransformMethod = existing?.method
@@ -159,8 +181,8 @@ const BuildStructure: React.FC<BuildStructureProps> = ({ project, onUpdateProjec
     };
   };
 
-  const refreshDraftAnalysis = (srcId: string, draft: RuleDraft) => {
-    const src = allSources.find((s) => s.id === srcId);
+  const refreshDraftAnalysis = (srcId: string, sources: DataSource[], draft: RuleDraft) => {
+    const src = sources.find((s) => s.id === srcId);
     if (!src || !draft.sourceKey) return draft;
     const analysis = analyzeSourceColumn(src.rows, draft.sourceKey);
     const uniqueValues = getAllUniqueValues(src.rows, draft.sourceKey, draft.method, 5000, draft.params);
@@ -212,18 +234,23 @@ const BuildStructure: React.FC<BuildStructureProps> = ({ project, onUpdateProjec
   };
 
   const openAddRule = () => {
-    if (!selectedSources.length) {
-      showToast('Select sources first', 'Choose one or more tables before adding columns.', 'warning');
-      return;
-    }
-    setEditingTargetName(null);
-    setNewRuleName('');
-    const drafts: Record<string, RuleDraft> = {};
-    selectedSources.forEach((srcId) => {
-      drafts[srcId] = buildDraftForSource(srcId);
-    });
-    setRuleDrafts(drafts);
-    setIsRuleModalOpen(true);
+    void (async () => {
+      if (!selectedSources.length) {
+        showToast('Select sources first', 'Choose one or more tables before adding columns.', 'warning');
+        return;
+      }
+      const hydratedProject = await hydrateSourcesIfNeeded(selectedSources);
+      const sources = getSourcesFromProject(hydratedProject);
+
+      setEditingTargetName(null);
+      setNewRuleName('');
+      const drafts: Record<string, RuleDraft> = {};
+      selectedSources.forEach((srcId) => {
+        drafts[srcId] = buildDraftForSource(srcId, sources);
+      });
+      setRuleDrafts(drafts);
+      setIsRuleModalOpen(true);
+    })();
   };
 
   const closeRuleModal = () => {
@@ -234,16 +261,21 @@ const BuildStructure: React.FC<BuildStructureProps> = ({ project, onUpdateProjec
   };
 
   const openEditRule = (targetName: string) => {
-    const relevant = rules.filter((r) => r.targetName === targetName);
-    setEditingTargetName(targetName);
-    setNewRuleName(targetName);
-    const drafts: Record<string, RuleDraft> = {};
-    selectedSources.forEach((srcId) => {
-      const existing = relevant.find((r) => r.sourceId === srcId);
-      drafts[srcId] = buildDraftForSource(srcId, existing);
-    });
-    setRuleDrafts(drafts);
-    setIsRuleModalOpen(true);
+    void (async () => {
+      const relevant = rules.filter((r) => r.targetName === targetName);
+      const hydratedProject = await hydrateSourcesIfNeeded(selectedSources);
+      const sources = getSourcesFromProject(hydratedProject);
+
+      setEditingTargetName(targetName);
+      setNewRuleName(targetName);
+      const drafts: Record<string, RuleDraft> = {};
+      selectedSources.forEach((srcId) => {
+        const existing = relevant.find((r) => r.sourceId === srcId);
+        drafts[srcId] = buildDraftForSource(srcId, sources, existing);
+      });
+      setRuleDrafts(drafts);
+      setIsRuleModalOpen(true);
+    })();
   };
 
   const updateDraft = (srcId: string, updater: (draft: RuleDraft) => RuleDraft) => {
@@ -251,7 +283,7 @@ const BuildStructure: React.FC<BuildStructureProps> = ({ project, onUpdateProjec
       const next = { ...prev };
       const current = prev[srcId];
       if (!current) return prev;
-      next[srcId] = refreshDraftAnalysis(srcId, updater(current));
+      next[srcId] = refreshDraftAnalysis(srcId, allSources, updater(current));
       return next;
     });
   };
@@ -343,12 +375,15 @@ const BuildStructure: React.FC<BuildStructureProps> = ({ project, onUpdateProjec
       showToast('Setup incomplete', 'Choose sources and add mappings before querying.', 'warning');
       return;
     }
+    const hydratedProject = await hydrateSourcesIfNeeded(selectedSources);
+    const sources = getSourcesFromProject(hydratedProject);
+    const sourcesById = new Map(sources.map((s) => [s.id, s]));
     if (!silent) {
       setIsRunning(true);
     }
     const output: RawRow[] = [];
     selectedSources.forEach((sourceId) => {
-      const source = allSources.find((s) => s.id === sourceId);
+      const source = sourcesById.get(sourceId);
       if (!source) return;
       const scopedRules = workingRules.filter((r) => r.sourceId === sourceId);
       if (!scopedRules.length) return;

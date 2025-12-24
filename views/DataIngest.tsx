@@ -5,7 +5,7 @@ import { useToast } from '../components/ToastProvider';
 import { useExcelWorker } from '../hooks/useExcelWorker';
 import { exportToCsv, exportToExcel, inferColumns } from '../utils/excel';
 import { ensureDataSources, getDataSourcesByKind, removeDataSource, setActiveDataSource, updateDataSourceRows, upsertDataSource } from '../utils/dataSources';
-import { saveProject } from '../utils/storage-compat';
+import { hydrateProjectDataSourceRows, saveProject } from '../utils/storage-compat';
 import { getAllDataSourceChunks } from '../utils/storage-v2';
 
 interface DataIngestProps {
@@ -126,7 +126,11 @@ const DataIngest: React.FC<DataIngestProps> = ({ project, onUpdateProject, kind,
 
     if (!upload.sourceId) return;
     const mode = upload.mode === 'append' ? 'append' : 'replace';
-    const updatedProject = updateDataSourceRows(normalizedProject, upload.sourceId, rows, columns, mode);
+    const baseProject =
+      mode === 'append'
+        ? await hydrateProjectDataSourceRows(normalizedProject, upload.sourceId)
+        : normalizedProject;
+    const updatedProject = updateDataSourceRows(baseProject, upload.sourceId, rows, columns, mode);
     await persistProject(updatedProject);
   };
 
@@ -156,7 +160,8 @@ const DataIngest: React.FC<DataIngestProps> = ({ project, onUpdateProject, kind,
   };
 
   const setActive = async (id: string) => {
-    const updated = setActiveDataSource(normalizedProject, id);
+    const hydrated = await hydrateProjectDataSourceRows(normalizedProject, id);
+    const updated = setActiveDataSource(hydrated, id);
     await persistProject(updated);
     showToast('Active table changed', 'Other features will now use this table.', 'info');
   };

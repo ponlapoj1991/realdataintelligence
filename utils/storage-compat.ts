@@ -92,7 +92,12 @@ const isProjectV2 = (project: any): project is ProjectMetadataV2 => {
 const CHUNK_SIZE = 1000;
 
 const stripDataSourceRowsForMetadata = (source: DataSource): DataSource => {
-  const rowCount = Array.isArray(source.rows) ? source.rows.length : (source.rowCount ?? 0);
+  const rowCount =
+    typeof source.rowCount === 'number'
+      ? source.rowCount
+      : Array.isArray(source.rows)
+        ? source.rows.length
+        : 0;
   const chunkCount = Math.ceil(rowCount / CHUNK_SIZE);
   return {
     ...source,
@@ -172,20 +177,30 @@ const convertV2ToProject = async (projectId: string): Promise<Project | null> =>
   if (!metadata) return null;
 
   const sourceMetas = (metadata.dataSources || []) as DataSource[];
+  const activeId = metadata.activeDataSourceId || sourceMetas[0]?.id;
+
   const hydratedSources: DataSource[] = [];
+  let activeRows: RawRow[] = [];
 
   for (const src of sourceMetas) {
+    const rowCount = typeof (src as any).rowCount === 'number' ? (src as any).rowCount : 0;
+    const chunkCount =
+      typeof (src as any).chunkCount === 'number' ? (src as any).chunkCount : Math.ceil(rowCount / CHUNK_SIZE);
+
     let rows: RawRow[] = [];
+    if (src.id === activeId) {
+      try {
+        rows = await getAllDataSourceChunks(projectId, src.id);
+      } catch (e) {
+        rows = [];
+      }
 
-    try {
-      rows = await getAllDataSourceChunks(projectId, src.id);
-    } catch (e) {
-      rows = [];
-    }
+      // Fallback for legacy metadata that still embeds rows (pre-v3)
+      if (rows.length === 0 && Array.isArray((src as any).rows) && (src as any).rows.length > 0) {
+        rows = (src as any).rows as RawRow[];
+      }
 
-    // Fallback for legacy metadata that still embeds rows (pre-v3)
-    if (rows.length === 0 && Array.isArray((src as any).rows) && (src as any).rows.length > 0) {
-      rows = (src as any).rows as RawRow[];
+      activeRows = rows;
     }
 
     hydratedSources.push({
@@ -196,10 +211,8 @@ const convertV2ToProject = async (projectId: string): Promise<Project | null> =>
     });
   }
 
-  const activeId = metadata.activeDataSourceId || hydratedSources[0]?.id;
   const active = (activeId && hydratedSources.find((s) => s.id === activeId)) || hydratedSources[0];
-
-  const data = active ? active.rows : await getAllDataChunks(projectId);
+  const data = active ? activeRows : await getAllDataChunks(projectId);
 
   return {
     id: metadata.id,
@@ -221,8 +234,42 @@ const convertV2ToProject = async (projectId: string): Promise<Project | null> =>
     reportConfig: metadata.reportConfig,
     reportPresentations: metadata.reportPresentations,
     activePresentationId: metadata.activePresentationId,
-    aiPresets: metadata.aiPresets
+    aiPresets: metadata.aiPresets,
+    rowCount: metadata.rowCount,
   };
+};
+
+/**
+ * Hydrate a single DataSource's rows into an in-memory Project object.
+ * Used by UI flows that still depend on `source.rows` for editing or preview.
+ */
+export const hydrateProjectDataSourceRows = async (project: Project, sourceId: string): Promise<Project> => {
+  try {
+    const rows = await getAllDataSourceChunks(project.id, sourceId);
+
+    const dataSources = (project.dataSources || []).map((s) => {
+      if (s.id !== sourceId) return s;
+      return {
+        ...s,
+        rows,
+        rowCount: typeof s.rowCount === 'number' ? s.rowCount : rows.length,
+        chunkCount: typeof s.chunkCount === 'number' ? s.chunkCount : Math.ceil(rows.length / CHUNK_SIZE),
+      };
+    });
+
+    const activeId = project.activeDataSourceId;
+    const active = dataSources.find((s) => s.id === (activeId || sourceId)) || dataSources[0];
+
+    return normalizeProject({
+      ...project,
+      dataSources,
+      data: active?.rows || project.data,
+      columns: active?.columns || project.columns,
+    });
+  } catch (e) {
+    console.error('[Storage] Failed to hydrate DataSource rows:', e);
+    return project;
+  }
 };
 
 // --- Unified API (Drop-in replacement for storage.ts) ---

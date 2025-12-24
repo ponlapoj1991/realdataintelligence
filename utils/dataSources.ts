@@ -1,10 +1,14 @@
 import { ColumnConfig, DataSource, DataSourceKind, Project, RawRow } from '../types';
 
+const CHUNK_SIZE = 1000;
+
 const createDefaultSource = (project: Project): DataSource => ({
   id: project.id + '-primary',
   name: 'Primary Table',
   kind: 'ingestion',
   rows: project.data || [],
+  rowCount: project.data?.length || 0,
+  chunkCount: Math.ceil((project.data?.length || 0) / CHUNK_SIZE),
   columns: project.columns || [],
   createdAt: project.lastModified || Date.now(),
   updatedAt: project.lastModified || Date.now(),
@@ -54,10 +58,18 @@ export const upsertDataSource = (
   const { project: normalized } = ensureDataSources(project);
   const existingIndex = normalized.dataSources!.findIndex((s) => s.id === source.id);
   const dataSources = [...(normalized.dataSources || [])];
+  const rowCount =
+    typeof source.rowCount === 'number' ? source.rowCount : Array.isArray(source.rows) ? source.rows.length : 0;
+  const chunkCount = typeof source.chunkCount === 'number' ? source.chunkCount : Math.ceil(rowCount / CHUNK_SIZE);
+  const normalizedSource: DataSource = {
+    ...source,
+    rowCount,
+    chunkCount,
+  };
   if (existingIndex >= 0) {
-    dataSources[existingIndex] = { ...source, updatedAt: Date.now() };
+    dataSources[existingIndex] = { ...normalizedSource, updatedAt: Date.now() };
   } else {
-    dataSources.push({ ...source, createdAt: Date.now(), updatedAt: Date.now() });
+    dataSources.push({ ...normalizedSource, createdAt: Date.now(), updatedAt: Date.now() });
   }
 
   const activeId = options.setActive ? source.id : normalized.activeDataSourceId || source.id;
@@ -88,6 +100,8 @@ export const updateDataSourceRows = (
     return {
       ...s,
       rows: nextRows,
+      rowCount: nextRows.length,
+      chunkCount: Math.ceil(nextRows.length / CHUNK_SIZE),
       columns: mergedColumns,
       updatedAt: Date.now(),
     };
@@ -152,6 +166,8 @@ export const addDerivedDataSource = (
     name,
     kind,
     rows,
+    rowCount: rows.length,
+    chunkCount: Math.ceil(rows.length / CHUNK_SIZE),
     columns,
     createdAt: Date.now(),
     updatedAt: Date.now(),

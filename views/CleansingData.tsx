@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { Plus, Save, Loader2, Search, Settings, Eraser, Trash2, Zap } from 'lucide-react';
 import { ColumnConfig, DataSource, Project, RawRow } from '../types';
 import { ensureDataSources, getDataSourcesByKind, updateDataSourceRows, addDerivedDataSource } from '../utils/dataSources';
-import { saveProject } from '../utils/storage-compat';
+import { hydrateProjectDataSourceRows, saveProject } from '../utils/storage-compat';
 import { smartParseDate } from '../utils/excel';
 import { useToast } from '../components/ToastProvider';
 
@@ -76,6 +76,10 @@ const CleansingData: React.FC<CleansingDataProps> = ({ project, onUpdateProject 
   const handleSelect = (source: DataSource) => {
     setSelectedSourceId(source.id);
     setShowPicker(false);
+    void (async () => {
+      const hydrated = await hydrateProjectDataSourceRows(normalizedProject, source.id);
+      onUpdateProject(hydrated);
+    })();
   };
 
   const updateColumnType = async (key: string, type: ColumnConfig['type']) => {

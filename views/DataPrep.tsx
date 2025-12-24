@@ -1,7 +1,7 @@
 import React, { useState, useMemo, useEffect } from 'react';
 import { Settings, Download, Save, Search, X, Eraser, Trash2, Replace, ArrowRight, Zap, Calendar, Split, Table2, Database, Plus, GripVertical, Check, ListFilter, ChevronUp, ChevronDown, Pencil } from 'lucide-react';
 import { Project, RawRow, ColumnConfig, TransformationRule, TransformMethod } from '../types';
-import { saveProject } from '../utils/storage-compat';
+import { hydrateProjectDataSourceRows, saveProject } from '../utils/storage-compat';
 import { addDerivedDataSource, ensureDataSources, setActiveDataSource, updateDataSourceRows } from '../utils/dataSources';
 import { exportToExcel, smartParseDate, inferColumns } from '../utils/excel';
 import { analyzeSourceColumn, applyTransformation, getAllUniqueValues } from '../utils/transform';
@@ -90,7 +90,8 @@ const DataPrep: React.FC<DataPrepProps> = ({ project, onUpdateProject }) => {
   };
 
   const handleActiveChange = async (value: string) => {
-    const updated = setActiveDataSource(normalizedProject, value);
+    const hydrated = await hydrateProjectDataSourceRows(normalizedProject, value);
+    const updated = setActiveDataSource(hydrated, value);
     onUpdateProject(updated);
     await saveProject(updated);
   };
