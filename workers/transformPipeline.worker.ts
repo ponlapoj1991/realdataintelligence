@@ -391,6 +391,106 @@ const resolveSourceStats = async (params: {
   return { ...inferred, src }
 }
 
+type CleanFilterSpec = Array<[string, Set<string>]>
+
+const stableStringifyFilterEntries = (filters: unknown): string => {
+  if (!filters || typeof filters !== 'object') return '{}'
+  const entries = Object.entries(filters as Record<string, unknown>)
+    .filter(([, v]) => Array.isArray(v) && (v as unknown[]).length > 0)
+    .map(([k, v]) => {
+      const values = (v as unknown[]).map((x) => String(x))
+      values.sort()
+      return [k, values] as const
+    })
+  entries.sort((a, b) => a[0].localeCompare(b[0]))
+  return JSON.stringify(entries)
+}
+
+const compileFilterSpec = (filters: unknown): CleanFilterSpec => {
+  if (!filters || typeof filters !== 'object') return []
+  const entries = Object.entries(filters as Record<string, unknown>).filter(([, v]) => Array.isArray(v) && (v as unknown[]).length > 0) as Array<
+    [string, unknown[]]
+  >
+  entries.sort((a, b) => a[0].localeCompare(b[0]))
+  return entries.map(([col, vals]) => [col, new Set(vals.map((v) => String(v)))])
+}
+
+const matchesFilters = (row: RawRow, filters: CleanFilterSpec): boolean => {
+  if (!filters.length) return true
+  for (const [col, allowed] of filters) {
+    const raw = (row as any)[col]
+    const strVal = raw === null || raw === undefined || raw === '' ? '(Blank)' : String(raw)
+    if (!allowed.has(strVal)) return false
+  }
+  return true
+}
+
+type CleanQueryIndexCacheEntry = {
+  version: number
+  totalRows: number
+  indices: Uint32Array
+  builtAt: number
+}
+
+const CLEAN_QUERY_CACHE_MAX = 6
+const cleanQueryIndexCache = new Map<string, CleanQueryIndexCacheEntry>()
+const cleanQueryIndexPending = new Map<string, Promise<CleanQueryIndexCacheEntry>>()
+
+const touchCleanQueryCache = (key: string, entry: CleanQueryIndexCacheEntry) => {
+  if (cleanQueryIndexCache.has(key)) cleanQueryIndexCache.delete(key)
+  cleanQueryIndexCache.set(key, entry)
+  while (cleanQueryIndexCache.size > CLEAN_QUERY_CACHE_MAX) {
+    const oldestKey = cleanQueryIndexCache.keys().next().value as string | undefined
+    if (!oldestKey) break
+    cleanQueryIndexCache.delete(oldestKey)
+  }
+}
+
+const buildIndexArray = async (params: {
+  metadata: any
+  projectId: string
+  sourceId: string
+  chunkCount: number
+  search: string
+  filters: CleanFilterSpec
+}): Promise<Uint32Array> => {
+  let capacity = 4096
+  let len = 0
+  let buf = new Uint32Array(capacity)
+
+  const push = (idx: number) => {
+    if (len >= capacity) {
+      capacity = Math.max(capacity * 2, len + 1)
+      const next = new Uint32Array(capacity)
+      next.set(buf)
+      buf = next
+    }
+    buf[len++] = idx >>> 0
+  }
+
+  for (let i = 0; i < params.chunkCount; i++) {
+    const chunk = await safeGetSourceChunk({
+      metadata: params.metadata,
+      projectId: params.projectId,
+      sourceId: params.sourceId,
+      chunkIndex: i,
+    })
+    if (!chunk.length) continue
+
+    for (let j = 0; j < chunk.length; j++) {
+      const row = chunk[j]
+      if (!matchesFilters(row, params.filters)) continue
+      if (params.search) {
+        const match = Object.values(row).some((v) => String(v ?? '').toLowerCase().includes(params.search))
+        if (!match) continue
+      }
+      push(i * CHUNK_SIZE + j)
+    }
+  }
+
+  return buf.slice(0, len)
+}
+
 const collectSourceRows = async (params: {
   projectId: string
   sourceId: string
@@ -945,14 +1045,10 @@ const cleanQueryPage = async (msg: CleanQueryPageMessage): Promise<CleanQueryPag
   const end = offset + pageSize
   const search = String(msg.searchQuery || '').trim().toLowerCase()
 
-  const rows: RawRow[] = []
-  const rowIndices: number[] = []
-  const filters = msg.filters && typeof msg.filters === 'object' ? msg.filters : {}
-  const filterEntries = Object.entries(filters).filter(([, v]) => Array.isArray(v) && v.length > 0) as Array<
-    [string, string[]]
-  >
+  const rawFilters = msg.filters && typeof msg.filters === 'object' ? msg.filters : {}
+  const compiledFilters = compileFilterSpec(rawFilters)
 
-  if (!search && filterEntries.length === 0) {
+  if (!search && compiledFilters.length === 0) {
     const startRow = offset
     const endRow = Math.min(end, rowCount)
 
@@ -993,52 +1089,95 @@ const cleanQueryPage = async (msg: CleanQueryPageMessage): Promise<CleanQueryPag
     }
   }
 
-  let matched = 0
+  const version = getSourceVersion(metadata, msg.sourceId)
+  const filterKey = stableStringifyFilterEntries(rawFilters)
+  const cacheKey = `${msg.projectId}:${msg.sourceId}:${version}:${search}:${filterKey}`
 
-  for (let i = 0; i < chunkCount; i++) {
-    const chunk = await safeGetSourceChunk({
-      metadata,
-      projectId: msg.projectId,
-      sourceId: msg.sourceId,
-      chunkIndex: i,
-    })
-    if (!chunk.length) continue
+  const cached = cleanQueryIndexCache.get(cacheKey)
+  if (cached) {
+    touchCleanQueryCache(cacheKey, cached)
+  }
 
-    for (let j = 0; j < chunk.length; j++) {
-      const row = chunk[j]
+  const entry =
+    cached ||
+    (await (async () => {
+      const pending = cleanQueryIndexPending.get(cacheKey)
+      if (pending) return await pending
 
-      if (filterEntries.length) {
-        let ok = true
-        for (const [col, allowed] of filterEntries) {
-          const raw = (row as any)[col]
-          const strVal = raw === null || raw === undefined || raw === '' ? '(Blank)' : String(raw)
-          if (!allowed.includes(strVal)) {
-            ok = false
-            break
-          }
+      const promise = (async (): Promise<CleanQueryIndexCacheEntry> => {
+        const indices = await buildIndexArray({
+          metadata,
+          projectId: msg.projectId,
+          sourceId: msg.sourceId,
+          chunkCount,
+          search,
+          filters: compiledFilters,
+        })
+        const built: CleanQueryIndexCacheEntry = {
+          version,
+          totalRows: indices.length,
+          indices,
+          builtAt: Date.now(),
         }
-        if (!ok) continue
-      }
+        touchCleanQueryCache(cacheKey, built)
+        return built
+      })()
 
-      const match =
-        !search ||
-        Object.values(row).some((v) => String(v ?? '').toLowerCase().includes(search))
-      if (!match) continue
-
-      if (matched >= offset && matched < end) {
-        rows.push(row)
-        rowIndices.push(i * CHUNK_SIZE + j)
+      cleanQueryIndexPending.set(cacheKey, promise)
+      try {
+        return await promise
+      } finally {
+        cleanQueryIndexPending.delete(cacheKey)
       }
-      matched += 1
+    })())
+
+  const totalRows = entry.totalRows
+  if (offset >= totalRows) {
+    return {
+      type: 'cleanQueryPage',
+      requestId: msg.requestId,
+      rows: [],
+      rowIndices: [],
+      totalRows,
     }
   }
+
+  const sliceEnd = Math.min(end, totalRows)
+  const pageIndices = entry.indices.subarray(offset, sliceEnd)
+  const rowIndices = Array.from(pageIndices, (n) => Number(n))
+
+  const neededChunks = new Set<number>()
+  for (const absIdx of pageIndices) {
+    neededChunks.add(Math.floor(Number(absIdx) / CHUNK_SIZE))
+  }
+
+  const chunkArr = Array.from(neededChunks.values())
+  const loaded = await Promise.all(
+    chunkArr.map(async (chunkIndex) => {
+      const chunk = await safeGetSourceChunk({
+        metadata,
+        projectId: msg.projectId,
+        sourceId: msg.sourceId,
+        chunkIndex,
+      })
+      return [chunkIndex, chunk] as const
+    })
+  )
+  const chunkMap = new Map<number, RawRow[]>(loaded)
+
+  const rows: RawRow[] = rowIndices.map((absIdx) => {
+    const chunkIndex = Math.floor(absIdx / CHUNK_SIZE)
+    const inChunk = absIdx % CHUNK_SIZE
+    const chunk = chunkMap.get(chunkIndex) || []
+    return (chunk[inChunk] as RawRow | undefined) || ({} as RawRow)
+  })
 
   return {
     type: 'cleanQueryPage',
     requestId: msg.requestId,
     rows,
     rowIndices,
-    totalRows: matched,
+    totalRows,
   }
 }
 

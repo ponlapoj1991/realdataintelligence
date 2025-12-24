@@ -556,6 +556,8 @@ const [sortSeriesId, setSortSeriesId] = useState('');
     setCategoryModal(null);
   }, [availableColumns]);
 
+  const columnProfiles = useMemo(() => buildColumnProfiles(data.length ? data : profileRows), [data, profileRows]);
+
   // Initialize
   const initKeyRef = useRef<string | null>(null);
   useLayoutEffect(() => {
@@ -1200,8 +1202,6 @@ const [sortSeriesId, setSortSeriesId] = useState('');
       }
     })();
   }, [isOpen, data.length, workerSource, transformWorker.isSupported, transformWorker.cleanPreview]);
-
-  const columnProfiles = useMemo(() => buildColumnProfiles(data.length ? data : profileRows), [data, profileRows]);
   const showMajorControl = useMemo(() => {
     if (!type || !dimension) return false;
     const eligibleType =
