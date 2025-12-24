@@ -144,6 +144,12 @@ export interface TransformPipelineWorkerClient {
     columnKey: string
     columnType: ColumnConfig['type']
   }) => Promise<CleanDoneResponse>
+  cloneSource: (params: {
+    projectId: string
+    sourceId: string
+    name: string
+    kind: DataSourceKind
+  }) => Promise<BuildDoneResponse['source']>
 }
 
 export function useTransformPipelineWorker(): TransformPipelineWorkerClient {
@@ -370,6 +376,20 @@ export function useTransformPipelineWorker(): TransformPipelineWorkerClient {
     [call]
   )
 
+  const cloneSource: TransformPipelineWorkerClient['cloneSource'] = useCallback(
+    async ({ projectId, sourceId, name, kind }) => {
+      const resp = (await call({
+        type: 'cloneSource',
+        projectId,
+        sourceId,
+        name,
+        kind,
+      })) as BuildDoneResponse
+      return resp.source
+    },
+    [call]
+  )
+
   return {
     isSupported,
     previewSingle,
@@ -384,5 +404,6 @@ export function useTransformPipelineWorker(): TransformPipelineWorkerClient {
     cleanApplyExplode,
     cleanDeleteRow,
     cleanUpdateColumnType,
+    cloneSource,
   }
 }

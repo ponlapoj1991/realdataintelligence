@@ -8,6 +8,7 @@ import { analyzeSourceColumn, applyTransformation, getAllUniqueValues } from '..
 import EmptyState from '../components/EmptyState';
 import { useToast } from '../components/ToastProvider';
 import { useTransformPipelineWorker } from '../hooks/useTransformPipelineWorker';
+import { getAllDataSourceChunks } from '../utils/storage-v2';
 
 interface DataPrepProps {
   project: Project;
@@ -161,7 +162,8 @@ const DataPrep: React.FC<DataPrepProps> = ({ project, onUpdateProject }) => {
 
   const handleExport = async () => {
       if (mode === 'clean') {
-        exportToExcel(activeData, `${project.name}_Raw_Cleaned`);
+        const rows = activeData.length ? activeData : await getAllDataSourceChunks(normalizedProject.id, activeSource.id);
+        exportToExcel(rows, `${project.name}_Raw_Cleaned`);
         return;
       }
 

@@ -1,10 +1,11 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Plus, Save, Loader2, Search, Settings, Eraser, Trash2, Zap } from 'lucide-react';
 import { ColumnConfig, DataSource, Project, RawRow } from '../types';
 import { ensureDataSources, getDataSourcesByKind, updateDataSourceRows, addDerivedDataSource } from '../utils/dataSources';
-import { hydrateProjectDataSourceRows, saveProject } from '../utils/storage-compat';
+import { getProjectLight, hydrateProjectDataSourceRows, saveProject } from '../utils/storage-compat';
 import { smartParseDate } from '../utils/excel';
 import { useToast } from '../components/ToastProvider';
+import { useTransformPipelineWorker } from '../hooks/useTransformPipelineWorker';
 
 interface CleansingDataProps {
   project: Project;
@@ -46,6 +47,7 @@ const CleansingData: React.FC<CleansingDataProps> = ({ project, onUpdateProject 
   const [isSaving, setIsSaving] = useState(false);
 
   const { showToast } = useToast();
+  const transformWorker = useTransformPipelineWorker();
 
   const selectedSource = useMemo(() => allSources.find((s) => s.id === selectedSourceId) || null, [allSources, selectedSourceId]);
   // REMOVED: Auto-select logic to respect Pro UX
@@ -58,13 +60,69 @@ const CleansingData: React.FC<CleansingDataProps> = ({ project, onUpdateProject 
   const workingRows = selectedSource?.rows || [];
   const workingColumns = selectedSource?.columns || [];
 
-  const filteredRows = useMemo(() => {
-    if (!searchQuery.trim()) return workingRows;
-    const q = searchQuery.toLowerCase();
-    return workingRows.filter((row) => Object.values(row).some((val) => String(val ?? '').toLowerCase().includes(q)));
-  }, [workingRows, searchQuery]);
+  const [previewRows, setPreviewRows] = useState<RawRow[]>([]);
+  const [previewRowIndices, setPreviewRowIndices] = useState<number[]>([]);
+  const [previewVersion, setPreviewVersion] = useState(0);
+  const previewReqRef = useRef(0);
 
-  const displayRows = useMemo(() => filteredRows.slice(0, 50), [filteredRows]);
+  useEffect(() => {
+    if (!selectedSource) {
+      setPreviewRows([]);
+      setPreviewRowIndices([]);
+      return;
+    }
+
+    const reqId = (previewReqRef.current += 1);
+    const run = async () => {
+      try {
+        if (transformWorker.isSupported) {
+          const resp = await transformWorker.cleanPreview({
+            projectId: normalizedProject.id,
+            sourceId: selectedSource.id,
+            searchQuery,
+            limit: 50,
+          });
+          if (reqId !== previewReqRef.current) return;
+          setPreviewRows(resp.rows);
+          setPreviewRowIndices(resp.rowIndices);
+          return;
+        }
+
+        const q = searchQuery.trim().toLowerCase();
+        const rows: RawRow[] = [];
+        const indices: number[] = [];
+        for (let i = 0; i < workingRows.length && rows.length < 50; i++) {
+          const row = workingRows[i];
+          const match =
+            !q || Object.values(row).some((val) => String(val ?? '').toLowerCase().includes(q));
+          if (!match) continue;
+          rows.push(row);
+          indices.push(i);
+        }
+        if (reqId !== previewReqRef.current) return;
+        setPreviewRows(rows);
+        setPreviewRowIndices(indices);
+      } catch (e) {
+        if (reqId !== previewReqRef.current) return;
+        console.error('[CleansingData] preview failed:', e);
+        setPreviewRows([]);
+        setPreviewRowIndices([]);
+      }
+    };
+
+    void run();
+  }, [
+    selectedSource?.id,
+    searchQuery,
+    previewVersion,
+    normalizedProject.id,
+    transformWorker.isSupported,
+    transformWorker.cleanPreview,
+    workingRows,
+    selectedSource,
+  ]);
+
+  const displayRows = previewRows;
 
   const persistSource = async (rows: RawRow[], columns: ColumnConfig[] = workingColumns) => {
     if (!selectedSource) return;
@@ -76,20 +134,49 @@ const CleansingData: React.FC<CleansingDataProps> = ({ project, onUpdateProject 
   const handleSelect = (source: DataSource) => {
     setSelectedSourceId(source.id);
     setShowPicker(false);
-    void (async () => {
-      const hydrated = await hydrateProjectDataSourceRows(normalizedProject, source.id);
-      onUpdateProject(hydrated);
-    })();
+    if (!transformWorker.isSupported) {
+      void (async () => {
+        const hydrated = await hydrateProjectDataSourceRows(normalizedProject, source.id);
+        onUpdateProject(hydrated);
+      })();
+    }
   };
 
   const updateColumnType = async (key: string, type: ColumnConfig['type']) => {
+    setEditingCol(null);
+
+    if (selectedSource && transformWorker.isSupported) {
+      await transformWorker.cleanUpdateColumnType({
+        projectId: normalizedProject.id,
+        sourceId: selectedSource.id,
+        columnKey: key,
+        columnType: type,
+      });
+      const refreshed = await getProjectLight(normalizedProject.id);
+      if (refreshed) onUpdateProject(refreshed);
+      setPreviewVersion((v) => v + 1);
+      return;
+    }
+
     const next = workingColumns.map((c) => (c.key === key ? { ...c, type } : c));
     await persistSource(workingRows, next);
-    setEditingCol(null);
   };
 
   const handleFindReplace = async () => {
     if (!findText.trim()) return;
+    if (selectedSource && transformWorker.isSupported) {
+      await transformWorker.cleanApplyFindReplace({
+        projectId: normalizedProject.id,
+        sourceId: selectedSource.id,
+        targetCol,
+        findText,
+        replaceText,
+      });
+      const refreshed = await getProjectLight(normalizedProject.id);
+      if (refreshed) onUpdateProject(refreshed);
+      setPreviewVersion((v) => v + 1);
+      return;
+    }
     const colsToSearch = targetCol === 'all' ? workingColumns.map((c) => c.key) : [targetCol];
     const newRows = workingRows.map((row) => {
       const next = { ...row };
@@ -106,6 +193,27 @@ const CleansingData: React.FC<CleansingDataProps> = ({ project, onUpdateProject 
 
   const handleTransform = async () => {
     if (!transformCol) return;
+    if (selectedSource && transformWorker.isSupported) {
+      if (transformAction === 'date') {
+        await transformWorker.cleanApplyTransformDate({
+          projectId: normalizedProject.id,
+          sourceId: selectedSource.id,
+          columnKey: transformCol,
+        });
+      } else if (transformAction === 'explode') {
+        await transformWorker.cleanApplyExplode({
+          projectId: normalizedProject.id,
+          sourceId: selectedSource.id,
+          columnKey: transformCol,
+          delimiter,
+        });
+      }
+      const refreshed = await getProjectLight(normalizedProject.id);
+      if (refreshed) onUpdateProject(refreshed);
+      setTransformCol('');
+      setPreviewVersion((v) => v + 1);
+      return;
+    }
     let newRows = [...workingRows];
     let newCols = [...workingColumns];
     if (transformAction === 'date') {
@@ -134,6 +242,17 @@ const CleansingData: React.FC<CleansingDataProps> = ({ project, onUpdateProject 
   };
 
   const handleDeleteRow = async (index: number) => {
+    if (selectedSource && transformWorker.isSupported) {
+      await transformWorker.cleanDeleteRow({
+        projectId: normalizedProject.id,
+        sourceId: selectedSource.id,
+        rowIndex: index,
+      });
+      const refreshed = await getProjectLight(normalizedProject.id);
+      if (refreshed) onUpdateProject(refreshed);
+      setPreviewVersion((v) => v + 1);
+      return;
+    }
     const next = workingRows.filter((_, i) => i !== index);
     await persistSource(next, workingColumns);
   };
@@ -153,12 +272,37 @@ const CleansingData: React.FC<CleansingDataProps> = ({ project, onUpdateProject 
     }
     if (!selectedSource) return;
     setIsSaving(true);
-    const updated = addDerivedDataSource(normalizedProject, trimmed, selectedSource.rows, selectedSource.columns, 'prepared');
-    await saveProject(updated);
-    onUpdateProject(updated);
-    showToast('Saved', 'Table stored under Preparation Data.', 'success');
-    setTimeout(() => setIsSaving(false), 300);
-    setShowNameModal(false);
+    try {
+      if (transformWorker.isSupported) {
+        await transformWorker.cloneSource({
+          projectId: normalizedProject.id,
+          sourceId: selectedSource.id,
+          name: trimmed,
+          kind: 'prepared',
+        });
+        const refreshed = await getProjectLight(normalizedProject.id);
+        if (refreshed) onUpdateProject(refreshed);
+        showToast('Saved', 'Table stored under Preparation Data.', 'success');
+        setShowNameModal(false);
+        setTimeout(() => setIsSaving(false), 300);
+        return;
+      }
+
+      const hydrated = selectedSource.rows.length
+        ? normalizedProject
+        : await hydrateProjectDataSourceRows(normalizedProject, selectedSource.id);
+      const src = (hydrated.dataSources || []).find((s) => s.id === selectedSource.id) || selectedSource;
+      const updated = addDerivedDataSource(hydrated, trimmed, src.rows, src.columns, 'prepared');
+      await saveProject(updated);
+      onUpdateProject(updated);
+      showToast('Saved', 'Table stored under Preparation Data.', 'success');
+      setTimeout(() => setIsSaving(false), 300);
+      setShowNameModal(false);
+    } catch (e: any) {
+      console.error('[CleansingData] Save failed:', e);
+      showToast('Save failed', e?.message || 'Unable to save table.', 'error');
+      setTimeout(() => setIsSaving(false), 300);
+    }
   };
 
   return (
@@ -374,7 +518,10 @@ const CleansingData: React.FC<CleansingDataProps> = ({ project, onUpdateProject 
                       </td>
                     ))}
                     <td className="px-4 py-3 text-center">
-                      <button onClick={() => handleDeleteRow(idx)} className="text-gray-300 hover:text-red-500">
+                      <button
+                        onClick={() => handleDeleteRow(previewRowIndices[idx] ?? idx)}
+                        className="text-gray-300 hover:text-red-500"
+                      >
                         <Trash2 className="w-4 h-4" />
                       </button>
                     </td>

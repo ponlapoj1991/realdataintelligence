@@ -287,6 +287,7 @@ export const getProjects = async (): Promise<Project[]> => {
   try {
     // Try v2 first
     const projectsV2 = await getProjectsV2();
+    const v2Ids = new Set(projectsV2.map((p: any) => String(p?.id)));
 
     // NOTE: Do NOT load chunked rows for listing (Landing).
     const validProjects = projectsV2.map((meta: any) => toLightProjectFromMetadata(meta));
@@ -326,13 +327,15 @@ export const getProjects = async (): Promise<Project[]> => {
       // No v1 projects or v1 store doesn't exist
     }
 
+    const v1NotMigrated = projectsV1.filter((p) => !v2Ids.has(String(p?.id)));
+
     // Migrate v1 projects in background
-    if (projectsV1.length > 0) {
-      console.log(`[Migration] Found ${projectsV1.length} v1 projects, migrating...`);
+    if (v1NotMigrated.length > 0) {
+      console.log(`[Migration] Found ${v1NotMigrated.length} v1 projects, migrating...`);
 
       // Migrate asynchronously
       Promise.all(
-        projectsV1.map(async (project) => {
+        v1NotMigrated.map(async (project) => {
           // Check if already migrated
           const existing = await getProjectMetadata(project.id);
           if (!existing) {
@@ -344,7 +347,7 @@ export const getProjects = async (): Promise<Project[]> => {
       });
 
       // Return v1 projects for now (will be v2 on next load)
-      return [...validProjects, ...projectsV1.map((p) => normalizeProject(p))];
+      return [...validProjects, ...v1NotMigrated.map((p) => normalizeProject(p))];
     }
 
     return validProjects;

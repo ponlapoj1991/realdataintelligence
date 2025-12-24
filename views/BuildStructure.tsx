@@ -11,7 +11,7 @@ import {
 } from '../types';
 import { ensureDataSources, getDataSourcesByKind } from '../utils/dataSources';
 import { getProjectLight, saveProject } from '../utils/storage-compat';
-import { analyzeSourceColumn, getAllUniqueValues } from '../utils/transform';
+import { analyzeSourceColumn, applyTransformation, getAllUniqueValues } from '../utils/transform';
 import { useToast } from '../components/ToastProvider';
 import EmptyState from '../components/EmptyState';
 import { useTransformPipelineWorker } from '../hooks/useTransformPipelineWorker';
