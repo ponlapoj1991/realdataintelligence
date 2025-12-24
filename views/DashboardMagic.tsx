@@ -23,6 +23,7 @@ import {
 import EmptyState from '../components/EmptyState';
 import ChartBuilder from '../components/ChartBuilder';
 import MagicWidgetRenderer from '../components/MagicWidgetRenderer';
+import DataSourcePickerModal from '../components/DataSourcePickerModal';
 import { Project, ProjectDashboard, DashboardWidget, DashboardFilter, DrillDownState, RawRow, FilterDataType } from '../types';
 import {
   ensureMagicDashboards,
@@ -34,7 +35,7 @@ import {
   updateMagicDashboardGlobalFilters,
   renameMagicDashboard,
 } from '../utils/dashboards';
-import { ensureDataSources } from '../utils/dataSources';
+import { ensureDataSources, getDataSourcesByKind } from '../utils/dataSources';
 import { resolveDashboardBaseData } from '../utils/dashboardData';
 import { saveProject } from '../utils/storage-compat';
 import { REALPPTX_CHART_THEME } from '../constants/chartTheme';
@@ -140,6 +141,8 @@ const DashboardMagic: React.FC<DashboardMagicProps> = ({ project, onUpdateProjec
   const [isCreateOpen, setIsCreateOpen] = useState(false);
   const [newDashboardName, setNewDashboardName] = useState('');
   const [selectedDataSourceId, setSelectedDataSourceId] = useState<string>('');
+  const [isCreateSourcePickerOpen, setCreateSourcePickerOpen] = useState(false);
+  const [isEditorSourcePickerOpen, setEditorSourcePickerOpen] = useState(false);
   const [widgets, setWidgets] = useState<DashboardWidget[]>(activeDashboard?.widgets || []);
   const [isBuilderOpen, setIsBuilderOpen] = useState(false);
   const [editingWidget, setEditingWidget] = useState<DashboardWidget | null>(null);
@@ -184,6 +187,9 @@ const DashboardMagic: React.FC<DashboardMagicProps> = ({ project, onUpdateProjec
       setSelectedDataSourceId(project.activeDataSourceId || project.dataSources[0].id);
     }
   }, [isCreateOpen, project.activeDataSourceId, project.dataSources]);
+
+  const ingestionSources = useMemo(() => getDataSourcesByKind(normalizedProject, 'ingestion'), [normalizedProject]);
+  const preparedSources = useMemo(() => getDataSourcesByKind(normalizedProject, 'prepared'), [normalizedProject]);
 
   useEffect(() => {
     if (activeDashboard) {
@@ -712,8 +718,85 @@ const DashboardMagic: React.FC<DashboardMagicProps> = ({ project, onUpdateProjec
     const label = String(activeLabel ?? '').trim();
     if (!label) return;
 
-    const filterColumn = widget.dimension;
+    const rowsForWidget = applyWidgetFilters(filteredData, widget.filters);
+
+    const inferFilterColumn = () => {
+      const dim = String((widget as any)?.dimension ?? '').trim();
+      if (dim) return dim;
+      if (!availableColumns.length) return '';
+
+      const sample = rowsForWidget.slice(0, 400);
+      if (sample.length === 0) return '';
+
+      const normalizeCandidate = (raw: any) => {
+        const s = String(raw ?? '').trim();
+        return s ? s : '(Empty)';
+      };
+
+      const labelRange = (() => {
+        const text = label.trim();
+        if (!text) return null;
+        const parts = text.split(' - ');
+        if (parts.length === 2) {
+          const start = toDateValue(parts[0].trim());
+          const end = toDateValue(parts[1].trim());
+          if (!start || !end) return null;
+          start.setHours(0, 0, 0, 0);
+          end.setHours(23, 59, 59, 999);
+          return { startMs: start.getTime(), endMs: end.getTime() };
+        }
+        const d = toDateValue(text);
+        if (!d) return null;
+        d.setHours(0, 0, 0, 0);
+        return { startMs: d.getTime(), endMs: d.getTime() + 24 * 60 * 60 * 1000 - 1 };
+      })();
+
+      if (labelRange) {
+        let bestCol = '';
+        let bestScore = 0;
+        for (const col of availableColumns) {
+          let score = 0;
+          for (const row of sample) {
+            const d = toDateValue((row as any)[col]);
+            if (!d) continue;
+            const ms = d.getTime();
+            if (ms >= labelRange.startMs && ms <= labelRange.endMs) score += 1;
+          }
+          if (score > bestScore) {
+            bestScore = score;
+            bestCol = col;
+          }
+        }
+        if (bestScore > 0) return bestCol;
+      }
+
+      let bestCol = '';
+      let bestScore = 0;
+      for (const col of availableColumns) {
+        let score = 0;
+        for (const row of sample) {
+          const base = normalizeCandidate((row as any)[col]);
+          if (!widget.groupByString) {
+            if (base === label) score += 1;
+            continue;
+          }
+          const tokens = base.split(/[,\n;|]+/).map((t) => t.trim()).filter(Boolean);
+          if (tokens.includes(label)) score += 1;
+        }
+        if (score > bestScore) {
+          bestScore = score;
+          bestCol = col;
+        }
+      }
+      if (bestScore > 0) return bestCol;
+
+      return '';
+    };
+
+    const filterColumn = inferFilterColumn();
     if (!filterColumn) return;
+
+    const widgetForDrill: DashboardWidget = widget.dimension ? widget : { ...widget, dimension: filterColumn };
 
     const normalizeDim = (raw: any) => {
       const s = String(raw ?? '').trim();
@@ -721,12 +804,10 @@ const DashboardMagic: React.FC<DashboardMagicProps> = ({ project, onUpdateProjec
     };
     const getDimValues = (row: RawRow) => {
       const base = normalizeDim(row[filterColumn]);
-      if (!widget.groupByString) return [base];
+      if (!widgetForDrill.groupByString) return [base];
       const tokens = base.split(/[,\n;|]+/).map((t) => t.trim()).filter(Boolean);
       return tokens.length ? tokens : ['(Empty)'];
     };
-
-    const rowsForWidget = applyWidgetFilters(filteredData, widget.filters);
 
     const isStackedChart = [
       'stacked-column', '100-stacked-column',
@@ -781,8 +862,8 @@ const DashboardMagic: React.FC<DashboardMagicProps> = ({ project, onUpdateProjec
       return getDimValues(row).includes(label);
     };
 
-    if (label === 'Others' && widget.topN && widget.groupOthers !== false) {
-      const overflowKeys = getTopNOverflowDimensionValues(widget, rowsForWidget);
+    if (label === 'Others' && widgetForDrill.topN && widgetForDrill.groupOthers !== false) {
+      const overflowKeys = getTopNOverflowDimensionValues(widgetForDrill, rowsForWidget);
       const overflowSet = new Set(overflowKeys);
       const clickedData = rowsForWidget.filter((row) => {
         if (!getDimValues(row).some((v) => overflowSet.has(v))) return false;
@@ -901,9 +982,6 @@ const DashboardMagic: React.FC<DashboardMagicProps> = ({ project, onUpdateProjec
         <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-40 p-4">
           <div className="bg-white rounded-xl shadow-2xl w-full max-w-md p-6 space-y-4">
             <h3 className="text-lg font-bold text-gray-900">Create Magic Dashboard</h3>
-            <p className="text-sm text-gray-500">
-              Organize charts for RealPPTX-compatible rendering.
-            </p>
             <div>
               <label className="text-xs font-semibold text-gray-600">Dashboard Name</label>
               <input
@@ -916,23 +994,31 @@ const DashboardMagic: React.FC<DashboardMagicProps> = ({ project, onUpdateProjec
             </div>
             <div>
               <label className="text-xs font-semibold text-gray-600">Data Source</label>
-              <select
-                value={selectedDataSourceId}
-                onChange={(e) => setSelectedDataSourceId(e.target.value)}
-                className="mt-2 w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white"
+              <button
+                type="button"
+                onClick={() => setCreateSourcePickerOpen(true)}
+                className="mt-2 w-full px-3 py-2 border border-gray-300 rounded-lg text-sm bg-white hover:bg-gray-50 flex items-center justify-between gap-3"
               >
-                {(project.dataSources || []).map((ds) => (
-                  <option key={ds.id} value={ds.id}>
-                    {ds.name} ({ds.kind})
-                  </option>
-                ))}
-              </select>
+                <span className="truncate text-gray-900">
+                  {(() => {
+                    const src = (normalizedProject.dataSources || []).find((s) => s.id === selectedDataSourceId);
+                    return src ? src.name : 'Select Data Source';
+                  })()}
+                </span>
+                <span className="text-xs text-gray-500 flex-shrink-0">
+                  {(() => {
+                    const src = (normalizedProject.dataSources || []).find((s) => s.id === selectedDataSourceId);
+                    return src ? `(${src.kind})` : '';
+                  })()}
+                </span>
+              </button>
             </div>
             <div className="flex justify-end space-x-2">
               <button
                 onClick={() => {
                   setIsCreateOpen(false);
                   setNewDashboardName('');
+                  setCreateSourcePickerOpen(false);
                 }}
                 className="px-4 py-2 text-sm text-gray-600 hover:text-gray-900"
               >
@@ -948,6 +1034,19 @@ const DashboardMagic: React.FC<DashboardMagicProps> = ({ project, onUpdateProjec
           </div>
         </div>
       )}
+
+      <DataSourcePickerModal
+        isOpen={isCreateSourcePickerOpen}
+        title="Select Data Source"
+        ingestionSources={ingestionSources}
+        preparedSources={preparedSources}
+        selectedSourceId={selectedDataSourceId}
+        onSelect={(src) => {
+          setSelectedDataSourceId(src.id);
+          setCreateSourcePickerOpen(false);
+        }}
+        onClose={() => setCreateSourcePickerOpen(false)}
+      />
     </div>
   );
 
@@ -1019,27 +1118,33 @@ const DashboardMagic: React.FC<DashboardMagicProps> = ({ project, onUpdateProjec
 
             <div className="flex flex-wrap gap-2.5">
               {/* Data Source Selector */}
-              <div className="flex items-center space-x-2 bg-gray-50 border border-gray-200 rounded-lg px-3 py-1.5 shadow-sm">
+              <button
+                type="button"
+                onClick={() => setEditorSourcePickerOpen(true)}
+                className="flex items-center space-x-2 bg-gray-50 border border-gray-200 rounded-lg px-3 py-1.5 shadow-sm hover:bg-gray-100 transition-colors max-w-full"
+              >
                 <span className="text-xs font-semibold text-gray-500 uppercase">Data Source:</span>
-                <select
-                  value={editingDashboard.dataSourceId || project.activeDataSourceId || ''}
-                  onChange={(e) => handleActiveDataSourceChange(e.target.value)}
-                  className="text-xs text-gray-900 bg-transparent border-none focus:ring-0 cursor-pointer outline-none"
-                >
-                  {(project.dataSources || []).map((ds) => (
-                    <option key={ds.id} value={ds.id}>
-                      {ds.name} ({ds.kind})
-                    </option>
-                  ))}
-                </select>
-              </div>
+                <span className="text-xs text-gray-900 font-medium truncate">
+                  {(() => {
+                    const id = editingDashboard.dataSourceId || project.activeDataSourceId || '';
+                    const ds = (project.dataSources || []).find((s) => s.id === id);
+                    return ds ? ds.name : 'Select Data Source';
+                  })()}
+                </span>
+                <span className="text-[10px] font-semibold tracking-wide uppercase text-gray-400 flex-shrink-0">
+                  {(() => {
+                    const id = editingDashboard.dataSourceId || project.activeDataSourceId || '';
+                    const ds = (project.dataSources || []).find((s) => s.id === id);
+                    return ds ? ds.kind : '';
+                  })()}
+                </span>
+              </button>
 
               {/* Interaction Toggle */}
               <div className="bg-white border border-gray-300 rounded-lg flex p-0.5 shadow-sm">
                 <button
                   onClick={() => setInteractionMode('drill')}
                   className="flex items-center px-3 py-1.5 rounded-md text-xs font-medium transition-all bg-blue-100 text-blue-700"
-                  title="Click charts to see data rows"
                 >
                   <MousePointer2 className="w-3 h-3 mr-1.5" />
                   Drill
@@ -1355,6 +1460,19 @@ const DashboardMagic: React.FC<DashboardMagicProps> = ({ project, onUpdateProjec
   return (
     <>
       {mode === 'list' ? renderListView() : renderEditorView()}
+
+      <DataSourcePickerModal
+        isOpen={isEditorSourcePickerOpen}
+        title="Select Data Source"
+        ingestionSources={ingestionSources}
+        preparedSources={preparedSources}
+        selectedSourceId={editingDashboard?.dataSourceId || normalizedProject.activeDataSourceId || null}
+        onSelect={(src) => {
+          setEditorSourcePickerOpen(false);
+          void handleActiveDataSourceChange(src.id);
+        }}
+        onClose={() => setEditorSourcePickerOpen(false)}
+      />
 
       <ChartBuilder
         isOpen={isBuilderOpen}

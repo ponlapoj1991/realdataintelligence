@@ -381,14 +381,40 @@ const resolveSourceStats = async (params: {
     return { rowCount: cached.rowCount, chunkCount: cached.chunkCount, src }
   }
 
-  if (rowCount > 0 || chunkCount > 0) {
-    inferredSourceStatsCache.set(cacheKey, { version, rowCount, chunkCount })
-    return { rowCount, chunkCount, src }
-  }
+  const shouldInfer = await (async () => {
+    if (rowCount === 0 && chunkCount === 0) return true
+    if (chunkCount <= 0) return true
 
-  const inferred = await inferSourceStatsFromChunks(params)
-  inferredSourceStatsCache.set(cacheKey, { version, ...inferred })
-  return { ...inferred, src }
+    const lastIndex = Math.max(0, chunkCount - 1)
+    const lastChunk = await safeGetSourceChunk({
+      metadata: params.metadata,
+      projectId: params.projectId,
+      sourceId: params.sourceId,
+      chunkIndex: lastIndex,
+    })
+
+    if (!lastChunk.length) return true
+
+    const inferredRowCount = lastIndex * CHUNK_SIZE + lastChunk.length
+    if (rowCount === 0) return true
+    if (rowCount !== inferredRowCount) return true
+
+    if (lastChunk.length === CHUNK_SIZE) {
+      const nextChunk = await safeGetSourceChunk({
+        metadata: params.metadata,
+        projectId: params.projectId,
+        sourceId: params.sourceId,
+        chunkIndex: chunkCount,
+      })
+      if (nextChunk.length) return true
+    }
+
+    return false
+  })()
+
+  const resolved = shouldInfer ? await inferSourceStatsFromChunks(params) : { rowCount, chunkCount }
+  inferredSourceStatsCache.set(cacheKey, { version, ...resolved })
+  return { ...resolved, src }
 }
 
 type CleanFilterSpec = Array<[string, Set<string>]>
@@ -556,7 +582,11 @@ const previewSingle = async (msg: PreviewSingleMessage): Promise<PreviewResponse
   const metadata = await getProjectMetadata(msg.projectId)
   if (!metadata) throw new Error('Project not found')
 
-  const { rowCount, chunkCount } = getSourceStats(metadata, msg.sourceId)
+  const { rowCount, chunkCount } = await resolveSourceStats({
+    metadata,
+    projectId: msg.projectId,
+    sourceId: msg.sourceId,
+  })
   const limit = Math.max(0, msg.limit || 0)
 
   const rows: RawRow[] = []
@@ -603,7 +633,11 @@ const previewMulti = async (msg: PreviewMultiMessage): Promise<PreviewResponse> 
   }
 
   for (const src of msg.sources) {
-    const { rowCount, chunkCount } = getSourceStats(metadata, src.sourceId)
+    const { rowCount, chunkCount } = await resolveSourceStats({
+      metadata,
+      projectId: msg.projectId,
+      sourceId: src.sourceId,
+    })
     totalRows += rowCount
     for (let i = 0; i < chunkCount && rows.length < limit; i++) {
       const chunk = await safeGetSourceChunk({
@@ -635,7 +669,11 @@ const buildSingle = async (msg: BuildSingleMessage): Promise<BuildResponse> => {
   const metadata = await getProjectMetadata(msg.projectId)
   if (!metadata) throw new Error('Project not found')
 
-  const { rowCount, chunkCount } = getSourceStats(metadata, msg.sourceId)
+  const { rowCount, chunkCount } = await resolveSourceStats({
+    metadata,
+    projectId: msg.projectId,
+    sourceId: msg.sourceId,
+  })
   const now = Date.now()
   const sourceId = crypto.randomUUID()
   const columns = columnsFromRules(msg.rules)
@@ -695,7 +733,11 @@ const buildMulti = async (msg: BuildMultiMessage): Promise<BuildResponse> => {
 
   let totalRows = 0
   for (const src of msg.sources) {
-    const { rowCount } = getSourceStats(metadata, src.sourceId)
+    const { rowCount } = await resolveSourceStats({
+      metadata,
+      projectId: msg.projectId,
+      sourceId: src.sourceId,
+    })
     totalRows += rowCount
   }
 
@@ -740,7 +782,11 @@ const buildMulti = async (msg: BuildMultiMessage): Promise<BuildResponse> => {
   }
 
   for (const src of msg.sources) {
-    const { chunkCount: srcChunks } = getSourceStats(metadata, src.sourceId)
+    const { chunkCount: srcChunks } = await resolveSourceStats({
+      metadata,
+      projectId: msg.projectId,
+      sourceId: src.sourceId,
+    })
     for (let i = 0; i < srcChunks; i++) {
       const chunk = await safeGetSourceChunk({
         metadata,
@@ -798,7 +844,11 @@ const buildMultiToTarget = async (msg: BuildMultiToTargetMessage): Promise<Build
 
   let totalRows = 0
   for (const src of msg.sources) {
-    const { rowCount } = getSourceStats(metadata, src.sourceId)
+    const { rowCount } = await resolveSourceStats({
+      metadata,
+      projectId: msg.projectId,
+      sourceId: src.sourceId,
+    })
     totalRows += rowCount
   }
 
@@ -816,23 +866,34 @@ const buildMultiToTarget = async (msg: BuildMultiToTargetMessage): Promise<Build
   const nextColumns =
     msg.mode === 'replace' ? mergedColumns : mergeColumnsPreferExisting(existingColumns, mergedColumns)
 
+  const existingRowCount = typeof target.rowCount === 'number' ? target.rowCount : 0
+  const existingChunkCount =
+    typeof target.chunkCount === 'number' ? target.chunkCount : Math.ceil(existingRowCount / CHUNK_SIZE)
+  const resolvedTargetStats =
+    msg.mode === 'append'
+      ? await resolveSourceStats({
+          metadata,
+          projectId: msg.projectId,
+          sourceId: msg.targetSourceId,
+        })
+      : null
+
+  const startRowCount = resolvedTargetStats ? resolvedTargetStats.rowCount : existingRowCount
+  const startChunkCount = resolvedTargetStats ? resolvedTargetStats.chunkCount : existingChunkCount
+
   if (msg.mode === 'replace') {
     await deleteAllDataSourceChunksForSource(msg.projectId, msg.targetSourceId)
   }
 
-  const existingRowCount = typeof target.rowCount === 'number' ? target.rowCount : 0
-  const existingChunkCount =
-    typeof target.chunkCount === 'number' ? target.chunkCount : Math.ceil(existingRowCount / CHUNK_SIZE)
-
   let outIndex = 0
   let buffer: RawRow[] = []
 
-  if (msg.mode === 'append' && existingRowCount > 0) {
-    const remainder = existingRowCount % CHUNK_SIZE
+  if (msg.mode === 'append' && startRowCount > 0) {
+    const remainder = startRowCount % CHUNK_SIZE
     if (remainder === 0) {
-      outIndex = existingChunkCount
+      outIndex = startChunkCount
     } else {
-      outIndex = Math.max(0, existingChunkCount - 1)
+      outIndex = Math.max(0, startChunkCount - 1)
       buffer = await safeGetSourceChunk({
         metadata,
         projectId: msg.projectId,
@@ -865,7 +926,11 @@ const buildMultiToTarget = async (msg: BuildMultiToTargetMessage): Promise<Build
   }
 
   for (const src of msg.sources) {
-    const { chunkCount: srcChunks } = getSourceStats(metadata, src.sourceId)
+    const { chunkCount: srcChunks } = await resolveSourceStats({
+      metadata,
+      projectId: msg.projectId,
+      sourceId: src.sourceId,
+    })
     for (let i = 0; i < srcChunks; i++) {
       const chunk = await safeGetSourceChunk({
         metadata,
@@ -882,7 +947,7 @@ const buildMultiToTarget = async (msg: BuildMultiToTargetMessage): Promise<Build
   }
   await flushRemainder()
 
-  const nextRowCount = msg.mode === 'append' ? existingRowCount + totalRows : totalRows
+  const nextRowCount = msg.mode === 'append' ? startRowCount + totalRows : totalRows
   const nextChunkCount = Math.ceil(nextRowCount / CHUNK_SIZE)
 
   const sources = Array.isArray(metadata?.dataSources) ? metadata.dataSources : []
@@ -1246,7 +1311,11 @@ const cleanUpdateColumnType = async (msg: CleanUpdateColumnTypeMessage): Promise
   )
   await saveProjectMetadata({ ...nextMeta, lastModified: now })
 
-  const { rowCount, chunkCount } = getSourceStats(nextMeta, msg.sourceId)
+  const { rowCount, chunkCount } = await resolveSourceStats({
+    metadata: nextMeta,
+    projectId: msg.projectId,
+    sourceId: msg.sourceId,
+  })
   return { type: 'cleanDone', requestId: msg.requestId, rowCount, chunkCount, updatedAt: now }
 }
 
@@ -1254,7 +1323,11 @@ const cleanApplyFindReplace = async (msg: CleanApplyFindReplaceMessage): Promise
   const metadata = await getProjectMetadata(msg.projectId)
   if (!metadata) throw new Error('Project not found')
 
-  const { rowCount, chunkCount } = getSourceStats(metadata, msg.sourceId)
+  const { rowCount, chunkCount } = await resolveSourceStats({
+    metadata,
+    projectId: msg.projectId,
+    sourceId: msg.sourceId,
+  })
   const now = Date.now()
 
   const findText = String(msg.findText || '')
@@ -1299,7 +1372,11 @@ const cleanApplyTransformDate = async (msg: CleanApplyTransformDateMessage): Pro
   const metadata = await getProjectMetadata(msg.projectId)
   if (!metadata) throw new Error('Project not found')
 
-  const { rowCount, chunkCount } = getSourceStats(metadata, msg.sourceId)
+  const { rowCount, chunkCount } = await resolveSourceStats({
+    metadata,
+    projectId: msg.projectId,
+    sourceId: msg.sourceId,
+  })
   const now = Date.now()
 
   for (let i = 0; i < chunkCount; i++) {
@@ -1341,7 +1418,11 @@ const cleanApplyExplode = async (msg: CleanApplyExplodeMessage): Promise<CleanDo
   const metadata = await getProjectMetadata(msg.projectId)
   if (!metadata) throw new Error('Project not found')
 
-  const { rowCount, chunkCount } = getSourceStats(metadata, msg.sourceId)
+  const { rowCount, chunkCount } = await resolveSourceStats({
+    metadata,
+    projectId: msg.projectId,
+    sourceId: msg.sourceId,
+  })
   const now = Date.now()
   const delimiter = String(msg.delimiter || ',')
 
@@ -1387,7 +1468,11 @@ const cleanApplyExplode = async (msg: CleanApplyExplodeMessage): Promise<CleanDo
 const cleanDeleteRow = async (msg: CleanDeleteRowMessage): Promise<CleanDoneResponse> => {
   const metadata = await getProjectMetadata(msg.projectId)
   if (!metadata) throw new Error('Project not found')
-  const { rowCount, chunkCount, src } = getSourceStats(metadata, msg.sourceId)
+  const { rowCount, chunkCount, src } = await resolveSourceStats({
+    metadata,
+    projectId: msg.projectId,
+    sourceId: msg.sourceId,
+  })
   const indexToDelete = Math.max(0, msg.rowIndex)
 
   if (indexToDelete >= rowCount) {
@@ -1447,7 +1532,11 @@ const cloneSource = async (msg: CloneSourceMessage): Promise<BuildResponse> => {
   const metadata = await getProjectMetadata(msg.projectId)
   if (!metadata) throw new Error('Project not found')
 
-  const { rowCount, chunkCount, src } = getSourceStats(metadata, msg.sourceId)
+  const { rowCount, chunkCount, src } = await resolveSourceStats({
+    metadata,
+    projectId: msg.projectId,
+    sourceId: msg.sourceId,
+  })
   if (!src) throw new Error('Source not found')
 
   const now = Date.now()

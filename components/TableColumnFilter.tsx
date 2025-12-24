@@ -1,6 +1,6 @@
 
 import React, { useState, useMemo, useEffect } from 'react';
-import { Search, X } from 'lucide-react';
+import { Loader2, Search, X } from 'lucide-react';
 
 interface TableColumnFilterProps {
   column: string;
@@ -37,6 +37,8 @@ const TableColumnFilter: React.FC<TableColumnFilterProps> = ({
     });
     return Array.from(values).sort();
   }, [data, column, options]);
+
+  const isLoadingOptions = options === undefined && data.length === 0;
 
   // Initialize selection
   useEffect(() => {
@@ -126,16 +128,22 @@ const TableColumnFilter: React.FC<TableColumnFilterProps> = ({
       <div className="flex-1 overflow-y-auto max-h-60 p-1 custom-scrollbar">
         <button 
           onClick={handleSelectAll}
+          disabled={isLoadingOptions}
           className="flex items-center w-full px-2 py-1.5 hover:bg-blue-50 rounded text-xs text-blue-600 font-medium mb-1"
         >
            {selectedValues.size === filteredOptions.length ? 'Deselect Visible' : 'Select Visible'}
         </button>
         
-        {filteredOptions.length === 0 && (
-            <div className="text-xs text-gray-400 text-center py-4">No matches found</div>
-        )}
+        {isLoadingOptions ? (
+          <div className="flex items-center justify-center gap-2 text-xs text-gray-400 text-center py-4">
+            <Loader2 className="w-3.5 h-3.5 animate-spin" />
+            Loading...
+          </div>
+        ) : filteredOptions.length === 0 ? (
+          <div className="text-xs text-gray-400 text-center py-4">No matches found</div>
+        ) : null}
 
-        {filteredOptions.map(val => (
+        {!isLoadingOptions && filteredOptions.map(val => (
           <label key={val} className="flex items-center px-2 py-1 hover:bg-gray-50 cursor-pointer rounded">
             <input 
               type="checkbox"

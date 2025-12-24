@@ -34,13 +34,15 @@ const renderCellValue = (val: any) => {
 };
 
 const CleansingRow = React.memo(function CleansingRow(props: any) {
-  const { index, style, columns, pages, pageSize, onDelete } = props as {
+  const { index, style, columns, pages, pageSize, onDelete, tableWidth, scrollLeft } = props as {
     index: number;
     style: React.CSSProperties;
     columns: ColumnConfig[];
     pages: Record<number, PageEntry>;
     pageSize: number;
     onDelete: (rowIndex: number) => void;
+    tableWidth: number;
+    scrollLeft: number;
   };
 
   const page = Math.floor(index / pageSize);
@@ -50,38 +52,37 @@ const CleansingRow = React.memo(function CleansingRow(props: any) {
   const rowIndex = entry?.rowIndices?.[offset];
 
   return (
-    <div
-      style={style}
-      className="flex items-center border-b border-gray-100 bg-white hover:bg-gray-50 text-sm text-gray-700"
-    >
-      <div className="flex-shrink-0 px-3 text-xs font-mono text-gray-400" style={{ width: ROWNUM_WIDTH }}>
-        {typeof rowIndex === 'number' ? rowIndex + 1 : ''}
-      </div>
-      {columns.map((col) => {
-        const v = row ? (row as any)[col.key] : '';
-        const rendered = row ? renderCellValue(v) : '';
-        return (
-          <div
-            key={col.key}
-            className="px-3 truncate"
-            style={{ width: COL_WIDTH }}
-            title={rendered}
+    <div style={{ ...style, width: '100%' }} className="border-b border-gray-100 bg-white hover:bg-gray-50 text-sm text-gray-700 overflow-x-hidden">
+      <div className="flex items-center" style={{ width: tableWidth, transform: `translateX(-${scrollLeft}px)` }}>
+        <div className="flex-shrink-0 px-3 text-xs font-mono text-gray-400" style={{ width: ROWNUM_WIDTH }}>
+          {typeof rowIndex === 'number' ? rowIndex + 1 : ''}
+        </div>
+        {columns.map((col) => {
+          const v = row ? (row as any)[col.key] : '';
+          const rendered = row ? renderCellValue(v) : '';
+          return (
+            <div
+              key={col.key}
+              className="px-3 truncate"
+              style={{ width: COL_WIDTH }}
+              title={rendered}
+            >
+              {rendered}
+            </div>
+          );
+        })}
+        <div className="flex-shrink-0 flex items-center justify-center" style={{ width: ACTION_WIDTH }}>
+          <button
+            onClick={() => {
+              if (typeof rowIndex === 'number') onDelete(rowIndex);
+            }}
+            disabled={typeof rowIndex !== 'number'}
+            className="text-gray-300 hover:text-red-500 disabled:opacity-40"
+            aria-label="Delete row"
           >
-            {rendered}
-          </div>
-        );
-      })}
-      <div className="flex-shrink-0 flex items-center justify-center" style={{ width: ACTION_WIDTH }}>
-        <button
-          onClick={() => {
-            if (typeof rowIndex === 'number') onDelete(rowIndex);
-          }}
-          disabled={typeof rowIndex !== 'number'}
-          className="text-gray-300 hover:text-red-500 disabled:opacity-40"
-          aria-label="Delete row"
-        >
-          <Trash2 className="w-4 h-4" />
-        </button>
+            <Trash2 className="w-4 h-4" />
+          </button>
+        </div>
       </div>
     </div>
   );
@@ -145,6 +146,7 @@ const CleansingData: React.FC<CleansingDataProps> = ({ project, onUpdateProject 
 
   const [totalRows, setTotalRows] = useState(0);
   const [hasResultCount, setHasResultCount] = useState(false);
+  const [queryError, setQueryError] = useState<string | null>(null);
   const [pageCache, setPageCache] = useState<Record<number, { rows: RawRow[]; rowIndices: number[] }>>({});
   const pageCacheRef = useRef<Record<number, { rows: RawRow[]; rowIndices: number[] }>>({});
   useEffect(() => {
@@ -153,6 +155,7 @@ const CleansingData: React.FC<CleansingDataProps> = ({ project, onUpdateProject 
 
   const queryReqRef = useRef(0);
   const loadingPagesRef = useRef<Set<number>>(new Set());
+  const lastErrorReqRef = useRef<number | null>(null);
 
   const queryKey = useMemo(() => {
     return JSON.stringify({
@@ -185,6 +188,10 @@ const CleansingData: React.FC<CleansingDataProps> = ({ project, onUpdateProject 
           if (reqId !== queryReqRef.current) return;
           setTotalRows(resp.totalRows);
           setHasResultCount(true);
+          if (page === 0) {
+            setQueryError(null);
+            lastErrorReqRef.current = null;
+          }
           setPageCache((prev) => ({ ...prev, [page]: { rows: resp.rows, rowIndices: resp.rowIndices } }));
           return;
         }
@@ -221,17 +228,29 @@ const CleansingData: React.FC<CleansingDataProps> = ({ project, onUpdateProject 
         const rows = slice.map((idx) => workingRows[idx]);
         setTotalRows(allRowIndices.length);
         setHasResultCount(true);
+        if (page === 0) {
+          setQueryError(null);
+          lastErrorReqRef.current = null;
+        }
         setPageCache((prev) => ({ ...prev, [page]: { rows, rowIndices: slice } }));
       } catch (e) {
         if (reqId !== queryReqRef.current) return;
         console.error('[CleansingData] query page failed:', e);
-        setTotalRows(0);
-        setPageCache({});
+        if (page === 0) {
+          setTotalRows(0);
+          setPageCache({});
+          setHasResultCount(true);
+          setQueryError('Query failed');
+        }
+        if (lastErrorReqRef.current !== reqId) {
+          lastErrorReqRef.current = reqId;
+          showToast('Query failed', 'Unable to load rows.', 'error');
+        }
       } finally {
         loadingPagesRef.current.delete(page);
       }
     },
-    [selectedSource, transformWorker.isSupported, transformWorker.cleanQueryPage, normalizedProject.id, debouncedSearch, filters, workingRows]
+    [selectedSource, transformWorker.isSupported, transformWorker.cleanQueryPage, normalizedProject.id, debouncedSearch, filters, workingRows, showToast]
   );
 
   useEffect(() => {
@@ -240,6 +259,7 @@ const CleansingData: React.FC<CleansingDataProps> = ({ project, onUpdateProject 
     setPageCache({});
     setTotalRows(0);
     setHasResultCount(false);
+    setQueryError(null);
     if (!selectedSource) return;
     void loadPage(0);
   }, [queryKey, selectedSource?.id, loadPage]);
@@ -247,6 +267,17 @@ const CleansingData: React.FC<CleansingDataProps> = ({ project, onUpdateProject 
   const tableWidth = useMemo(() => ROWNUM_WIDTH + workingColumns.length * COL_WIDTH + ACTION_WIDTH, [workingColumns.length]);
   const [listHeight, setListHeight] = useState(520);
   const listContainerRef = useRef<HTMLDivElement | null>(null);
+  const [scrollLeft, setScrollLeft] = useState(0);
+  const scrollBarRef = useRef<HTMLDivElement | null>(null);
+  const scrollRafRef = useRef<number | null>(null);
+
+  const scheduleScrollLeftUpdate = useCallback((next: number) => {
+    if (scrollRafRef.current) return;
+    scrollRafRef.current = window.requestAnimationFrame(() => {
+      scrollRafRef.current = null;
+      setScrollLeft(next);
+    });
+  }, []);
 
   useEffect(() => {
     const node = listContainerRef.current;
@@ -261,6 +292,26 @@ const CleansingData: React.FC<CleansingDataProps> = ({ project, onUpdateProject 
     const ro = new ResizeObserver(() => apply());
     ro.observe(node);
     return () => ro.disconnect();
+  }, [selectedSource?.id]);
+
+  useEffect(() => {
+    const node = scrollBarRef.current;
+    if (!node) return;
+    node.scrollLeft = scrollLeft;
+  }, [tableWidth]);
+
+  useEffect(() => {
+    return () => {
+      if (scrollRafRef.current) {
+        window.cancelAnimationFrame(scrollRafRef.current);
+        scrollRafRef.current = null;
+      }
+    };
+  }, []);
+
+  useEffect(() => {
+    setScrollLeft(0);
+    if (scrollBarRef.current) scrollBarRef.current.scrollLeft = 0;
   }, [selectedSource?.id]);
 
   const handleItemsRendered = useCallback(
@@ -327,6 +378,12 @@ const CleansingData: React.FC<CleansingDataProps> = ({ project, onUpdateProject 
     setOpenFilterCol(null);
     setFilters({});
     setFilterOptions({});
+    setSearchQuery('');
+    setActiveToolMode('none');
+    setFindText('');
+    setReplaceText('');
+    setTargetCol('all');
+    setQueryVersion((v) => v + 1);
     if (!transformWorker.isSupported) {
       void (async () => {
         const hydrated = await hydrateProjectDataSourceRows(normalizedProject, source.id);
@@ -338,16 +395,25 @@ const CleansingData: React.FC<CleansingDataProps> = ({ project, onUpdateProject 
   const handleFindReplace = async () => {
     if (!findText.trim()) return;
     if (selectedSource && transformWorker.isSupported) {
-      await transformWorker.cleanApplyFindReplace({
-        projectId: normalizedProject.id,
-        sourceId: selectedSource.id,
-        targetCol,
-        findText,
-        replaceText,
-      });
-      const refreshed = await getProjectLight(normalizedProject.id);
-      if (refreshed) onUpdateProject(refreshed);
-      setQueryVersion((v) => v + 1);
+      try {
+        await transformWorker.cleanApplyFindReplace({
+          projectId: normalizedProject.id,
+          sourceId: selectedSource.id,
+          targetCol,
+          findText,
+          replaceText,
+        });
+        const refreshed = await getProjectLight(normalizedProject.id);
+        if (refreshed) onUpdateProject(refreshed);
+        setOpenFilterCol(null);
+        setFilterOptions({});
+        setFilters({});
+        setSearchQuery('');
+        setQueryVersion((v) => v + 1);
+      } catch (e: any) {
+        console.error('[CleansingData] Find & Replace failed:', e);
+        showToast('Apply failed', e?.message || 'Unable to update rows.', 'error');
+      }
       return;
     }
     const colsToSearch = targetCol === 'all' ? workingColumns.map((c) => c.key) : [targetCol];
@@ -362,22 +428,37 @@ const CleansingData: React.FC<CleansingDataProps> = ({ project, onUpdateProject 
       return next;
     });
     await persistSource(newRows, workingColumns);
+    setOpenFilterCol(null);
+    setFilterOptions({});
+    setFilters({});
+    setSearchQuery('');
+    setQueryVersion((v) => v + 1);
   };
 
   const handleDeleteRow = async (index: number) => {
     if (selectedSource && transformWorker.isSupported) {
-      await transformWorker.cleanDeleteRow({
-        projectId: normalizedProject.id,
-        sourceId: selectedSource.id,
-        rowIndex: index,
-      });
-      const refreshed = await getProjectLight(normalizedProject.id);
-      if (refreshed) onUpdateProject(refreshed);
-      setQueryVersion((v) => v + 1);
+      try {
+        await transformWorker.cleanDeleteRow({
+          projectId: normalizedProject.id,
+          sourceId: selectedSource.id,
+          rowIndex: index,
+        });
+        const refreshed = await getProjectLight(normalizedProject.id);
+        if (refreshed) onUpdateProject(refreshed);
+        setOpenFilterCol(null);
+        setFilterOptions({});
+        setQueryVersion((v) => v + 1);
+      } catch (e: any) {
+        console.error('[CleansingData] delete row failed:', e);
+        showToast('Delete failed', e?.message || 'Unable to delete row.', 'error');
+      }
       return;
     }
     const next = workingRows.filter((_, i) => i !== index);
     await persistSource(next, workingColumns);
+    setOpenFilterCol(null);
+    setFilterOptions({});
+    setQueryVersion((v) => v + 1);
   };
 
   const openNameModal = () => {
@@ -546,9 +627,17 @@ const CleansingData: React.FC<CleansingDataProps> = ({ project, onUpdateProject 
           )}
 
           <div className="flex-1 overflow-hidden" onClick={() => setOpenFilterCol(null)}>
-            <div className="h-full overflow-x-auto">
-              <div className="h-full flex flex-col" style={{ width: tableWidth }}>
-                <div className="flex text-xs text-gray-600 uppercase bg-gray-50 border-b border-gray-200 sticky top-0 z-10">
+            <div
+              className="h-full flex flex-col"
+              onWheel={(e) => {
+                if (!scrollBarRef.current) return;
+                if (!e.deltaX) return;
+                scrollBarRef.current.scrollLeft += e.deltaX;
+                scheduleScrollLeftUpdate(scrollBarRef.current.scrollLeft);
+              }}
+            >
+              <div className="flex text-xs text-gray-600 uppercase bg-gray-50 border-b border-gray-200 sticky top-0 z-10 overflow-x-hidden">
+                <div className="flex" style={{ width: tableWidth, transform: `translateX(-${scrollLeft}px)` }}>
                   <div className="px-3 py-3 border-r border-gray-200" style={{ width: ROWNUM_WIDTH }}>
                     #
                   </div>
@@ -598,24 +687,42 @@ const CleansingData: React.FC<CleansingDataProps> = ({ project, onUpdateProject 
                   ))}
                   <div className="px-3 py-3" style={{ width: ACTION_WIDTH }} />
                 </div>
+              </div>
 
-                <div ref={listContainerRef} className="flex-1">
-                  {!hasResultCount ? (
-                    <div className="h-full flex items-center justify-center text-gray-300">
-                      <Loader2 className="w-5 h-5 animate-spin" />
-                    </div>
-                  ) : (
-                    <List
-                      defaultHeight={listHeight}
-                      rowCount={totalRows}
-                      rowHeight={ROW_HEIGHT}
-                      overscanCount={5}
-                      rowComponent={CleansingRow as any}
-                      rowProps={{ columns: workingColumns, pages: pageCache, pageSize: PAGE_SIZE, onDelete: handleDeleteRow }}
-                      onRowsRendered={handleItemsRendered as any}
-                      style={{ height: listHeight, width: tableWidth }}
-                    />
-                  )}
+              <div ref={listContainerRef} className="flex-1 overflow-hidden">
+                {queryError ? (
+                  <div className="h-full flex items-center justify-center text-gray-400 text-sm">
+                    {queryError}
+                  </div>
+                ) : !hasResultCount ? (
+                  <div className="h-full flex items-center justify-center text-gray-300">
+                    <Loader2 className="w-5 h-5 animate-spin" />
+                  </div>
+                ) : totalRows === 0 ? (
+                  <div className="h-full flex items-center justify-center text-gray-400 text-sm">
+                    No records
+                  </div>
+                ) : (
+                  <List
+                    defaultHeight={listHeight}
+                    rowCount={totalRows}
+                    rowHeight={ROW_HEIGHT}
+                    overscanCount={5}
+                    rowComponent={CleansingRow as any}
+                    rowProps={{ columns: workingColumns, pages: pageCache, pageSize: PAGE_SIZE, onDelete: handleDeleteRow, tableWidth, scrollLeft }}
+                    onRowsRendered={handleItemsRendered as any}
+                    style={{ height: listHeight, width: '100%', overflowX: 'hidden' }}
+                  />
+                )}
+              </div>
+
+              <div className="border-t border-gray-100 bg-gray-50">
+                <div
+                  ref={scrollBarRef}
+                  className="h-4 overflow-x-auto overflow-y-hidden"
+                  onScroll={(e) => scheduleScrollLeftUpdate((e.currentTarget as HTMLDivElement).scrollLeft)}
+                >
+                  <div style={{ width: tableWidth, height: 1 }} />
                 </div>
               </div>
             </div>
