@@ -276,7 +276,6 @@ const CleansingData: React.FC<CleansingDataProps> = ({ project, onUpdateProject 
 
   const sourceRowCount =
     typeof selectedSource?.rowCount === 'number' ? selectedSource.rowCount : selectedSource?.rows.length || 0;
-  const isFilteredQuery = Boolean(String(debouncedSearch || '').trim()) || hasActiveFilters;
 
   useEffect(() => {
     if (!openFilterCol || !selectedSource) return;
@@ -476,7 +475,7 @@ const CleansingData: React.FC<CleansingDataProps> = ({ project, onUpdateProject 
               <div className="flex items-center space-x-2 text-gray-900 font-semibold">
                 <span>{selectedSource.name}</span>
                 <span className="text-xs font-medium text-gray-500">
-                  {(isFilteredQuery ? (hasResultCount ? totalRows : 0) : sourceRowCount).toLocaleString()} rows
+                  {(hasResultCount ? totalRows : sourceRowCount).toLocaleString()} rows
                 </span>
               </div>
             </div>
@@ -494,15 +493,6 @@ const CleansingData: React.FC<CleansingDataProps> = ({ project, onUpdateProject 
                 <div className="flex items-center gap-2 px-3 py-2 rounded-lg border border-gray-200 bg-gray-50 text-xs text-gray-700">
                   <Filter className="w-3.5 h-3.5 text-gray-400" />
                   <span>Filters</span>
-                  <button
-                    onClick={() => {
-                      setFilters({});
-                      setQueryVersion((v) => v + 1);
-                    }}
-                    className="text-red-600 hover:text-red-700 font-medium"
-                  >
-                    Clear
-                  </button>
                 </div>
               )}
               <div className="flex bg-gray-100 rounded-lg p-0.5">
@@ -588,9 +578,17 @@ const CleansingData: React.FC<CleansingDataProps> = ({ project, onUpdateProject 
                           column={col.key}
                           data={workingRows}
                           options={filterOptions[col.key]}
-                          activeFilters={filters[col.key] ?? null}
+                          activeFilters={Array.isArray(filters[col.key]) ? (filters[col.key] as string[]) : null}
                           onApply={(selected) => {
-                            setFilters((prev) => ({ ...prev, [col.key]: selected }));
+                            setFilters((prev) => {
+                              const next = { ...prev } as typeof prev;
+                              if (!selected || selected.length === 0) {
+                                delete (next as any)[col.key];
+                                return next;
+                              }
+                              (next as any)[col.key] = selected;
+                              return next;
+                            });
                             setQueryVersion((v) => v + 1);
                           }}
                           onClose={() => setOpenFilterCol(null)}
@@ -602,14 +600,14 @@ const CleansingData: React.FC<CleansingDataProps> = ({ project, onUpdateProject 
                 </div>
 
                 <div ref={listContainerRef} className="flex-1">
-                  {isFilteredQuery && !hasResultCount ? (
+                  {!hasResultCount ? (
                     <div className="h-full flex items-center justify-center text-gray-300">
                       <Loader2 className="w-5 h-5 animate-spin" />
                     </div>
                   ) : (
                     <List
                       defaultHeight={listHeight}
-                      rowCount={isFilteredQuery ? totalRows : sourceRowCount}
+                      rowCount={totalRows}
                       rowHeight={ROW_HEIGHT}
                       overscanCount={5}
                       rowComponent={CleansingRow as any}

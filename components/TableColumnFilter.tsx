@@ -94,12 +94,6 @@ const TableColumnFilter: React.FC<TableColumnFilterProps> = ({
     onClose();
   };
 
-  const clearFilter = () => {
-    onApply(null);
-    setSelectedValues(new Set(uniqueValues));
-    setIsDirty(false);
-  };
-
   return (
     <div 
       className="absolute top-full left-0 mt-1 w-64 bg-white border border-gray-300 shadow-xl rounded-lg z-50 flex flex-col text-gray-800 font-normal animate-in fade-in zoom-in duration-100"
@@ -155,13 +149,7 @@ const TableColumnFilter: React.FC<TableColumnFilterProps> = ({
       </div>
 
       {/* Footer Actions */}
-      <div className="p-3 border-t border-gray-100 flex justify-between items-center bg-gray-50 rounded-b-lg">
-        <button 
-          onClick={clearFilter}
-          className="text-xs text-red-500 hover:text-red-700 font-medium"
-        >
-          Clear
-        </button>
+      <div className="p-3 border-t border-gray-100 flex justify-end items-center bg-gray-50 rounded-b-lg">
         <button 
           onClick={applyFilter}
           className="px-3 py-1.5 bg-blue-600 text-white text-xs font-medium rounded shadow-sm hover:bg-blue-700"

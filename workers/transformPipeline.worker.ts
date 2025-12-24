@@ -295,9 +295,100 @@ const safeGetSourceChunk = async (params: {
 const getSourceStats = (metadata: any, sourceId: string) => {
   const sources = Array.isArray(metadata?.dataSources) ? metadata.dataSources : []
   const src = sources.find((s: any) => s?.id === sourceId)
-  const rowCount = typeof src?.rowCount === 'number' ? src.rowCount : 0
+  const rowCount =
+    typeof src?.rowCount === 'number'
+      ? src.rowCount
+      : Array.isArray(src?.rows)
+        ? src.rows.length
+        : 0
   const chunkCount = typeof src?.chunkCount === 'number' ? src.chunkCount : Math.ceil(rowCount / CHUNK_SIZE)
   return { rowCount, chunkCount, src }
+}
+
+const inferredSourceStatsCache = new Map<string, { version: number; rowCount: number; chunkCount: number }>()
+
+const getSourceVersion = (metadata: any, sourceId: string) => {
+  const sources = Array.isArray(metadata?.dataSources) ? metadata.dataSources : []
+  const src = sources.find((s: any) => s?.id === sourceId)
+  if (typeof src?.updatedAt === 'number') return src.updatedAt
+  if (typeof metadata?.lastModified === 'number') return metadata.lastModified
+  return 0
+}
+
+const inferSourceStatsFromChunks = async (params: {
+  metadata: any
+  projectId: string
+  sourceId: string
+}): Promise<{ rowCount: number; chunkCount: number }> => {
+  const first = await safeGetSourceChunk({
+    metadata: params.metadata,
+    projectId: params.projectId,
+    sourceId: params.sourceId,
+    chunkIndex: 0,
+  })
+  if (!first.length) return { rowCount: 0, chunkCount: 0 }
+
+  let high = 1
+  while (true) {
+    const chunk = await safeGetSourceChunk({
+      metadata: params.metadata,
+      projectId: params.projectId,
+      sourceId: params.sourceId,
+      chunkIndex: high,
+    })
+    if (!chunk.length) break
+    high *= 2
+  }
+
+  let left = Math.floor(high / 2)
+  let right = high - 1
+  let lastIndex = 0
+  let lastSize = first.length
+
+  while (left <= right) {
+    const mid = left + Math.floor((right - left) / 2)
+    const chunk = await safeGetSourceChunk({
+      metadata: params.metadata,
+      projectId: params.projectId,
+      sourceId: params.sourceId,
+      chunkIndex: mid,
+    })
+    if (chunk.length) {
+      lastIndex = mid
+      lastSize = chunk.length
+      left = mid + 1
+    } else {
+      right = mid - 1
+    }
+  }
+
+  const chunkCount = lastIndex + 1
+  const rowCount = lastIndex * CHUNK_SIZE + lastSize
+  return { rowCount, chunkCount }
+}
+
+const resolveSourceStats = async (params: {
+  metadata: any
+  projectId: string
+  sourceId: string
+}): Promise<{ rowCount: number; chunkCount: number; src: any }> => {
+  const { rowCount, chunkCount, src } = getSourceStats(params.metadata, params.sourceId)
+  const version = getSourceVersion(params.metadata, params.sourceId)
+  const cacheKey = `${params.projectId}:${params.sourceId}`
+  const cached = inferredSourceStatsCache.get(cacheKey)
+
+  if (cached && cached.version === version) {
+    return { rowCount: cached.rowCount, chunkCount: cached.chunkCount, src }
+  }
+
+  if (rowCount > 0 || chunkCount > 0) {
+    inferredSourceStatsCache.set(cacheKey, { version, rowCount, chunkCount })
+    return { rowCount, chunkCount, src }
+  }
+
+  const inferred = await inferSourceStatsFromChunks(params)
+  inferredSourceStatsCache.set(cacheKey, { version, ...inferred })
+  return { ...inferred, src }
 }
 
 const collectSourceRows = async (params: {
@@ -308,7 +399,11 @@ const collectSourceRows = async (params: {
   const metadata = await getProjectMetadata(params.projectId)
   if (!metadata) throw new Error('Project not found')
 
-  const { chunkCount } = getSourceStats(metadata, params.sourceId)
+  const { chunkCount } = await resolveSourceStats({
+    metadata,
+    projectId: params.projectId,
+    sourceId: params.sourceId,
+  })
   const maxRows = Math.max(0, params.maxRows || 0)
 
   const rows: RawRow[] = []
@@ -777,7 +872,11 @@ const cleanPreview = async (msg: CleanPreviewMessage): Promise<CleanPreviewRespo
   const metadata = await getProjectMetadata(msg.projectId)
   if (!metadata) throw new Error('Project not found')
 
-  const { rowCount, chunkCount } = getSourceStats(metadata, msg.sourceId)
+  const { rowCount, chunkCount } = await resolveSourceStats({
+    metadata,
+    projectId: msg.projectId,
+    sourceId: msg.sourceId,
+  })
   const limit = Math.max(0, msg.limit || 0)
   const search = String(msg.searchQuery || '').trim().toLowerCase()
 
@@ -835,7 +934,11 @@ const cleanQueryPage = async (msg: CleanQueryPageMessage): Promise<CleanQueryPag
   const metadata = await getProjectMetadata(msg.projectId)
   if (!metadata) throw new Error('Project not found')
 
-  const { rowCount, chunkCount } = getSourceStats(metadata, msg.sourceId)
+  const { rowCount, chunkCount } = await resolveSourceStats({
+    metadata,
+    projectId: msg.projectId,
+    sourceId: msg.sourceId,
+  })
   const pageSize = Math.max(1, msg.pageSize || 1)
   const page = Math.max(0, msg.page || 0)
   const offset = page * pageSize
@@ -943,7 +1046,11 @@ const cleanColumnOptions = async (msg: CleanColumnOptionsMessage): Promise<Clean
   const metadata = await getProjectMetadata(msg.projectId)
   if (!metadata) throw new Error('Project not found')
 
-  const { chunkCount } = getSourceStats(metadata, msg.sourceId)
+  const { chunkCount } = await resolveSourceStats({
+    metadata,
+    projectId: msg.projectId,
+    sourceId: msg.sourceId,
+  })
   const limitRows = Math.max(0, msg.limitRows || 0)
   const limitValues = Math.max(0, msg.limitValues || 0)
 

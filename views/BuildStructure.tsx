@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { Plus, Save, Play, Loader2, Table2, Layers, ChevronUp, ChevronDown, ChevronLeft, X, ArrowRight, Trash2 } from 'lucide-react';
+import { Plus, Save, Play, Loader2, Table2, Sparkles, Layers, ChevronUp, ChevronDown, ChevronLeft, X, ArrowRight, Trash2 } from 'lucide-react';
 import {
   BuildStructureConfig,
   ColumnConfig,
@@ -28,6 +28,74 @@ interface BuildStructureProps {
   project: Project;
   onUpdateProject: (p: Project) => void;
 }
+
+const TableSourceMultiSelect: React.FC<{
+  ingestionSources: DataSource[];
+  preparedSources: DataSource[];
+  selectedSourceIds: string[];
+  onToggle: (id: string, checked: boolean) => void;
+}> = ({ ingestionSources, preparedSources, selectedSourceIds, onToggle }) => {
+  const renderCard = (src: DataSource, kind: 'ingestion' | 'prepared') => {
+    const checked = selectedSourceIds.includes(src.id);
+    const rowCount = typeof src.rowCount === 'number' ? src.rowCount : src.rows.length;
+    const Icon = kind === 'ingestion' ? Table2 : Sparkles;
+    const iconClass = kind === 'ingestion' ? 'bg-blue-100 text-blue-600' : 'bg-purple-100 text-purple-600';
+    const borderClass = checked
+      ? kind === 'ingestion'
+        ? 'border-indigo-500 bg-indigo-50 ring-1 ring-indigo-500'
+        : 'border-purple-500 bg-purple-50 ring-1 ring-purple-500'
+      : 'border-gray-200 hover:border-gray-300 bg-white';
+
+    return (
+      <label key={src.id} className={`flex items-start p-3 rounded-lg border text-left transition-all hover:shadow-md cursor-pointer ${borderClass}`}>
+        <div className={`p-2 rounded-lg mr-3 ${iconClass}`}>
+          <Icon className="w-5 h-5" />
+        </div>
+        <div className="flex-1 min-w-0">
+          <div className="font-medium text-gray-900 text-sm truncate">{src.name}</div>
+          <div className="text-xs text-gray-500 mt-1">{rowCount.toLocaleString()} rows</div>
+          <div className="text-[10px] text-gray-400 mt-1">Updated: {new Date(src.updatedAt).toLocaleDateString()}</div>
+        </div>
+        <input
+          type="checkbox"
+          checked={checked}
+          onChange={(e) => onToggle(src.id, e.target.checked)}
+          className="mt-1 h-4 w-4 text-blue-600 border-gray-300 rounded"
+        />
+      </label>
+    );
+  };
+
+  return (
+    <div className="flex-1 overflow-y-auto p-4 space-y-6">
+      <div>
+        <h4 className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-3">Ingestion Data</h4>
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          {ingestionSources.length === 0 ? (
+            <div className="col-span-full text-center py-4 text-gray-400 text-sm bg-gray-50 rounded-lg border border-dashed border-gray-200">
+              No ingestion data
+            </div>
+          ) : (
+            ingestionSources.map((src) => renderCard(src, 'ingestion'))
+          )}
+        </div>
+      </div>
+
+      <div>
+        <h4 className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-3">Prepared Data</h4>
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          {preparedSources.length === 0 ? (
+            <div className="col-span-full text-center py-4 text-gray-400 text-sm bg-gray-50 rounded-lg border border-dashed border-gray-200">
+              No prepared data
+            </div>
+          ) : (
+            preparedSources.map((src) => renderCard(src, 'prepared'))
+          )}
+        </div>
+      </div>
+    </div>
+  );
+};
 
 const BuildStructure: React.FC<BuildStructureProps> = ({ project, onUpdateProject }) => {
   const needsNormalization = !project.dataSources?.length || !project.activeDataSourceId;
@@ -962,39 +1030,22 @@ const BuildStructure: React.FC<BuildStructureProps> = ({ project, onUpdateProjec
 
       {showSourcePicker && (
         <div className="fixed inset-0 bg-black/30 flex items-center justify-center z-30">
-          <div className="bg-white rounded-xl shadow-2xl w-full max-w-2xl p-6 space-y-4">
-            <div className="flex items-center justify-between">
-              <h3 className="text-lg font-semibold text-gray-900">Choose tables for Build Structure</h3>
-              <button onClick={() => setShowSourcePicker(false)} className="text-gray-400 hover:text-gray-600">×</button>
+          <div className="bg-white rounded-xl shadow-2xl w-full max-w-2xl max-h-[80vh] flex flex-col">
+            <div className="p-4 border-b border-gray-100 flex justify-between items-center">
+              <h3 className="font-bold text-lg text-gray-800">Select Tables</h3>
+              <button onClick={() => setShowSourcePicker(false)} className="p-1 hover:bg-gray-100 rounded-full">
+                <X className="w-5 h-5 text-gray-500" />
+              </button>
             </div>
-            <div className="grid grid-cols-2 gap-3 max-h-96 overflow-y-auto pr-1">
-              {allSources.map((src) => {
-                const checked = selectedSources.includes(src.id);
-                return (
-                  <label
-                    key={src.id}
-                    className={`border rounded-lg px-4 py-3 cursor-pointer transition ${
-                      checked ? 'border-blue-500 bg-blue-50' : 'border-gray-200 hover:border-gray-300'
-                    }`}
-                  >
-                    <div className="flex items-center justify-between">
-                      <div>
-                        <p className="font-medium text-gray-900">{src.name}</p>
-                        <p className="text-xs text-gray-500">{src.kind === 'ingestion' ? 'Ingestion' : 'Preparation'} data</p>
-                      </div>
-                      <input
-                        type="checkbox"
-                        checked={checked}
-                        onChange={(e) => handleSourceToggle(src.id, e.target.checked)}
-                        className="h-4 w-4 text-blue-600 border-gray-300 rounded"
-                      />
-                    </div>
-                  </label>
-                );
-              })}
-              {allSources.length === 0 && <p className="text-sm text-gray-500">No tables</p>}
-            </div>
-            <div className="flex justify-end space-x-3">
+
+            <TableSourceMultiSelect
+              ingestionSources={ingestionSources}
+              preparedSources={preparedSources}
+              selectedSourceIds={selectedSources}
+              onToggle={handleSourceToggle}
+            />
+
+            <div className="p-4 border-t border-gray-100 flex justify-end space-x-3">
               <button onClick={() => setShowSourcePicker(false)} className="px-4 py-2 text-sm text-gray-600 rounded-lg hover:bg-gray-50">
                 Cancel
               </button>
@@ -1033,32 +1084,13 @@ const BuildStructure: React.FC<BuildStructureProps> = ({ project, onUpdateProjec
               </div>
               <div className="space-y-2">
                 <p className="text-sm font-medium text-gray-700">Tables</p>
-                <div className="grid grid-cols-2 gap-3 max-h-64 overflow-y-auto">
-                  {allSources.map((src) => {
-                    const checked = selectedSources.includes(src.id);
-                    return (
-                      <label
-                        key={src.id}
-                        className={`border rounded-lg px-4 py-3 cursor-pointer transition ${
-                          checked ? 'border-blue-500 bg-blue-50' : 'border-gray-200 hover:border-gray-300'
-                        }`}
-                      >
-                        <div className="flex items-center justify-between">
-                          <div>
-                            <p className="font-medium text-gray-900">{src.name}</p>
-                            <p className="text-xs text-gray-500">{src.kind === 'ingestion' ? 'Ingestion' : 'Preparation'} data</p>
-                          </div>
-                          <input
-                            type="checkbox"
-                            checked={checked}
-                            onChange={(e) => handleSourceToggle(src.id, e.target.checked)}
-                            className="h-4 w-4 text-blue-600 border-gray-300 rounded"
-                          />
-                        </div>
-                      </label>
-                    );
-                  })}
-                  {allSources.length === 0 && <p className="text-sm text-gray-500">No tables</p>}
+                <div className="border border-gray-200 rounded-xl overflow-hidden bg-white max-h-[420px]">
+                  <TableSourceMultiSelect
+                    ingestionSources={ingestionSources}
+                    preparedSources={preparedSources}
+                    selectedSourceIds={selectedSources}
+                    onToggle={handleSourceToggle}
+                  />
                 </div>
               </div>
             </div>

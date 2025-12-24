@@ -18,7 +18,7 @@
  * 5. Double-click colors
  */
 
-import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useLayoutEffect, useMemo, useCallback, useRef } from 'react';
 import { X, Save, ChevronDown, ChevronUp, Palette, Type as TypeIcon, Sliders as SlidersIcon, Plus, Trash2, Edit as EditIcon, Search } from 'lucide-react';
 import {
   ChartType,
@@ -557,8 +557,16 @@ const [sortSeriesId, setSortSeriesId] = useState('');
   }, [availableColumns]);
 
   // Initialize
-  useEffect(() => {
-    if (!isOpen) return;
+  const initKeyRef = useRef<string | null>(null);
+  useLayoutEffect(() => {
+    if (!isOpen) {
+      initKeyRef.current = null;
+      return;
+    }
+
+    const initKey = initialWidget?.id || '__new__';
+    if (initKeyRef.current === initKey) return;
+    initKeyRef.current = initKey;
 
     if (initialWidget) {
       setShowTypeSelector(false);
@@ -653,10 +661,11 @@ const [sortSeriesId, setSortSeriesId] = useState('');
       } else {
         setValueFormat('number');
       }
-    } else {
-      resetBuilderState();
+      return;
     }
-  }, [isOpen, initialWidget, availableColumns, resetBuilderState]);
+
+    resetBuilderState();
+  }, [isOpen, initialWidget?.id, resetBuilderState, columnProfiles]);
 
   // Sorting function (must be declared before useMemo that uses it)
   const applySorting = (data: any[], order: SortOrder, valueKey: string) => {
