@@ -91,6 +91,17 @@ type CleanPreviewMessage = {
   filters?: Record<string, string[] | null>
 }
 
+type CleanQueryPageMessage = {
+  type: 'cleanQueryPage'
+  requestId: string
+  projectId: string
+  sourceId: string
+  searchQuery: string
+  page: number
+  pageSize: number
+  filters?: Record<string, string[] | null>
+}
+
 type CleanApplyFindReplaceMessage = {
   type: 'cleanApplyFindReplace'
   requestId: string
@@ -163,6 +174,7 @@ type WorkerMessage =
   | AnalyzeColumnMessage
   | UniqueValuesMessage
   | CleanPreviewMessage
+  | CleanQueryPageMessage
   | CleanApplyFindReplaceMessage
   | CleanApplyTransformDateMessage
   | CleanApplyExplodeMessage
@@ -208,6 +220,14 @@ type UniqueValuesResponse = {
 
 type CleanPreviewResponse = {
   type: 'cleanPreview'
+  requestId: string
+  rows: RawRow[]
+  rowIndices: number[]
+  totalRows: number
+}
+
+type CleanQueryPageResponse = {
+  type: 'cleanQueryPage'
   requestId: string
   rows: RawRow[]
   rowIndices: number[]
@@ -811,6 +831,114 @@ const cleanPreview = async (msg: CleanPreviewMessage): Promise<CleanPreviewRespo
   }
 }
 
+const cleanQueryPage = async (msg: CleanQueryPageMessage): Promise<CleanQueryPageResponse> => {
+  const metadata = await getProjectMetadata(msg.projectId)
+  if (!metadata) throw new Error('Project not found')
+
+  const { rowCount, chunkCount } = getSourceStats(metadata, msg.sourceId)
+  const pageSize = Math.max(1, msg.pageSize || 1)
+  const page = Math.max(0, msg.page || 0)
+  const offset = page * pageSize
+  const end = offset + pageSize
+  const search = String(msg.searchQuery || '').trim().toLowerCase()
+
+  const rows: RawRow[] = []
+  const rowIndices: number[] = []
+  const filters = msg.filters && typeof msg.filters === 'object' ? msg.filters : {}
+  const filterEntries = Object.entries(filters).filter(([, v]) => Array.isArray(v) && v.length > 0) as Array<
+    [string, string[]]
+  >
+
+  if (!search && filterEntries.length === 0) {
+    const startRow = offset
+    const endRow = Math.min(end, rowCount)
+
+    if (startRow >= rowCount) {
+      return {
+        type: 'cleanQueryPage',
+        requestId: msg.requestId,
+        rows: [],
+        rowIndices: [],
+        totalRows: rowCount,
+      }
+    }
+
+    const startChunk = Math.floor(startRow / CHUNK_SIZE)
+    const endChunk = Math.ceil(endRow / CHUNK_SIZE)
+
+    const buffer: RawRow[] = []
+    for (let i = startChunk; i < endChunk && i < chunkCount; i++) {
+      const chunk = await safeGetSourceChunk({
+        metadata,
+        projectId: msg.projectId,
+        sourceId: msg.sourceId,
+        chunkIndex: i,
+      })
+      buffer.push(...chunk)
+    }
+
+    const offsetInFirstChunk = startRow % CHUNK_SIZE
+    const rows = buffer.slice(offsetInFirstChunk, offsetInFirstChunk + pageSize)
+    const rowIndices = rows.map((_, idx) => startRow + idx)
+
+    return {
+      type: 'cleanQueryPage',
+      requestId: msg.requestId,
+      rows,
+      rowIndices,
+      totalRows: rowCount,
+    }
+  }
+
+  let matched = 0
+
+  for (let i = 0; i < chunkCount; i++) {
+    const chunk = await safeGetSourceChunk({
+      metadata,
+      projectId: msg.projectId,
+      sourceId: msg.sourceId,
+      chunkIndex: i,
+    })
+    if (!chunk.length) continue
+
+    for (let j = 0; j < chunk.length; j++) {
+      const row = chunk[j]
+
+      if (filterEntries.length) {
+        let ok = true
+        for (const [col, allowed] of filterEntries) {
+          const raw = (row as any)[col]
+          const strVal = raw === null || raw === undefined || raw === '' ? '(Blank)' : String(raw)
+          if (!allowed.includes(strVal)) {
+            ok = false
+            break
+          }
+        }
+        if (!ok) continue
+      }
+
+      const match =
+        !search ||
+        Object.values(row).some((v) => String(v ?? '').toLowerCase().includes(search))
+      if (!match) continue
+
+      if (matched >= offset && matched < end) {
+        rows.push(row)
+        rowIndices.push(i * CHUNK_SIZE + j)
+      }
+      matched += 1
+    }
+  }
+
+  return {
+    type: 'cleanQueryPage',
+    requestId: msg.requestId,
+    rows,
+    rowIndices,
+    totalRows: matched,
+  }
+}
+
 const cleanColumnOptions = async (msg: CleanColumnOptionsMessage): Promise<CleanColumnOptionsResponse> => {
   const metadata = await getProjectMetadata(msg.projectId)
   if (!metadata) throw new Error('Project not found')
@@ -1174,6 +1302,11 @@ self.onmessage = (event: MessageEvent<WorkerMessage>) => {
       if (msg.type === 'cleanPreview') {
         const resp = await cleanPreview(msg)
         self.postMessage(resp satisfies CleanPreviewResponse)
+        return
+      }
+      if (msg.type === 'cleanQueryPage') {
+        const resp = await cleanQueryPage(msg)
+        self.postMessage(resp satisfies CleanQueryPageResponse)
         return
       }
       if (msg.type === 'cleanApplyFindReplace') {

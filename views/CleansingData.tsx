@@ -1,5 +1,6 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { Plus, Save, Loader2, Search, Eraser, Trash2, Filter } from 'lucide-react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { List } from 'react-window';
+import { Plus, Save, Loader2, Search, Eraser, Trash2, Filter, X, Table2, Sparkles } from 'lucide-react';
 import { ColumnConfig, DataSource, Project, RawRow } from '../types';
 import {
   ensureDataSources,
@@ -17,6 +18,74 @@ interface CleansingDataProps {
   project: Project;
   onUpdateProject: (p: Project) => void;
 }
+
+const ROW_HEIGHT = 40;
+const PAGE_SIZE = 200;
+const COL_WIDTH = 220;
+const ROWNUM_WIDTH = 56;
+const ACTION_WIDTH = 56;
+
+type PageEntry = { rows: RawRow[]; rowIndices: number[] };
+
+const renderCellValue = (val: any) => {
+  if (val === null || val === undefined) return '';
+  if (typeof val === 'object') return JSON.stringify(val);
+  return String(val);
+};
+
+const CleansingRow = React.memo(function CleansingRow(props: any) {
+  const { index, style, columns, pages, pageSize, onDelete } = props as {
+    index: number;
+    style: React.CSSProperties;
+    columns: ColumnConfig[];
+    pages: Record<number, PageEntry>;
+    pageSize: number;
+    onDelete: (rowIndex: number) => void;
+  };
+
+  const page = Math.floor(index / pageSize);
+  const offset = index % pageSize;
+  const entry = pages[page];
+  const row = entry?.rows?.[offset];
+  const rowIndex = entry?.rowIndices?.[offset];
+
+  return (
+    <div
+      style={style}
+      className="flex items-center border-b border-gray-100 bg-white hover:bg-gray-50 text-sm text-gray-700"
+    >
+      <div className="flex-shrink-0 px-3 text-xs font-mono text-gray-400" style={{ width: ROWNUM_WIDTH }}>
+        {typeof rowIndex === 'number' ? rowIndex + 1 : ''}
+      </div>
+      {columns.map((col) => {
+        const v = row ? (row as any)[col.key] : '';
+        const rendered = row ? renderCellValue(v) : '';
+        return (
+          <div
+            key={col.key}
+            className="px-3 truncate"
+            style={{ width: COL_WIDTH }}
+            title={rendered}
+          >
+            {rendered}
+          </div>
+        );
+      })}
+      <div className="flex-shrink-0 flex items-center justify-center" style={{ width: ACTION_WIDTH }}>
+        <button
+          onClick={() => {
+            if (typeof rowIndex === 'number') onDelete(rowIndex);
+          }}
+          disabled={typeof rowIndex !== 'number'}
+          className="text-gray-300 hover:text-red-500 disabled:opacity-40"
+          aria-label="Delete row"
+        >
+          <Trash2 className="w-4 h-4" />
+        </button>
+      </div>
+    </div>
+  );
+});
 
 const CleansingData: React.FC<CleansingDataProps> = ({ project, onUpdateProject }) => {
   const needsNormalization = !project.dataSources?.length || !project.activeDataSourceId;
@@ -65,45 +134,70 @@ const CleansingData: React.FC<CleansingDataProps> = ({ project, onUpdateProject 
   const workingRows = selectedSource?.rows || [];
   const workingColumns = selectedSource?.columns || [];
 
-  const [previewRows, setPreviewRows] = useState<RawRow[]>([]);
-  const [previewRowIndices, setPreviewRowIndices] = useState<number[]>([]);
-  const [previewVersion, setPreviewVersion] = useState(0);
-  const previewReqRef = useRef(0);
-
+  const [queryVersion, setQueryVersion] = useState(0);
+  const [debouncedSearch, setDebouncedSearch] = useState('');
   useEffect(() => {
-    if (!selectedSource) {
-      setPreviewRows([]);
-      setPreviewRowIndices([]);
-      return;
-    }
+    const t = setTimeout(() => setDebouncedSearch(searchQuery), 250);
+    return () => clearTimeout(t);
+  }, [searchQuery]);
 
-    const reqId = (previewReqRef.current += 1);
-    const run = async () => {
+  const hasActiveFilters = Object.values(filters).some((v) => Array.isArray(v) && v.length > 0);
+
+  const [totalRows, setTotalRows] = useState(0);
+  const [hasResultCount, setHasResultCount] = useState(false);
+  const [pageCache, setPageCache] = useState<Record<number, { rows: RawRow[]; rowIndices: number[] }>>({});
+  const pageCacheRef = useRef<Record<number, { rows: RawRow[]; rowIndices: number[] }>>({});
+  useEffect(() => {
+    pageCacheRef.current = pageCache;
+  }, [pageCache]);
+
+  const queryReqRef = useRef(0);
+  const loadingPagesRef = useRef<Set<number>>(new Set());
+
+  const queryKey = useMemo(() => {
+    return JSON.stringify({
+      sourceId: selectedSource?.id ?? null,
+      q: String(debouncedSearch || '').trim(),
+      filters,
+      v: queryVersion,
+    });
+  }, [selectedSource?.id, debouncedSearch, filters, queryVersion]);
+
+  const loadPage = useCallback(
+    async (page: number) => {
+      if (!selectedSource) return;
+      if (pageCacheRef.current[page]) return;
+      if (loadingPagesRef.current.has(page)) return;
+
+      loadingPagesRef.current.add(page);
+      const reqId = queryReqRef.current;
+
       try {
         if (transformWorker.isSupported) {
-          const resp = await transformWorker.cleanPreview({
+          const resp = await transformWorker.cleanQueryPage({
             projectId: normalizedProject.id,
             sourceId: selectedSource.id,
-            searchQuery,
-            limit: 50,
+            searchQuery: debouncedSearch,
+            page,
+            pageSize: PAGE_SIZE,
             filters,
           });
-          if (reqId !== previewReqRef.current) return;
-          setPreviewRows(resp.rows);
-          setPreviewRowIndices(resp.rowIndices);
+          if (reqId !== queryReqRef.current) return;
+          setTotalRows(resp.totalRows);
+          setHasResultCount(true);
+          setPageCache((prev) => ({ ...prev, [page]: { rows: resp.rows, rowIndices: resp.rowIndices } }));
           return;
         }
 
-        const q = searchQuery.trim().toLowerCase();
+        const q = String(debouncedSearch || '').trim().toLowerCase();
         const activeFilters = Object.entries(filters).filter(([, v]) => Array.isArray(v) && v.length > 0) as Array<
           [string, string[]]
         >;
-        const rows: RawRow[] = [];
-        const indices: number[] = [];
-        for (let i = 0; i < workingRows.length && rows.length < 50; i++) {
+
+        const allRowIndices: number[] = [];
+        for (let i = 0; i < workingRows.length; i++) {
           const row = workingRows[i];
-          const match =
-            !q || Object.values(row).some((val) => String(val ?? '').toLowerCase().includes(q));
+          const match = !q || Object.values(row).some((val) => String(val ?? '').toLowerCase().includes(q));
           if (!match) continue;
 
           if (activeFilters.length > 0) {
@@ -118,35 +212,71 @@ const CleansingData: React.FC<CleansingDataProps> = ({ project, onUpdateProject 
             }
             if (!ok) continue;
           }
-          rows.push(row);
-          indices.push(i);
+
+          allRowIndices.push(i);
         }
-        if (reqId !== previewReqRef.current) return;
-        setPreviewRows(rows);
-        setPreviewRowIndices(indices);
+
+        const start = page * PAGE_SIZE;
+        const slice = allRowIndices.slice(start, start + PAGE_SIZE);
+        const rows = slice.map((idx) => workingRows[idx]);
+        setTotalRows(allRowIndices.length);
+        setHasResultCount(true);
+        setPageCache((prev) => ({ ...prev, [page]: { rows, rowIndices: slice } }));
       } catch (e) {
-        if (reqId !== previewReqRef.current) return;
-        console.error('[CleansingData] preview failed:', e);
-        setPreviewRows([]);
-        setPreviewRowIndices([]);
+        if (reqId !== queryReqRef.current) return;
+        console.error('[CleansingData] query page failed:', e);
+        setTotalRows(0);
+        setPageCache({});
+      } finally {
+        loadingPagesRef.current.delete(page);
       }
+    },
+    [selectedSource, transformWorker.isSupported, transformWorker.cleanQueryPage, normalizedProject.id, debouncedSearch, filters, workingRows]
+  );
+
+  useEffect(() => {
+    queryReqRef.current += 1;
+    loadingPagesRef.current.clear();
+    setPageCache({});
+    setTotalRows(0);
+    setHasResultCount(false);
+    if (!selectedSource) return;
+    void loadPage(0);
+  }, [queryKey, selectedSource?.id, loadPage]);
+
+  const tableWidth = useMemo(() => ROWNUM_WIDTH + workingColumns.length * COL_WIDTH + ACTION_WIDTH, [workingColumns.length]);
+  const [listHeight, setListHeight] = useState(520);
+  const listContainerRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    const node = listContainerRef.current;
+    if (!node) return;
+
+    const apply = () => {
+      const next = node.clientHeight || 520;
+      setListHeight(next);
     };
 
-    void run();
-  }, [
-    selectedSource?.id,
-    searchQuery,
-    filters,
-    previewVersion,
-    normalizedProject.id,
-    transformWorker.isSupported,
-    transformWorker.cleanPreview,
-    workingRows,
-    selectedSource,
-  ]);
+    apply();
+    const ro = new ResizeObserver(() => apply());
+    ro.observe(node);
+    return () => ro.disconnect();
+  }, [selectedSource?.id]);
 
-  const displayRows = previewRows;
-  const hasActiveFilters = Object.values(filters).some((v) => Array.isArray(v) && v.length > 0);
+  const handleItemsRendered = useCallback(
+    (_visible: { startIndex: number; stopIndex: number }, all: { startIndex: number; stopIndex: number }) => {
+      const startPage = Math.floor((all?.startIndex ?? 0) / PAGE_SIZE);
+      const endPage = Math.floor((all?.stopIndex ?? 0) / PAGE_SIZE);
+      for (let p = startPage; p <= endPage; p++) {
+        void loadPage(p);
+      }
+    },
+    [loadPage]
+  );
+
+  const sourceRowCount =
+    typeof selectedSource?.rowCount === 'number' ? selectedSource.rowCount : selectedSource?.rows.length || 0;
+  const isFilteredQuery = Boolean(String(debouncedSearch || '').trim()) || hasActiveFilters;
 
   useEffect(() => {
     if (!openFilterCol || !selectedSource) return;
@@ -218,7 +348,7 @@ const CleansingData: React.FC<CleansingDataProps> = ({ project, onUpdateProject 
       });
       const refreshed = await getProjectLight(normalizedProject.id);
       if (refreshed) onUpdateProject(refreshed);
-      setPreviewVersion((v) => v + 1);
+      setQueryVersion((v) => v + 1);
       return;
     }
     const colsToSearch = targetCol === 'all' ? workingColumns.map((c) => c.key) : [targetCol];
@@ -244,7 +374,7 @@ const CleansingData: React.FC<CleansingDataProps> = ({ project, onUpdateProject 
       });
       const refreshed = await getProjectLight(normalizedProject.id);
       if (refreshed) onUpdateProject(refreshed);
-      setPreviewVersion((v) => v + 1);
+      setQueryVersion((v) => v + 1);
       return;
     }
     const next = workingRows.filter((_, i) => i !== index);
@@ -346,7 +476,7 @@ const CleansingData: React.FC<CleansingDataProps> = ({ project, onUpdateProject 
               <div className="flex items-center space-x-2 text-gray-900 font-semibold">
                 <span>{selectedSource.name}</span>
                 <span className="text-xs font-medium text-gray-500">
-                  {(typeof selectedSource.rowCount === 'number' ? selectedSource.rowCount : selectedSource.rows.length).toLocaleString()} rows
+                  {(isFilteredQuery ? (hasResultCount ? totalRows : 0) : sourceRowCount).toLocaleString()} rows
                 </span>
               </div>
             </div>
@@ -367,7 +497,7 @@ const CleansingData: React.FC<CleansingDataProps> = ({ project, onUpdateProject 
                   <button
                     onClick={() => {
                       setFilters({});
-                      setPreviewVersion((v) => v + 1);
+                      setQueryVersion((v) => v + 1);
                     }}
                     className="text-red-600 hover:text-red-700 font-medium"
                   >
@@ -425,33 +555,34 @@ const CleansingData: React.FC<CleansingDataProps> = ({ project, onUpdateProject 
             </div>
           )}
 
-          <div className="flex-1 overflow-auto" onClick={() => setOpenFilterCol(null)}>
-            <table className="w-full text-sm text-left text-gray-700">
-              <thead className="text-xs text-gray-600 uppercase bg-gray-50 sticky top-0 z-10">
-                <tr>
-                  <th className="px-4 py-3 w-10 border-b border-gray-200">#</th>
+          <div className="flex-1 overflow-hidden" onClick={() => setOpenFilterCol(null)}>
+            <div className="h-full overflow-x-auto">
+              <div className="h-full flex flex-col" style={{ width: tableWidth }}>
+                <div className="flex text-xs text-gray-600 uppercase bg-gray-50 border-b border-gray-200 sticky top-0 z-10">
+                  <div className="px-3 py-3 border-r border-gray-200" style={{ width: ROWNUM_WIDTH }}>
+                    #
+                  </div>
                   {workingColumns.map((col) => (
-                    <th
+                    <div
                       key={col.key}
-                      className="px-6 py-3 border-b border-gray-200 font-semibold whitespace-nowrap min-w-[140px] relative"
+                      className="px-3 py-3 border-r border-gray-200 font-semibold whitespace-nowrap relative flex items-center justify-between gap-2"
+                      style={{ width: COL_WIDTH }}
                     >
-                      <div className="flex items-center justify-between">
-                        <span>{col.key}</span>
-                        <button
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            setOpenFilterCol((prev) => (prev === col.key ? null : col.key));
-                          }}
-                          className={`p-1 rounded hover:bg-gray-100 ${
-                            Array.isArray(filters[col.key]) && (filters[col.key] || []).length > 0
-                              ? 'text-blue-600'
-                              : 'text-gray-400 hover:text-gray-600'
-                          }`}
-                          aria-label={`Filter ${col.key}`}
-                        >
-                          <Filter className="w-3.5 h-3.5" />
-                        </button>
-                      </div>
+                      <span className="truncate">{col.key}</span>
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setOpenFilterCol((prev) => (prev === col.key ? null : col.key));
+                        }}
+                        className={`p-1 rounded hover:bg-gray-100 ${
+                          Array.isArray(filters[col.key]) && (filters[col.key] || []).length > 0
+                            ? 'text-blue-600'
+                            : 'text-gray-400 hover:text-gray-600'
+                        }`}
+                        aria-label={`Filter ${col.key}`}
+                      >
+                        <Filter className="w-3.5 h-3.5" />
+                      </button>
                       {openFilterCol === col.key && (
                         <TableColumnFilter
                           column={col.key}
@@ -460,79 +591,118 @@ const CleansingData: React.FC<CleansingDataProps> = ({ project, onUpdateProject 
                           activeFilters={filters[col.key] ?? null}
                           onApply={(selected) => {
                             setFilters((prev) => ({ ...prev, [col.key]: selected }));
-                            setPreviewVersion((v) => v + 1);
+                            setQueryVersion((v) => v + 1);
                           }}
                           onClose={() => setOpenFilterCol(null)}
                         />
                       )}
-                    </th>
+                    </div>
                   ))}
-                  <th className="px-4 py-3 border-b border-gray-200 w-10"></th>
-                </tr>
-              </thead>
-              <tbody>
-                {displayRows.map((row, idx) => (
-                  <tr key={idx} className="border-b border-gray-100 hover:bg-gray-50">
-                    <td className="px-4 py-3 text-xs font-mono text-gray-400">{idx + 1}</td>
-                    {workingColumns.map((col) => (
-                      <td key={col.key} className="px-6 py-3 truncate max-w-xs" title={String(row[col.key])}>
-                        {typeof row[col.key] === 'object' && row[col.key] !== null
-                          ? JSON.stringify(row[col.key])
-                          : row[col.key] ?? ''}
-                      </td>
-                    ))}
-                    <td className="px-4 py-3 text-center">
-                      <button
-                        onClick={() => handleDeleteRow(previewRowIndices[idx] ?? idx)}
-                        className="text-gray-300 hover:text-red-500"
-                      >
-                        <Trash2 className="w-4 h-4" />
-                      </button>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+                  <div className="px-3 py-3" style={{ width: ACTION_WIDTH }} />
+                </div>
+
+                <div ref={listContainerRef} className="flex-1">
+                  {isFilteredQuery && !hasResultCount ? (
+                    <div className="h-full flex items-center justify-center text-gray-300">
+                      <Loader2 className="w-5 h-5 animate-spin" />
+                    </div>
+                  ) : (
+                    <List
+                      defaultHeight={listHeight}
+                      rowCount={isFilteredQuery ? totalRows : sourceRowCount}
+                      rowHeight={ROW_HEIGHT}
+                      overscanCount={5}
+                      rowComponent={CleansingRow as any}
+                      rowProps={{ columns: workingColumns, pages: pageCache, pageSize: PAGE_SIZE, onDelete: handleDeleteRow }}
+                      onRowsRendered={handleItemsRendered as any}
+                      style={{ height: listHeight, width: tableWidth }}
+                    />
+                  )}
+                </div>
+              </div>
+            </div>
           </div>
         </div>
       )}
 
       {showPicker && (
-        <div className="fixed inset-0 bg-black/30 flex items-center justify-center z-30">
-          <div className="bg-white rounded-xl shadow-2xl w-full max-w-lg p-6 space-y-4">
-            <div className="flex items-center justify-between">
-              <h3 className="text-lg font-semibold text-gray-900">Select a source table</h3>
-              <button onClick={() => setShowPicker(false)} className="text-gray-400 hover:text-gray-600">×</button>
-            </div>
-            <div className="space-y-3 max-h-80 overflow-y-auto pr-1">
-              {allSources.map((src) => (
-                <button
-                  key={src.id}
-                  onClick={() => handleSelect(src)}
-                  className={`w-full border rounded-lg px-4 py-3 text-left transition ${
-                    selectedSourceId === src.id ? 'border-blue-500 bg-blue-50' : 'border-gray-200 hover:border-gray-300'
-                  }`}
-                >
-                  <div className="flex items-center justify-between">
-                    <div>
-                      <p className="font-medium text-gray-900">{src.name}</p>
-                      <p className="text-xs text-gray-500">{src.kind === 'ingestion' ? 'Ingestion' : 'Preparation'} data</p>
-                    </div>
-                    <span className="text-xs text-gray-500">
-                      {(typeof src.rowCount === 'number' ? src.rowCount : src.rows.length).toLocaleString()} rows
-                    </span>
-                  </div>
-                </button>
-              ))}
-              {allSources.length === 0 && <p className="text-sm text-gray-500">No tables</p>}
-            </div>
-            <div className="flex justify-end space-x-3">
-              <button
-                onClick={() => setShowPicker(false)}
-                className="px-4 py-2 text-sm text-gray-600 rounded-lg hover:bg-gray-50"
-              >
-                Cancel
+        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-xl shadow-2xl w-full max-w-2xl max-h-[80vh] flex flex-col">
+            <div className="p-4 border-b border-gray-100 flex justify-between items-center">
+              <h3 className="font-bold text-lg text-gray-800">Select Data Source</h3>
+              <button onClick={() => setShowPicker(false)} className="p-1 hover:bg-gray-100 rounded-full">
+                <X className="w-5 h-5 text-gray-500" />
               </button>
+            </div>
+
+            <div className="flex-1 overflow-y-auto p-4 space-y-6">
+              <div>
+                <h4 className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-3">Ingestion Data</h4>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  {ingestionSources.length === 0 ? (
+                    <div className="col-span-full text-center py-4 text-gray-400 text-sm bg-gray-50 rounded-lg border border-dashed border-gray-200">
+                      No ingestion data
+                    </div>
+                  ) : (
+                    ingestionSources.map((src) => (
+                      <button
+                        key={src.id}
+                        onClick={() => handleSelect(src)}
+                        className={`flex items-start p-3 rounded-lg border text-left transition-all hover:shadow-md ${
+                          selectedSourceId === src.id
+                            ? 'border-indigo-500 bg-indigo-50 ring-1 ring-indigo-500'
+                            : 'border-gray-200 hover:border-indigo-300 bg-white'
+                        }`}
+                      >
+                        <div className="p-2 bg-blue-100 text-blue-600 rounded-lg mr-3">
+                          <Table2 className="w-5 h-5" />
+                        </div>
+                        <div>
+                          <div className="font-medium text-gray-900 text-sm">{src.name}</div>
+                          <div className="text-xs text-gray-500 mt-1">
+                            {(typeof src.rowCount === 'number' ? src.rowCount : src.rows.length).toLocaleString()} rows
+                          </div>
+                          <div className="text-[10px] text-gray-400 mt-1">Updated: {new Date(src.updatedAt).toLocaleDateString()}</div>
+                        </div>
+                      </button>
+                    ))
+                  )}
+                </div>
+              </div>
+
+              <div>
+                <h4 className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-3">Prepared Data</h4>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  {preparedSources.length === 0 ? (
+                    <div className="col-span-full text-center py-4 text-gray-400 text-sm bg-gray-50 rounded-lg border border-dashed border-gray-200">
+                      No prepared data
+                    </div>
+                  ) : (
+                    preparedSources.map((src) => (
+                      <button
+                        key={src.id}
+                        onClick={() => handleSelect(src)}
+                        className={`flex items-start p-3 rounded-lg border text-left transition-all hover:shadow-md ${
+                          selectedSourceId === src.id
+                            ? 'border-indigo-500 bg-indigo-50 ring-1 ring-indigo-500'
+                            : 'border-gray-200 hover:border-indigo-300 bg-white'
+                        }`}
+                      >
+                        <div className="p-2 bg-purple-100 text-purple-600 rounded-lg mr-3">
+                          <Sparkles className="w-5 h-5" />
+                        </div>
+                        <div>
+                          <div className="font-medium text-gray-900 text-sm">{src.name}</div>
+                          <div className="text-xs text-gray-500 mt-1">
+                            {(typeof src.rowCount === 'number' ? src.rowCount : src.rows.length).toLocaleString()} rows
+                          </div>
+                          <div className="text-[10px] text-gray-400 mt-1">Updated: {new Date(src.updatedAt).toLocaleDateString()}</div>
+                        </div>
+                      </button>
+                    ))
+                  )}
+                </div>
+              </div>
             </div>
           </div>
         </div>

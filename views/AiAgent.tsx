@@ -169,7 +169,7 @@ const AiAgent: React.FC<AiAgentProps> = ({ project, onUpdateProject }) => {
               if (!allowed) return true; // No filter on this col
               
               const val = row[key];
-              const strVal = val === null || val === undefined ? '(Blank)' : String(val);
+              const strVal = val === null || val === undefined || val === '' ? '(Blank)' : String(val);
               return allowed.includes(strVal);
           });
       });

@@ -21,6 +21,7 @@ const TableColumnFilter: React.FC<TableColumnFilterProps> = ({
 }) => {
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedValues, setSelectedValues] = useState<Set<string>>(new Set());
+  const [isDirty, setIsDirty] = useState(false);
 
   // Extract unique values from data
   const uniqueValues = useMemo(() => {
@@ -35,16 +36,23 @@ const TableColumnFilter: React.FC<TableColumnFilterProps> = ({
       values.add(strVal);
     });
     return Array.from(values).sort();
-  }, [data, column]);
+  }, [data, column, options]);
 
   // Initialize selection
   useEffect(() => {
+    setIsDirty(false);
     if (activeFilters) {
       setSelectedValues(new Set(activeFilters));
     } else {
       setSelectedValues(new Set(uniqueValues));
     }
-  }, [activeFilters, uniqueValues]);
+  }, [activeFilters, column]);
+
+  useEffect(() => {
+    if (activeFilters) return;
+    if (isDirty) return;
+    setSelectedValues(new Set(uniqueValues));
+  }, [activeFilters, isDirty, uniqueValues]);
 
   const filteredOptions = uniqueValues.filter(v => 
     v.toLowerCase().includes(searchTerm.toLowerCase())
@@ -58,6 +66,7 @@ const TableColumnFilter: React.FC<TableColumnFilterProps> = ({
       newSet.add(val);
     }
     setSelectedValues(newSet);
+    setIsDirty(true);
   };
 
   const handleSelectAll = () => {
@@ -72,6 +81,7 @@ const TableColumnFilter: React.FC<TableColumnFilterProps> = ({
       filteredOptions.forEach(v => newSet.add(v));
       setSelectedValues(newSet);
     }
+    setIsDirty(true);
   };
 
   const applyFilter = () => {
@@ -86,7 +96,8 @@ const TableColumnFilter: React.FC<TableColumnFilterProps> = ({
 
   const clearFilter = () => {
     onApply(null);
-    onClose();
+    setSelectedValues(new Set(uniqueValues));
+    setIsDirty(false);
   };
 
   return (

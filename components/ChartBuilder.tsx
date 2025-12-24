@@ -40,6 +40,7 @@ import MagicWidgetRenderer from './MagicWidgetRenderer';
 import { buildColumnProfiles } from '../utils/columnProfiles';
 import { buildFieldErrors, getConstraintsForType, hasBlockingErrors } from '../utils/chartValidation';
 import { useMagicAggregationWorker, type MagicAggregationWorkerSource } from '../hooks/useMagicAggregationWorker';
+import { useTransformPipelineWorker } from '../hooks/useTransformPipelineWorker';
 
 interface ChartBuilderProps {
   isOpen: boolean;
@@ -409,6 +410,9 @@ const ChartBuilder: React.FC<ChartBuilderProps> = ({
   workerSource
 }) => {
   const previewWorker = useMagicAggregationWorker(workerSource ?? data, chartTheme);
+  const transformWorker = useTransformPipelineWorker();
+  const [profileRows, setProfileRows] = useState<RawRow[]>([]);
+  const profileReqRef = useRef(0);
   // UI State
   const [showTypeSelector, setShowTypeSelector] = useState(true); // Show type selector first
   const [activeTab, setActiveTab] = useState<'setup' | 'customize'>('setup');
@@ -1000,7 +1004,36 @@ const [sortSeriesId, setSortSeriesId] = useState('');
     setShowTypeSelector(false);
   };
 
-  const columnProfiles = useMemo(() => buildColumnProfiles(data), [data]);
+  useEffect(() => {
+    if (!isOpen) return;
+    if (data.length > 0) {
+      setProfileRows([]);
+      return;
+    }
+    if (!workerSource || workerSource.mode !== 'dataSource') return;
+    if (!workerSource.projectId || !workerSource.dataSourceId) return;
+    if (!transformWorker.isSupported) return;
+
+    const reqId = (profileReqRef.current += 1);
+    void (async () => {
+      try {
+        const resp = await transformWorker.cleanPreview({
+          projectId: workerSource.projectId,
+          sourceId: workerSource.dataSourceId,
+          searchQuery: '',
+          limit: 200,
+        });
+        if (reqId !== profileReqRef.current) return;
+        setProfileRows(resp.rows);
+      } catch (e) {
+        if (reqId !== profileReqRef.current) return;
+        console.error('[ChartBuilder] profile preview failed:', e);
+        setProfileRows([]);
+      }
+    })();
+  }, [isOpen, data.length, workerSource, transformWorker.isSupported, transformWorker.cleanPreview]);
+
+  const columnProfiles = useMemo(() => buildColumnProfiles(data.length ? data : profileRows), [data, profileRows]);
   const showMajorControl = useMemo(() => {
     if (!type || !dimension) return false;
     const eligibleType =

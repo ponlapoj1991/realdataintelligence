@@ -55,6 +55,14 @@ type CleanPreviewResponse = {
   totalRows: number
 }
 
+type CleanQueryPageResponse = {
+  type: 'cleanQueryPage'
+  requestId: string
+  rows: RawRow[]
+  rowIndices: number[]
+  totalRows: number
+}
+
 type CleanDoneResponse = {
   type: 'cleanDone'
   requestId: string
@@ -81,6 +89,7 @@ type WorkerResponse =
   | ColumnAnalysisResponse
   | UniqueValuesResponse
   | CleanPreviewResponse
+  | CleanQueryPageResponse
   | CleanDoneResponse
   | CleanColumnOptionsResponse
   | ErrorResponse
@@ -135,6 +144,14 @@ export interface TransformPipelineWorkerClient {
     sourceId: string
     searchQuery: string
     limit: number
+    filters?: Record<string, string[] | null>
+  }) => Promise<{ rows: RawRow[]; rowIndices: number[]; totalRows: number }>
+  cleanQueryPage: (params: {
+    projectId: string
+    sourceId: string
+    searchQuery: string
+    page: number
+    pageSize: number
     filters?: Record<string, string[] | null>
   }) => Promise<{ rows: RawRow[]; rowIndices: number[]; totalRows: number }>
   cleanColumnOptions: (params: {
@@ -343,6 +360,22 @@ export function useTransformPipelineWorker(): TransformPipelineWorkerClient {
     [call]
   )
 
+  const cleanQueryPage: TransformPipelineWorkerClient['cleanQueryPage'] = useCallback(
+    async ({ projectId, sourceId, searchQuery, page, pageSize, filters }) => {
+      const resp = (await call({
+        type: 'cleanQueryPage',
+        projectId,
+        sourceId,
+        searchQuery,
+        page,
+        pageSize,
+        filters,
+      })) as CleanQueryPageResponse
+      return { rows: resp.rows, rowIndices: resp.rowIndices, totalRows: resp.totalRows }
+    },
+    [call]
+  )
+
   const cleanColumnOptions: TransformPipelineWorkerClient['cleanColumnOptions'] = useCallback(
     async ({ projectId, sourceId, columnKey, limitRows, limitValues }) => {
       const resp = (await call({
@@ -451,6 +484,7 @@ export function useTransformPipelineWorker(): TransformPipelineWorkerClient {
     analyzeColumn,
     uniqueValues,
     cleanPreview,
+    cleanQueryPage,
     cleanColumnOptions,
     cleanApplyFindReplace,
     cleanApplyTransformDate,
