@@ -1,22 +1,18 @@
 /// <reference lib="webworker" />
-declare function importScripts(...urls: string[]): void;
 
 /**
- * Excel Parser Web Worker
+ * Excel Parser Web Worker (Bundled)
  *
- * Purpose: Parse large Excel/CSV files in background thread
- * - Prevents UI blocking (animation keeps spinning)
+ * Purpose: Parse large Excel/CSV files in a background thread.
+ * - Prevents UI blocking
  * - Reports progress to main thread
  *
- * Note: Parsing happens in one go to ensure data integrity
- * The chunking approach had bugs with header row handling
+ * Implementation notes:
+ * - Uses bundled `xlsx` (no CDN) for reliability in enterprise environments.
+ * - Parsing still returns full rows (stage 1). Further streaming/chunking is handled in later stages.
  */
 
-// Load XLSX library in worker context
-importScripts('https://cdn.sheetjs.com/xlsx-0.20.1/package/dist/xlsx.full.min.js');
-
-// XLSX is now available globally in worker
-declare const XLSX: any;
+import * as XLSX from 'xlsx';
 
 // Type for raw data rows
 interface RawRow {
@@ -48,82 +44,44 @@ interface ErrorMessage {
 
 type WorkerResponse = ProgressMessage | CompleteMessage | ErrorMessage;
 
-/**
- * Parse Excel/CSV file and send back complete data
- */
-const parseExcel = (
-  data: ArrayBuffer | string,
-  fileType: 'excel' | 'csv'
-): void => {
-  try {
-    // Report: Starting parse
-    self.postMessage({
-      type: 'progress',
-      percent: 10,
-      message: 'Reading file...'
-    } as ProgressMessage);
+const postProgress = (percent: number, message: string) => {
+  self.postMessage({ type: 'progress', percent, message } satisfies ProgressMessage);
+};
 
-    // Parse workbook
+const parseExcel = (data: ArrayBuffer | string, fileType: 'excel' | 'csv'): void => {
+  try {
+    postProgress(10, 'Reading file...');
+
     const readType = fileType === 'excel' ? 'array' : 'string';
     const workbook = XLSX.read(data, { type: readType });
 
-    self.postMessage({
-      type: 'progress',
-      percent: 40,
-      message: 'Parsing spreadsheet...'
-    } as ProgressMessage);
-
+    postProgress(40, 'Parsing spreadsheet...');
     const sheetName = workbook.SheetNames[0];
     const worksheet = workbook.Sheets[sheetName];
 
-    self.postMessage({
-      type: 'progress',
-      percent: 60,
-      message: 'Converting to data...'
-    } as ProgressMessage);
-
-    // Parse to JSON - no chunking to preserve data integrity
-    // defval: '' ensures empty cells become empty strings (not undefined/null)
+    postProgress(60, 'Converting to data...');
     const json = XLSX.utils.sheet_to_json(worksheet, {
       raw: false,
-      defval: ''
+      defval: '',
     }) as RawRow[];
 
+    postProgress(90, 'Finalizing...');
     self.postMessage({
-      type: 'progress',
-      percent: 90,
-      message: 'Finalizing...'
-    } as ProgressMessage);
-
-    // Send completion with all data
-    const completeMessage: CompleteMessage = {
       type: 'complete',
       data: json,
-      totalRows: json.length
-    };
-
-    self.postMessage(completeMessage);
-
+      totalRows: json.length,
+    } satisfies CompleteMessage);
   } catch (error: any) {
-    const errorMessage: ErrorMessage = {
+    self.postMessage({
       type: 'error',
-      error: error.message || 'Failed to parse file'
-    };
-
-    self.postMessage(errorMessage);
+      error: error?.message || 'Failed to parse file',
+    } satisfies ErrorMessage);
   }
 };
 
-/**
- * Worker message handler
- */
 self.onmessage = (event: MessageEvent<WorkerMessage>) => {
   const { type, data, fileType } = event.data;
-
-  if (type === 'parse') {
-    parseExcel(data, fileType);
-  }
+  if (type === 'parse') parseExcel(data, fileType);
 };
 
-// Export types for main thread usage
-export type { WorkerMessage, ProgressMessage, CompleteMessage, ErrorMessage, WorkerResponse };
+export type { WorkerMessage, WorkerResponse, ProgressMessage, CompleteMessage, ErrorMessage };

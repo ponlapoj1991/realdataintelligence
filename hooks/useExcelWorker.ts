@@ -76,7 +76,7 @@ export const useExcelWorker = (): UseExcelWorkerResult => {
         // Use URL constructor for Vite compatibility
         workerRef.current = new Worker(
           new URL('../workers/excel.worker.ts', import.meta.url),
-          { type: 'classic' }
+          { type: 'module' }
         );
       } catch (workerError) {
         console.warn('[useExcelWorker] Worker creation failed, falling back to main thread:', workerError);
@@ -187,9 +187,8 @@ export const useExcelWorker = (): UseExcelWorkerResult => {
             throw new Error('Failed to read file');
           }
 
-          if (!window.XLSX) {
-            throw new Error('XLSX library not loaded');
-          }
+          const xlsxModule: any = await import('xlsx');
+          const XLSX: any = xlsxModule?.default ?? xlsxModule;
 
           setProgress(20);
 
@@ -197,7 +196,7 @@ export const useExcelWorker = (): UseExcelWorkerResult => {
           await new Promise(r => requestAnimationFrame(r));
 
           const isCSV = file.name.toLowerCase().endsWith('.csv');
-          const workbook = window.XLSX.read(data, {
+          const workbook = XLSX.read(data, {
             type: isCSV ? 'string' : 'array'
           });
 
@@ -210,7 +209,7 @@ export const useExcelWorker = (): UseExcelWorkerResult => {
           setProgress(70);
           await new Promise(r => requestAnimationFrame(r));
 
-          const json = window.XLSX.utils.sheet_to_json(worksheet, {
+          const json = XLSX.utils.sheet_to_json(worksheet, {
             raw: false,
             defval: ''
           }) as RawRow[];

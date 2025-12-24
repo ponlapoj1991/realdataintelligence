@@ -5,7 +5,8 @@ import { useToast } from '../components/ToastProvider';
 import { useExcelWorker } from '../hooks/useExcelWorker';
 import { exportToCsv, exportToExcel, inferColumns } from '../utils/excel';
 import { ensureDataSources, getDataSourcesByKind, removeDataSource, setActiveDataSource, updateDataSourceRows, upsertDataSource } from '../utils/dataSources';
-import { saveProject } from '../utils/storage-compat';
+import { hydrateProjectDataSourceRows, saveProject } from '../utils/storage-compat';
+import { getAllDataSourceChunks } from '../utils/storage-v2';
 
 interface DataIngestProps {
   project: Project;
@@ -125,7 +126,11 @@ const DataIngest: React.FC<DataIngestProps> = ({ project, onUpdateProject, kind,
 
     if (!upload.sourceId) return;
     const mode = upload.mode === 'append' ? 'append' : 'replace';
-    const updatedProject = updateDataSourceRows(normalizedProject, upload.sourceId, rows, columns, mode);
+    const baseProject =
+      mode === 'append'
+        ? await hydrateProjectDataSourceRows(normalizedProject, upload.sourceId)
+        : normalizedProject;
+    const updatedProject = updateDataSourceRows(baseProject, upload.sourceId, rows, columns, mode);
     await persistProject(updatedProject);
   };
 
@@ -155,23 +160,33 @@ const DataIngest: React.FC<DataIngestProps> = ({ project, onUpdateProject, kind,
   };
 
   const setActive = async (id: string) => {
-    const updated = setActiveDataSource(normalizedProject, id);
+    const hydrated = await hydrateProjectDataSourceRows(normalizedProject, id);
+    const updated = setActiveDataSource(hydrated, id);
     await persistProject(updated);
     showToast('Active table changed', 'Other features will now use this table.', 'info');
   };
 
   const handleDownload = (source: DataSource, format: 'excel' | 'csv') => {
-    if (!source.rows || source.rows.length === 0) {
+    const rowCount = typeof source.rowCount === 'number' ? source.rowCount : source.rows?.length || 0;
+    if (rowCount === 0) {
       showToast('No data to export', 'This table is empty.', 'warning');
       return;
     }
 
-    const safeName = source.name.trim() || 'Exported Table';
-    if (format === 'excel') {
-      exportToExcel(source.rows, safeName);
-    } else {
-      exportToCsv(source.rows, safeName);
-    }
+    const run = async () => {
+      const safeName = source.name.trim() || 'Exported Table';
+      const rows = source.rows?.length ? source.rows : await getAllDataSourceChunks(project.id, source.id);
+      if (format === 'excel') {
+        exportToExcel(rows, safeName);
+      } else {
+        exportToCsv(rows, safeName);
+      }
+    };
+
+    void run().catch((e) => {
+      console.error('[DataIngest] Export failed:', e);
+      showToast('Export Failed', e?.message || 'Failed to export table.', 'error');
+    });
   };
 
   const meta = titles[kind];
@@ -294,7 +309,9 @@ const DataIngest: React.FC<DataIngestProps> = ({ project, onUpdateProject, kind,
                     <div className="font-semibold text-gray-900">{source.name}</div>
                     <div className="text-xs text-gray-500">{kind === 'ingestion' ? 'Uploaded table' : 'Prepared output'}</div>
                   </div>
-                  <span className="text-gray-700 text-center">{source.rows.length.toLocaleString()}</span>
+                  <span className="text-gray-700 text-center">
+                    {(typeof source.rowCount === 'number' ? source.rowCount : source.rows.length).toLocaleString()}
+                  </span>
                   <span className="text-gray-700 text-center">{new Date(source.updatedAt).toLocaleString()}</span>
                   <div className="flex justify-center">
                     {isActive ? (

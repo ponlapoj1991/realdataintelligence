@@ -457,6 +457,7 @@ export const buildEChartsOption = (payload: SharedChartPayload | null, colSpan: 
           name: data.legends[idx],
           data: seriesData,
           smooth: options?.lineSmooth,
+          connectNulls: options?.connectNulls,
           lineStyle: {
             width: options?.lineStrokeWidth ?? 2,
             type: options?.lineStrokeStyle ?? 'solid',
@@ -586,6 +587,7 @@ export const buildEChartsOption = (payload: SharedChartPayload | null, colSpan: 
           name: data.legends[idx],
           data: seriesData,
           smooth: options?.lineSmooth,
+          connectNulls: options?.connectNulls,
           areaStyle: {},
           stack: options?.stack || options?.percentStack ? 'A' : undefined,
           lineStyle: {
@@ -989,6 +991,7 @@ export const buildEChartsOption = (payload: SharedChartPayload | null, colSpan: 
             name: data.legends[idx],
             data: s,
             smooth: seriesSmooth,
+            connectNulls: options?.connectNulls,
             yAxisIndex: options?.yAxisIndexes?.[idx] ?? 0,
             itemStyle,
             lineStyle: {
@@ -1005,6 +1008,7 @@ export const buildEChartsOption = (payload: SharedChartPayload | null, colSpan: 
             name: data.legends[idx],
             data: s,
             smooth: seriesSmooth,
+            connectNulls: options?.connectNulls,
             areaStyle: seriesColor ? { color: seriesColor } : {},
             yAxisIndex: options?.yAxisIndexes?.[idx] ?? 0,
             itemStyle,

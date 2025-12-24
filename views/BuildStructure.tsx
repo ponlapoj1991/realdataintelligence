@@ -1,5 +1,5 @@
-import React, { useEffect, useMemo, useState } from 'react';
-import { Plus, Save, Play, Loader2, Table2, Layers, ChevronUp, ChevronDown, X, ArrowRight } from 'lucide-react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { Plus, Save, Play, Loader2, Table2, Sparkles, Layers, ChevronUp, ChevronDown, ChevronLeft, X, ArrowRight, Trash2 } from 'lucide-react';
 import {
   BuildStructureConfig,
   ColumnConfig,
@@ -10,12 +10,12 @@ import {
   TransformationRule,
   TransformMethod,
 } from '../types';
-import { ensureDataSources, getDataSourcesByKind, addDerivedDataSource } from '../utils/dataSources';
-import { saveProject } from '../utils/storage-compat';
-import { inferColumns } from '../utils/excel';
+import { diffColumns, ensureDataSources, getDataSourcesByKind, isDataSourceNameTaken } from '../utils/dataSources';
+import { getProjectLight, saveProject } from '../utils/storage-compat';
 import { analyzeSourceColumn, applyTransformation, getAllUniqueValues } from '../utils/transform';
 import { useToast } from '../components/ToastProvider';
 import EmptyState from '../components/EmptyState';
+import { useTransformPipelineWorker } from '../hooks/useTransformPipelineWorker';
 
 const safeRender = (val: any) => {
   if (val === null || val === undefined) return '';
@@ -28,6 +28,74 @@ interface BuildStructureProps {
   project: Project;
   onUpdateProject: (p: Project) => void;
 }
+
+const TableSourceMultiSelect: React.FC<{
+  ingestionSources: DataSource[];
+  preparedSources: DataSource[];
+  selectedSourceIds: string[];
+  onToggle: (id: string, checked: boolean) => void;
+}> = ({ ingestionSources, preparedSources, selectedSourceIds, onToggle }) => {
+  const renderCard = (src: DataSource, kind: 'ingestion' | 'prepared') => {
+    const checked = selectedSourceIds.includes(src.id);
+    const rowCount = typeof src.rowCount === 'number' ? src.rowCount : src.rows.length;
+    const Icon = kind === 'ingestion' ? Table2 : Sparkles;
+    const iconClass = kind === 'ingestion' ? 'bg-blue-100 text-blue-600' : 'bg-purple-100 text-purple-600';
+    const borderClass = checked
+      ? kind === 'ingestion'
+        ? 'border-indigo-500 bg-indigo-50 ring-1 ring-indigo-500'
+        : 'border-purple-500 bg-purple-50 ring-1 ring-purple-500'
+      : 'border-gray-200 hover:border-gray-300 bg-white';
+
+    return (
+      <label key={src.id} className={`flex items-start p-3 rounded-lg border text-left transition-all hover:shadow-md cursor-pointer ${borderClass}`}>
+        <div className={`p-2 rounded-lg mr-3 ${iconClass}`}>
+          <Icon className="w-5 h-5" />
+        </div>
+        <div className="flex-1 min-w-0">
+          <div className="font-medium text-gray-900 text-sm truncate">{src.name}</div>
+          <div className="text-xs text-gray-500 mt-1">{rowCount.toLocaleString()} rows</div>
+          <div className="text-[10px] text-gray-400 mt-1">Updated: {new Date(src.updatedAt).toLocaleDateString()}</div>
+        </div>
+        <input
+          type="checkbox"
+          checked={checked}
+          onChange={(e) => onToggle(src.id, e.target.checked)}
+          className="mt-1 h-4 w-4 text-blue-600 border-gray-300 rounded"
+        />
+      </label>
+    );
+  };
+
+  return (
+    <div className="flex-1 overflow-y-auto p-4 space-y-6">
+      <div>
+        <h4 className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-3">Ingestion Data</h4>
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          {ingestionSources.length === 0 ? (
+            <div className="col-span-full text-center py-4 text-gray-400 text-sm bg-gray-50 rounded-lg border border-dashed border-gray-200">
+              No ingestion data
+            </div>
+          ) : (
+            ingestionSources.map((src) => renderCard(src, 'ingestion'))
+          )}
+        </div>
+      </div>
+
+      <div>
+        <h4 className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-3">Prepared Data</h4>
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          {preparedSources.length === 0 ? (
+            <div className="col-span-full text-center py-4 text-gray-400 text-sm bg-gray-50 rounded-lg border border-dashed border-gray-200">
+              No prepared data
+            </div>
+          ) : (
+            preparedSources.map((src) => renderCard(src, 'prepared'))
+          )}
+        </div>
+      </div>
+    </div>
+  );
+};
 
 const BuildStructure: React.FC<BuildStructureProps> = ({ project, onUpdateProject }) => {
   const needsNormalization = !project.dataSources?.length || !project.activeDataSourceId;
@@ -47,6 +115,7 @@ const BuildStructure: React.FC<BuildStructureProps> = ({ project, onUpdateProjec
 
   const [configs, setConfigs] = useState<BuildStructureConfig[]>(normalizedProject.buildStructureConfigs || []);
   const [activeConfigId, setActiveConfigId] = useState<string | null>(normalizedProject.activeBuildConfigId || null);
+  const [view, setView] = useState<'list' | 'detail'>('list');
   const [showConfigModal, setShowConfigModal] = useState(false);
   const [configName, setConfigName] = useState('');
 
@@ -58,19 +127,32 @@ const BuildStructure: React.FC<BuildStructureProps> = ({ project, onUpdateProjec
   const [previewTotal, setPreviewTotal] = useState<number>(0);
   const [isRunning, setIsRunning] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
+  const transformWorker = useTransformPipelineWorker();
 
   const [isRuleModalOpen, setIsRuleModalOpen] = useState(false);
   const [editingTargetName, setEditingTargetName] = useState<string | null>(null);
   const [newRuleName, setNewRuleName] = useState('');
 
   const [showSaveModal, setShowSaveModal] = useState(false);
+  const [saveMode, setSaveMode] = useState<'new' | 'overwrite'>('new');
   const [saveName, setSaveName] = useState('');
-  const [saveError, setSaveError] = useState('');
+  const [overwriteTargetId, setOverwriteTargetId] = useState<string>('');
+  const [overwriteWriteMode, setOverwriteWriteMode] = useState<'append' | 'replace'>('replace');
+  const [saveError, setSaveError] = useState<string>('');
+
+  const [isQueryModalOpen, setIsQueryModalOpen] = useState(false);
+  const [confirm, setConfirm] = useState<{
+    title: string;
+    lines: string[];
+    confirmLabel: string;
+    onConfirm: () => void;
+  } | null>(null);
 
   type RuleDraft = {
     sourceId: string;
     sourceKey: string;
     method: TransformMethod;
+    autoMethod: boolean;
     params: any;
     valueMap: Record<string, string>;
     manualKey: string;
@@ -106,8 +188,13 @@ const BuildStructure: React.FC<BuildStructureProps> = ({ project, onUpdateProjec
 
   // Sync configs from project changes
   useEffect(() => {
-    setConfigs(normalizedProject.buildStructureConfigs || []);
-    setActiveConfigId(normalizedProject.activeBuildConfigId || normalizedProject.buildStructureConfigs?.[0]?.id || null);
+    const nextConfigs = normalizedProject.buildStructureConfigs || [];
+    const nextActiveId = normalizedProject.activeBuildConfigId || nextConfigs[0]?.id || null;
+    setConfigs(nextConfigs);
+    setActiveConfigId(nextActiveId);
+    if (!nextActiveId) {
+      setView('list');
+    }
   }, [normalizedProject.buildStructureConfigs, normalizedProject.activeBuildConfigId]);
 
   const activeConfig = useMemo(
@@ -126,44 +213,119 @@ const BuildStructure: React.FC<BuildStructureProps> = ({ project, onUpdateProjec
     setResultRows([]);
     const sum = (activeConfig?.sourceIds || []).reduce((acc, id) => {
       const src = allSources.find((s) => s.id === id);
-      return acc + (src?.rows.length || 0);
+      const count = src ? (typeof src.rowCount === 'number' ? src.rowCount : src.rows.length) : 0;
+      return acc + count;
     }, 0);
     setPreviewTotal(sum);
   }, [activeConfig]);
 
-  const buildDraftForSource = (sourceId: string, existing?: StructureRule): RuleDraft => {
-    const src = allSources.find((s) => s.id === sourceId);
+  const draftRequestRef = useRef<Record<string, number>>({});
+
+  const bumpDraftRequest = (sourceId: string) => {
+    draftRequestRef.current[sourceId] = (draftRequestRef.current[sourceId] || 0) + 1;
+    return draftRequestRef.current[sourceId];
+  };
+
+  const buildDraftForSource = (sourceId: string, sources: DataSource[], existing?: StructureRule): RuleDraft => {
+    const src = sources.find((s) => s.id === sourceId);
     const firstCol = existing?.sourceKey || src?.columns[0]?.key || '';
-    const analysis = src && firstCol ? analyzeSourceColumn(src.rows, firstCol) : null;
-    const inferredMethod: TransformMethod = existing?.method
-      ? existing.method
-      : analysis?.isDateLikely
-      ? 'date_extract'
-      : analysis?.isArrayLikely
-      ? 'array_count'
-      : 'copy';
+    const inferredMethod: TransformMethod = existing?.method ? existing.method : 'copy';
     return {
       sourceId,
       sourceKey: firstCol,
       method: inferredMethod,
+      autoMethod: !existing,
       params: existing?.params || (inferredMethod === 'date_extract' ? { datePart: 'date_only' } : {}),
       valueMap: existing?.valueMap || {},
       manualKey: '',
       manualValue: '',
-      analysis,
-      uniqueValues:
-        src && firstCol
-          ? getAllUniqueValues(src.rows, firstCol, inferredMethod || 'copy', 5000, existing?.params)
-          : [],
+      analysis: null,
+      uniqueValues: [],
     };
   };
 
-  const refreshDraftAnalysis = (srcId: string, draft: RuleDraft) => {
-    const src = allSources.find((s) => s.id === srcId);
-    if (!src || !draft.sourceKey) return draft;
-    const analysis = analyzeSourceColumn(src.rows, draft.sourceKey);
-    const uniqueValues = getAllUniqueValues(src.rows, draft.sourceKey, draft.method, 5000, draft.params);
-    return { ...draft, analysis, uniqueValues };
+  const refreshDraftAsync = (draft: RuleDraft) => {
+    const sourceId = draft.sourceId;
+    const sourceKey = draft.sourceKey;
+    const requestId = bumpDraftRequest(sourceId);
+
+    if (!sourceKey) {
+      setRuleDrafts((prev) => ({ ...prev, [sourceId]: { ...(prev[sourceId] || draft), analysis: null, uniqueValues: [] } }));
+      return;
+    }
+
+    const run = async () => {
+      try {
+        const projectId = normalizedProject.id;
+
+        const analysis = transformWorker.isSupported
+          ? await transformWorker.analyzeColumn({ projectId, sourceId, key: sourceKey })
+          : (() => {
+              const src = allSources.find((s) => s.id === sourceId);
+              return src ? analyzeSourceColumn(src.rows, sourceKey) : null;
+            })();
+
+        let nextMethod = draft.method;
+        let nextParams = draft.params || {};
+        let nextValueMap = draft.valueMap;
+        if (draft.autoMethod && analysis) {
+          if (analysis.isDateLikely) {
+            nextMethod = 'date_extract';
+            nextParams = { datePart: 'date_only' };
+          } else if (analysis.isArrayLikely) {
+            nextMethod = 'array_count';
+            nextParams = {};
+          } else {
+            nextMethod = 'copy';
+            nextParams = {};
+          }
+          nextValueMap = {};
+        }
+
+        const uniqueValues = transformWorker.isSupported
+          ? await transformWorker.uniqueValues({
+              projectId,
+              sourceId,
+              key: sourceKey,
+              method: nextMethod,
+              limit: 5000,
+              params: nextParams,
+            })
+          : (() => {
+              const src = allSources.find((s) => s.id === sourceId);
+              return src ? getAllUniqueValues(src.rows, sourceKey, nextMethod, 5000, nextParams) : [];
+            })();
+
+        setRuleDrafts((prev) => {
+          if ((draftRequestRef.current[sourceId] || 0) !== requestId) return prev;
+          const current = prev[sourceId] || draft;
+          if (current.sourceKey !== sourceKey) return prev;
+
+          const shouldAuto = current.autoMethod;
+          const next: RuleDraft = {
+            ...current,
+            analysis: analysis || null,
+            uniqueValues,
+          };
+          if (shouldAuto) {
+            next.method = nextMethod;
+            next.params = nextParams;
+            next.valueMap = nextValueMap;
+          }
+          return { ...prev, [sourceId]: next };
+        });
+      } catch (e) {
+        console.error('[BuildStructure] draft refresh failed:', e);
+        setRuleDrafts((prev) => {
+          if ((draftRequestRef.current[sourceId] || 0) !== requestId) return prev;
+          const current = prev[sourceId] || draft;
+          if (current.sourceKey !== sourceKey) return prev;
+          return { ...prev, [sourceId]: { ...current, analysis: null, uniqueValues: [] } };
+        });
+      }
+    };
+
+    void run();
   };
 
   const persistConfigs = async (nextConfigs: BuildStructureConfig[], nextActiveId?: string | null) => {
@@ -190,6 +352,7 @@ const BuildStructure: React.FC<BuildStructureProps> = ({ project, onUpdateProjec
     };
     const nextConfigs = [...configs, newConfig];
     setActiveConfigId(newConfig.id);
+    setView('detail');
     setShowConfigModal(false);
     await persistConfigs(nextConfigs, newConfig.id);
   };
@@ -212,17 +375,18 @@ const BuildStructure: React.FC<BuildStructureProps> = ({ project, onUpdateProjec
 
   const openAddRule = () => {
     if (!selectedSources.length) {
-      showToast('Select sources first', 'Choose one or more tables before adding columns.', 'warning');
+      showToast('Setup incomplete', 'Tables required.', 'warning');
       return;
     }
     setEditingTargetName(null);
     setNewRuleName('');
     const drafts: Record<string, RuleDraft> = {};
     selectedSources.forEach((srcId) => {
-      drafts[srcId] = buildDraftForSource(srcId);
+      drafts[srcId] = buildDraftForSource(srcId, allSources);
     });
     setRuleDrafts(drafts);
     setIsRuleModalOpen(true);
+    Object.values(drafts).forEach((draft) => refreshDraftAsync(draft));
   };
 
   const closeRuleModal = () => {
@@ -239,20 +403,27 @@ const BuildStructure: React.FC<BuildStructureProps> = ({ project, onUpdateProjec
     const drafts: Record<string, RuleDraft> = {};
     selectedSources.forEach((srcId) => {
       const existing = relevant.find((r) => r.sourceId === srcId);
-      drafts[srcId] = buildDraftForSource(srcId, existing);
+      drafts[srcId] = buildDraftForSource(srcId, allSources, existing);
     });
     setRuleDrafts(drafts);
     setIsRuleModalOpen(true);
+    Object.values(drafts).forEach((draft) => refreshDraftAsync(draft));
   };
 
   const updateDraft = (srcId: string, updater: (draft: RuleDraft) => RuleDraft) => {
     setRuleDrafts((prev) => {
-      const next = { ...prev };
       const current = prev[srcId];
       if (!current) return prev;
-      next[srcId] = refreshDraftAnalysis(srcId, updater(current));
-      return next;
+      return { ...prev, [srcId]: updater(current) };
     });
+  };
+
+  const updateDraftWithRefresh = (srcId: string, updater: (draft: RuleDraft) => RuleDraft) => {
+    const current = ruleDrafts[srcId];
+    if (!current) return;
+    const nextDraft = updater(current);
+    setRuleDrafts((prev) => ({ ...prev, [srcId]: nextDraft }));
+    refreshDraftAsync(nextDraft);
   };
 
   const saveRule = async () => {
@@ -339,83 +510,294 @@ const BuildStructure: React.FC<BuildStructureProps> = ({ project, onUpdateProjec
   const runQuery = async (silent = false, overrideRules?: StructureRule[]) => {
     const workingRules = overrideRules || rules;
     if (!selectedSources.length || !workingRules.length) {
-      showToast('Setup incomplete', 'Choose sources and add mappings before querying.', 'warning');
+      showToast('Setup incomplete', 'Mappings required.', 'warning');
       return;
     }
     if (!silent) {
       setIsRunning(true);
+      setIsQueryModalOpen(true);
     }
-    const output: RawRow[] = [];
-    selectedSources.forEach((sourceId) => {
-      const source = allSources.find((s) => s.id === sourceId);
-      if (!source) return;
-      const scopedRules = workingRules.filter((r) => r.sourceId === sourceId);
-      if (!scopedRules.length) return;
-      const baseRules = scopedRules.map(({ sourceId: _sid, ...rest }) => rest);
-      const structured = applyTransformation(source.rows, baseRules);
-      output.push(...structured);
-    });
-    setResultRows(output);
-    setPreviewTotal(output.length);
+
+    const sourcesPayload = selectedSources
+      .map((sourceId) => {
+        const scopedRules = workingRules.filter((r) => r.sourceId === sourceId);
+        if (!scopedRules.length) return null;
+        const baseRules = scopedRules.map(({ sourceId: _sid, ...rest }) => rest) as TransformationRule[];
+        return { sourceId, rules: baseRules };
+      })
+      .filter((v): v is { sourceId: string; rules: TransformationRule[] } => !!v);
+
+    if (sourcesPayload.length === 0) {
+      showToast('Setup incomplete', 'Mappings required.', 'warning');
+      if (!silent) setIsRunning(false);
+      return;
+    }
+
+    try {
+      const preview = await transformWorker.previewMulti({
+        projectId: normalizedProject.id,
+        sources: sourcesPayload,
+        limit: 50,
+      });
+      setResultRows(preview.rows);
+      setPreviewTotal(preview.totalRows);
+    } catch (e: any) {
+      console.error('[BuildStructure] query failed:', e);
+      showToast('Query failed', e?.message || 'Failed to query', 'error');
+      setResultRows([]);
+      setPreviewTotal(0);
+    } finally {
+      if (!silent) {
+        setIsQueryModalOpen(false);
+        setTimeout(() => setIsRunning(false), 150);
+      }
+    }
     if (!silent) {
-      setTimeout(() => setIsRunning(false), 300);
+      // handled above
     }
   };
 
+  const buildSourcesPayload = (workingRules: StructureRule[]) => {
+    return selectedSources
+      .map((sourceId) => {
+        const scopedRules = workingRules.filter((r) => r.sourceId === sourceId);
+        if (!scopedRules.length) return null;
+        const baseRules = scopedRules.map(({ sourceId: _sid, ...rest }) => rest) as TransformationRule[];
+        return { sourceId, rules: baseRules };
+      })
+      .filter((v): v is { sourceId: string; rules: TransformationRule[] } => !!v);
+  };
+
+  const buildOutputColumns = (sourcesPayload: Array<{ sourceId: string; rules: TransformationRule[] }>): ColumnConfig[] => {
+    const seen = new Set<string>();
+    const cols: ColumnConfig[] = [];
+    for (const src of sourcesPayload) {
+      for (const r of src.rules) {
+        const key = r.targetName;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        cols.push({ key, type: 'string', visible: true, label: key });
+      }
+    }
+    return cols;
+  };
+
   const openSaveModal = () => {
-    if (!resultRows.length) {
-      showToast('No results', 'Run Query before saving.', 'warning');
+    if (!activeConfig) return;
+    if (!selectedSources.length || !rules.length) {
+      showToast('Setup incomplete', 'Query required.', 'warning');
       return;
     }
-    const defaultName = activeConfig ? `${activeConfig.name} output` : `Structured ${selectedSources.length} files`;
-    setSaveName(defaultName);
+    if (!resultRows.length) {
+      showToast('No preview', 'Query required.', 'warning');
+      return;
+    }
+    setSaveMode('new');
+    setSaveName('');
     setSaveError('');
+    setOverwriteTargetId('');
+    setOverwriteWriteMode('replace');
     setShowSaveModal(true);
   };
 
   const handleSave = async () => {
-    const trimmed = saveName.trim();
-    if (!trimmed) {
-      setSaveError('Please enter a table name.');
+    const sourcesPayload = buildSourcesPayload(rules);
+    if (sourcesPayload.length === 0) {
+      showToast('Setup incomplete', 'Mappings required.', 'warning');
       return;
     }
-    setIsSaving(true);
-    const columns: ColumnConfig[] = inferColumns(resultRows[0]);
-    const updated = addDerivedDataSource(normalizedProject, trimmed, resultRows, columns, 'prepared');
-    await saveProject(updated);
-    onUpdateProject(updated);
-    showToast('Saved', `${trimmed} stored in Preparation Data.`, 'success');
-    setShowSaveModal(false);
-    setTimeout(() => setIsSaving(false), 400);
+
+    if (saveMode === 'new') {
+      const trimmed = saveName.trim();
+      if (!trimmed) {
+        setSaveError('Name required');
+        return;
+      }
+      if (isDataSourceNameTaken(normalizedProject, { kind: 'prepared', name: trimmed })) {
+        setSaveError('Name exists');
+        return;
+      }
+
+      setIsSaving(true);
+      try {
+        await transformWorker.buildMulti({
+          projectId: normalizedProject.id,
+          name: trimmed,
+          kind: 'prepared',
+          sources: sourcesPayload,
+        });
+        const refreshed = await getProjectLight(normalizedProject.id);
+        if (refreshed) onUpdateProject(refreshed);
+        showToast('Saved', trimmed, 'success');
+        setShowSaveModal(false);
+      } catch (e: any) {
+        showToast('Save failed', e?.message || 'Failed to save', 'error');
+      } finally {
+        setTimeout(() => setIsSaving(false), 400);
+      }
+      return;
+    }
+
+    const target = preparedSources.find((s) => s.id === overwriteTargetId) || null;
+    if (!target) {
+      setSaveError('Target required');
+      return;
+    }
+
+    const outputColumns = buildOutputColumns(sourcesPayload);
+    const existingColumns = Array.isArray(target.columns) ? target.columns : [];
+    const diff = diffColumns({ expected: existingColumns, actual: outputColumns });
+    const columnsMatch = diff.missing.length === 0 && diff.extra.length === 0 && diff.typeMismatches.length === 0;
+
+    const openConfirm = (payload: { title: string; lines: string[]; confirmLabel: string; onConfirm: () => void }) => {
+      setConfirm(payload);
+    };
+
+    if (overwriteWriteMode === 'replace') {
+      openConfirm({
+        title: 'Replace',
+        lines: ['Table will be cleared and rewritten.'],
+        confirmLabel: 'Replace',
+        onConfirm: () => {
+          setConfirm(null);
+          void (async () => {
+            setIsSaving(true);
+            try {
+              await transformWorker.buildMultiToTarget({
+                projectId: normalizedProject.id,
+                targetSourceId: target.id,
+                mode: 'replace',
+                sources: sourcesPayload,
+              });
+              const refreshed = await getProjectLight(normalizedProject.id);
+              if (refreshed) onUpdateProject(refreshed);
+              showToast('Saved', target.name, 'success');
+              setShowSaveModal(false);
+            } catch (e: any) {
+              showToast('Save failed', e?.message || 'Failed to save', 'error');
+            } finally {
+              setTimeout(() => setIsSaving(false), 400);
+            }
+          })();
+        },
+      });
+      return;
+    }
+
+    const lines: string[] = [];
+    if (columnsMatch) {
+      lines.push('Columns match.');
+    } else {
+      lines.push('Columns mismatch.');
+      if (diff.missing.length) lines.push(`Missing: ${diff.missing.join(', ')}`);
+      if (diff.extra.length) lines.push(`Extra: ${diff.extra.join(', ')}`);
+      if (diff.typeMismatches.length) {
+        const types = diff.typeMismatches.map((m) => `${m.key} (${m.expectedType} → ${m.actualType})`);
+        lines.push(`Types: ${types.join(', ')}`);
+      }
+    }
+
+    openConfirm({
+      title: columnsMatch ? 'Columns Match' : 'Columns Mismatch',
+      lines,
+      confirmLabel: 'Append',
+      onConfirm: () => {
+        setConfirm(null);
+        void (async () => {
+          setIsSaving(true);
+          try {
+            await transformWorker.buildMultiToTarget({
+              projectId: normalizedProject.id,
+              targetSourceId: target.id,
+              mode: 'append',
+              sources: sourcesPayload,
+            });
+            const refreshed = await getProjectLight(normalizedProject.id);
+            if (refreshed) onUpdateProject(refreshed);
+            showToast('Saved', target.name, 'success');
+            setShowSaveModal(false);
+          } catch (e: any) {
+            showToast('Save failed', e?.message || 'Failed to save', 'error');
+          } finally {
+            setTimeout(() => setIsSaving(false), 400);
+          }
+        })();
+      },
+    });
   };
 
   const hasConfig = Boolean(activeConfig);
   const previewRowCount = resultRows.length || previewTotal || 0;
+  const activeName = activeConfig?.name || 'Config';
+
+  const currentSourcesPayload = useMemo(() => buildSourcesPayload(rules), [rules, selectedSources]);
+  const currentOutputColumns = useMemo(() => buildOutputColumns(currentSourcesPayload), [currentSourcesPayload]);
+  const overwriteTarget = useMemo(
+    () => preparedSources.find((s) => s.id === overwriteTargetId) || null,
+    [preparedSources, overwriteTargetId]
+  );
+  const overwriteSchema = useMemo(() => {
+    if (!overwriteTarget) return null;
+    const expected = Array.isArray(overwriteTarget.columns) ? overwriteTarget.columns : [];
+    return diffColumns({ expected, actual: currentOutputColumns });
+  }, [overwriteTarget, currentOutputColumns]);
+  const overwriteSchemaMatch = Boolean(
+    overwriteSchema &&
+      overwriteSchema.missing.length === 0 &&
+      overwriteSchema.extra.length === 0 &&
+      overwriteSchema.typeMismatches.length === 0
+  );
+
+  const openConfig = async (id: string) => {
+    setActiveConfigId(id);
+    setView('detail');
+    await persistConfigs(configs, id);
+  };
+
+  const requestDeleteConfig = (id: string) => {
+    const cfg = configs.find((c) => c.id === id);
+    if (!cfg) return;
+    setConfirm({
+      title: 'Delete Config',
+      lines: [cfg.name],
+      confirmLabel: 'Delete',
+      onConfirm: () => {
+        setConfirm(null);
+        void (async () => {
+          const nextConfigs = configs.filter((c) => c.id !== id);
+          const nextActiveId =
+            activeConfigId === id ? (nextConfigs[0]?.id || null) : activeConfigId;
+          setConfigs(nextConfigs);
+          setActiveConfigId(nextActiveId);
+          if (!nextActiveId) setView('list');
+          await persistConfigs(nextConfigs, nextActiveId);
+        })();
+      },
+    });
+  };
 
   return (
     <div className="h-full flex flex-col px-10 py-8 overflow-y-auto">
       <div className="flex items-center justify-between mb-6">
         <div className="flex items-center space-x-3">
-          <h1 className="text-xl font-semibold text-gray-900">Build Structure</h1>
-          {configs.length > 0 && (
-            <select
-              value={activeConfig?.id || ''}
-              onChange={async (e) => {
-                setActiveConfigId(e.target.value);
-                await persistConfigs(configs, e.target.value);
-              }}
-              className="text-sm border border-gray-200 rounded-lg px-3 py-2 bg-white shadow-sm"
+          {view === 'detail' && (
+            <button
+              onClick={() => setView('list')}
+              className="inline-flex items-center px-3 py-2 border border-gray-300 rounded-lg shadow-sm text-sm font-medium text-gray-800 hover:bg-gray-50"
             >
-              {configs.map((cfg) => (
-                <option key={cfg.id} value={cfg.id}>
-                  {cfg.name}
-                </option>
-              ))}
-            </select>
+              <ChevronLeft className="w-4 h-4 mr-2" />
+              Back
+            </button>
+          )}
+          <h1 className="text-xl font-semibold text-gray-900">Build Structure</h1>
+          {view === 'detail' && hasConfig && (
+            <span className="text-sm font-medium text-gray-500 truncate max-w-[320px]" title={activeName}>
+              {activeName}
+            </span>
           )}
         </div>
         <div className="flex items-center space-x-3">
-          {hasConfig && (
+          {view === 'detail' && hasConfig && (
             <button
               onClick={openSaveModal}
               disabled={isSaving}
@@ -428,6 +810,7 @@ const BuildStructure: React.FC<BuildStructureProps> = ({ project, onUpdateProjec
           <button
             onClick={() => {
               setConfigName(`Structure ${configs.length + 1}`);
+              setSelectedSources([]);
               setShowConfigModal(true);
             }}
             className="inline-flex items-center px-4 py-2 border border-gray-300 rounded-lg shadow-sm text-sm font-medium text-gray-800 hover:bg-gray-50"
@@ -438,13 +821,62 @@ const BuildStructure: React.FC<BuildStructureProps> = ({ project, onUpdateProjec
         </div>
       </div>
 
-      {!hasConfig && (
-        <div className="flex-1 border border-dashed border-gray-200 rounded-xl bg-white/60 flex items-center justify-center text-gray-400 text-sm">
-          Create a configuration to start.
+      {view === 'list' && (
+        <div className="flex-1">
+          {configs.length === 0 ? (
+            <div className="border border-dashed border-gray-200 rounded-xl bg-white/60">
+              <EmptyState
+                icon={Table2}
+                title="No configs"
+                description=""
+                actionLabel="Create"
+                onAction={() => {
+                  setConfigName(`Structure ${configs.length + 1}`);
+                  setSelectedSources([]);
+                  setShowConfigModal(true);
+                }}
+                className="border-0 bg-transparent"
+              />
+            </div>
+          ) : (
+            <div className="border border-gray-200 rounded-xl bg-white shadow-sm overflow-hidden">
+              <div className="grid grid-cols-12 gap-3 text-sm font-semibold text-gray-500 px-5 py-3 border-b border-gray-100 bg-gray-50">
+                <span className="col-span-6">Config</span>
+                <span className="col-span-3">Tables</span>
+                <span className="col-span-3 text-right">Actions</span>
+              </div>
+              <div className="divide-y divide-gray-100">
+                {configs
+                  .slice()
+                  .sort((a, b) => b.updatedAt - a.updatedAt)
+                  .map((cfg) => (
+                    <div key={cfg.id} className="grid grid-cols-12 gap-3 items-center px-5 py-3 hover:bg-gray-50">
+                      <div className="col-span-6">
+                        <p className="font-medium text-gray-900 truncate" title={cfg.name}>
+                          {cfg.name}
+                        </p>
+                        <p className="text-xs text-gray-500">{new Date(cfg.updatedAt).toLocaleString()}</p>
+                      </div>
+                      <div className="col-span-3 text-sm text-gray-800">
+                        {(cfg.sourceIds || []).length.toLocaleString()}
+                      </div>
+                      <div className="col-span-3 flex items-center justify-end space-x-3 text-sm">
+                        <button onClick={() => void openConfig(cfg.id)} className="text-blue-600 hover:text-blue-700 font-medium">
+                          Open
+                        </button>
+                        <button onClick={() => requestDeleteConfig(cfg.id)} className="text-gray-400 hover:text-red-500">
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+              </div>
+            </div>
+          )}
         </div>
       )}
 
-      {hasConfig && (
+      {view === 'detail' && hasConfig && (
         <div className="space-y-6">
           <div className="border border-gray-200 rounded-xl bg-white shadow-sm p-5">
             <div className="flex items-center justify-between mb-4">
@@ -518,7 +950,7 @@ const BuildStructure: React.FC<BuildStructureProps> = ({ project, onUpdateProjec
                   <EmptyState
                     icon={Table2}
                     title="No columns"
-                    description="Add mappings for each source before querying."
+                    description=""
                     actionLabel="Add column"
                     onAction={openAddRule}
                     className="border-0 bg-transparent"
@@ -553,7 +985,7 @@ const BuildStructure: React.FC<BuildStructureProps> = ({ project, onUpdateProjec
                       .map((id) => {
                         const src = allSources.find((s) => s.id === id);
                         if (!src) return null;
-                        return `${src.name} (${src.rows.length.toLocaleString()})`;
+                        return `${src.name} (${(typeof src.rowCount === 'number' ? src.rowCount : src.rows.length).toLocaleString()})`;
                       })
                       .filter(Boolean)
                       .join(' + ')}
@@ -585,7 +1017,7 @@ const BuildStructure: React.FC<BuildStructureProps> = ({ project, onUpdateProjec
                   {resultRows.length === 0 && (
                     <tr>
                       <td className="px-4 py-6 text-center text-gray-400" colSpan={Math.max(Object.keys(resultRows[0] || {}).length, 1)}>
-                        Run Query to preview structured data.
+                        No preview.
                       </td>
                     </tr>
                   )}
@@ -598,39 +1030,22 @@ const BuildStructure: React.FC<BuildStructureProps> = ({ project, onUpdateProjec
 
       {showSourcePicker && (
         <div className="fixed inset-0 bg-black/30 flex items-center justify-center z-30">
-          <div className="bg-white rounded-xl shadow-2xl w-full max-w-2xl p-6 space-y-4">
-            <div className="flex items-center justify-between">
-              <h3 className="text-lg font-semibold text-gray-900">Choose tables for Build Structure</h3>
-              <button onClick={() => setShowSourcePicker(false)} className="text-gray-400 hover:text-gray-600">×</button>
+          <div className="bg-white rounded-xl shadow-2xl w-full max-w-2xl max-h-[80vh] flex flex-col">
+            <div className="p-4 border-b border-gray-100 flex justify-between items-center">
+              <h3 className="font-bold text-lg text-gray-800">Select Tables</h3>
+              <button onClick={() => setShowSourcePicker(false)} className="p-1 hover:bg-gray-100 rounded-full">
+                <X className="w-5 h-5 text-gray-500" />
+              </button>
             </div>
-            <div className="grid grid-cols-2 gap-3 max-h-96 overflow-y-auto pr-1">
-              {allSources.map((src) => {
-                const checked = selectedSources.includes(src.id);
-                return (
-                  <label
-                    key={src.id}
-                    className={`border rounded-lg px-4 py-3 cursor-pointer transition ${
-                      checked ? 'border-blue-500 bg-blue-50' : 'border-gray-200 hover:border-gray-300'
-                    }`}
-                  >
-                    <div className="flex items-center justify-between">
-                      <div>
-                        <p className="font-medium text-gray-900">{src.name}</p>
-                        <p className="text-xs text-gray-500">{src.kind === 'ingestion' ? 'Ingestion' : 'Preparation'} data</p>
-                      </div>
-                      <input
-                        type="checkbox"
-                        checked={checked}
-                        onChange={(e) => handleSourceToggle(src.id, e.target.checked)}
-                        className="h-4 w-4 text-blue-600 border-gray-300 rounded"
-                      />
-                    </div>
-                  </label>
-                );
-              })}
-              {allSources.length === 0 && <p className="text-sm text-gray-500">Upload data before creating a structure.</p>}
-            </div>
-            <div className="flex justify-end space-x-3">
+
+            <TableSourceMultiSelect
+              ingestionSources={ingestionSources}
+              preparedSources={preparedSources}
+              selectedSourceIds={selectedSources}
+              onToggle={handleSourceToggle}
+            />
+
+            <div className="p-4 border-t border-gray-100 flex justify-end space-x-3">
               <button onClick={() => setShowSourcePicker(false)} className="px-4 py-2 text-sm text-gray-600 rounded-lg hover:bg-gray-50">
                 Cancel
               </button>
@@ -669,32 +1084,13 @@ const BuildStructure: React.FC<BuildStructureProps> = ({ project, onUpdateProjec
               </div>
               <div className="space-y-2">
                 <p className="text-sm font-medium text-gray-700">Tables</p>
-                <div className="grid grid-cols-2 gap-3 max-h-64 overflow-y-auto">
-                  {allSources.map((src) => {
-                    const checked = selectedSources.includes(src.id);
-                    return (
-                      <label
-                        key={src.id}
-                        className={`border rounded-lg px-4 py-3 cursor-pointer transition ${
-                          checked ? 'border-blue-500 bg-blue-50' : 'border-gray-200 hover:border-gray-300'
-                        }`}
-                      >
-                        <div className="flex items-center justify-between">
-                          <div>
-                            <p className="font-medium text-gray-900">{src.name}</p>
-                            <p className="text-xs text-gray-500">{src.kind === 'ingestion' ? 'Ingestion' : 'Preparation'} data</p>
-                          </div>
-                          <input
-                            type="checkbox"
-                            checked={checked}
-                            onChange={(e) => handleSourceToggle(src.id, e.target.checked)}
-                            className="h-4 w-4 text-blue-600 border-gray-300 rounded"
-                          />
-                        </div>
-                      </label>
-                    );
-                  })}
-                  {allSources.length === 0 && <p className="text-sm text-gray-500">Upload data before creating a structure.</p>}
+                <div className="border border-gray-200 rounded-xl overflow-hidden bg-white max-h-[420px]">
+                  <TableSourceMultiSelect
+                    ingestionSources={ingestionSources}
+                    preparedSources={preparedSources}
+                    selectedSourceIds={selectedSources}
+                    onToggle={handleSourceToggle}
+                  />
                 </div>
               </div>
             </div>
@@ -750,7 +1146,7 @@ const BuildStructure: React.FC<BuildStructureProps> = ({ project, onUpdateProjec
                         <h4 className="font-semibold text-gray-900">{src.name}</h4>
                       </div>
                       <div className="text-xs text-gray-600 bg-white border border-gray-200 rounded-full px-3 py-1">
-                        {src.rows.length.toLocaleString()} rows
+                        {(typeof src.rowCount === 'number' ? src.rowCount : src.rows.length).toLocaleString()} rows
                       </div>
                     </div>
                     <div className="grid grid-cols-2 gap-4">
@@ -760,31 +1156,14 @@ const BuildStructure: React.FC<BuildStructureProps> = ({ project, onUpdateProjec
                           value={draft.sourceKey}
                           onChange={(e) => {
                             const nextKey = e.target.value;
-                            updateDraft(draft.sourceId, (curr) => {
-                              const srcRef = allSources.find((s) => s.id === draft.sourceId);
-                              const analysis = srcRef && nextKey ? analyzeSourceColumn(srcRef.rows, nextKey) : null;
-                              let nextMethod = curr.method;
-                              let nextParams = curr.params || {};
-                              if (!editingTargetName) {
-                                if (analysis?.isDateLikely) {
-                                  nextMethod = 'date_extract';
-                                  nextParams = { datePart: 'date_only' };
-                                } else if (analysis?.isArrayLikely) {
-                                  nextMethod = 'array_count';
-                                  nextParams = {};
-                                } else {
-                                  nextMethod = 'copy';
-                                  nextParams = {};
-                                }
-                              }
-                              return {
-                                ...curr,
-                                sourceKey: nextKey,
-                                method: nextMethod,
-                                params: nextParams,
-                                valueMap: editingTargetName ? curr.valueMap : {},
-                              };
-                            });
+                            updateDraftWithRefresh(draft.sourceId, (curr) => ({
+                              ...curr,
+                              sourceKey: nextKey,
+                              autoMethod: editingTargetName ? curr.autoMethod : true,
+                              method: editingTargetName ? curr.method : 'copy',
+                              params: editingTargetName ? curr.params : {},
+                              valueMap: editingTargetName ? curr.valueMap : {},
+                            }));
                           }}
                           className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm"
                         >
@@ -805,9 +1184,10 @@ const BuildStructure: React.FC<BuildStructureProps> = ({ project, onUpdateProjec
                           value={draft.method}
                           onChange={(e) => {
                             const method = e.target.value as TransformMethod;
-                            updateDraft(draft.sourceId, (curr) => ({
+                            updateDraftWithRefresh(draft.sourceId, (curr) => ({
                               ...curr,
                               method,
+                              autoMethod: false,
                               params:
                                 method === 'date_extract'
                                   ? { datePart: curr.params?.datePart || 'date_only' }
@@ -822,6 +1202,7 @@ const BuildStructure: React.FC<BuildStructureProps> = ({ project, onUpdateProjec
                                   : method === 'array_includes'
                                   ? { keyword: curr.params?.keyword || '' }
                                   : {},
+                              valueMap: editingTargetName ? curr.valueMap : {},
                             }));
                           }}
                           className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm"
@@ -845,8 +1226,9 @@ const BuildStructure: React.FC<BuildStructureProps> = ({ project, onUpdateProjec
                           <label className="text-sm font-medium text-gray-700">Delimiter</label>
                           <input
                             value={draft.params?.delimiter || ', '}
-                            onChange={(e) => updateDraft(draft.sourceId, (curr) => ({
+                            onChange={(e) => updateDraftWithRefresh(draft.sourceId, (curr) => ({
                               ...curr,
+                              autoMethod: false,
                               params: { ...curr.params, delimiter: e.target.value },
                             }))}
                             className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm"
@@ -862,8 +1244,9 @@ const BuildStructure: React.FC<BuildStructureProps> = ({ project, onUpdateProjec
                           <input
                             type="number"
                             value={draft.params?.index ?? 0}
-                            onChange={(e) => updateDraft(draft.sourceId, (curr) => ({
+                            onChange={(e) => updateDraftWithRefresh(draft.sourceId, (curr) => ({
                               ...curr,
+                              autoMethod: false,
                               params: { ...curr.params, index: Number(e.target.value) },
                             }))}
                             className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm"
@@ -879,8 +1262,9 @@ const BuildStructure: React.FC<BuildStructureProps> = ({ project, onUpdateProjec
                           <input
                             value={draft.params?.prefix ?? 'A-'}
                             onChange={(e) =>
-                              updateDraft(draft.sourceId, (curr) => ({
+                              updateDraftWithRefresh(draft.sourceId, (curr) => ({
                                 ...curr,
+                                autoMethod: false,
                                 params: { ...curr.params, prefix: e.target.value },
                               }))
                             }
@@ -900,8 +1284,9 @@ const BuildStructure: React.FC<BuildStructureProps> = ({ project, onUpdateProjec
                           <label className="text-sm font-medium text-gray-700">Keyword</label>
                           <input
                             value={draft.params?.keyword || ''}
-                            onChange={(e) => updateDraft(draft.sourceId, (curr) => ({
+                            onChange={(e) => updateDraftWithRefresh(draft.sourceId, (curr) => ({
                               ...curr,
+                              autoMethod: false,
                               params: { ...curr.params, keyword: e.target.value },
                             }))}
                             className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm"
@@ -916,8 +1301,9 @@ const BuildStructure: React.FC<BuildStructureProps> = ({ project, onUpdateProjec
                           <label className="text-sm font-medium text-gray-700">Date part</label>
                           <select
                             value={draft.params?.datePart || 'date_only'}
-                            onChange={(e) => updateDraft(draft.sourceId, (curr) => ({
+                            onChange={(e) => updateDraftWithRefresh(draft.sourceId, (curr) => ({
                               ...curr,
+                              autoMethod: false,
                               params: { ...curr.params, datePart: e.target.value },
                             }))}
                             className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm"
@@ -937,8 +1323,9 @@ const BuildStructure: React.FC<BuildStructureProps> = ({ project, onUpdateProjec
                           <label className="text-sm font-medium text-gray-700">Format</label>
                           <input
                             value={draft.params?.format || 'YYYY-MM-DD'}
-                            onChange={(e) => updateDraft(draft.sourceId, (curr) => ({
+                            onChange={(e) => updateDraftWithRefresh(draft.sourceId, (curr) => ({
                               ...curr,
+                              autoMethod: false,
                               params: { ...curr.params, format: e.target.value },
                             }))}
                             className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm"
@@ -1006,14 +1393,14 @@ const BuildStructure: React.FC<BuildStructureProps> = ({ project, onUpdateProjec
                           <div className="p-4 space-y-4">
                             {/* 1. Selector */}
                             <div className="space-y-2">
-                              <label className="text-xs font-medium text-gray-500">Pick value to map</label>
+                              <label className="text-xs font-medium text-gray-500">Source Value</label>
                               <div className="flex space-x-2">
                                 <select
                                   className="flex-1 border border-gray-300 rounded-lg px-2 py-1.5 text-xs bg-white focus:outline-none focus:ring-1 focus:ring-blue-500"
                                   value={draft.manualKey}
                                   onChange={(e) => updateDraft(draft.sourceId, (curr) => ({ ...curr, manualKey: e.target.value }))}
                                 >
-                                  <option value="">-- Select value --</option>
+                                  <option value="">None</option>
                                   {draft.uniqueValues
                                     .filter((v) => !draft.valueMap.hasOwnProperty(v))
                                     .map((v) => (
@@ -1023,7 +1410,7 @@ const BuildStructure: React.FC<BuildStructureProps> = ({ project, onUpdateProjec
                                     ))}
                                   {!draft.valueMap.hasOwnProperty('__NULL_VALUE__') && (
                                     <option value="__NULL_VALUE__" className="text-red-600 font-semibold">
-                                      Null value (No match found)
+                                      Null (No match)
                                     </option>
                                   )}
                                 </select>
@@ -1042,7 +1429,7 @@ const BuildStructure: React.FC<BuildStructureProps> = ({ project, onUpdateProjec
                                   <ArrowRight className="w-3 h-3 text-gray-400" />
                                   <input
                                     className="flex-1 border border-gray-300 rounded px-2 py-1 text-xs focus:outline-none focus:border-blue-500"
-                                    placeholder={draft.manualKey === '__NULL_VALUE__' ? 'Fallback value (e.g. Other)' : 'New value'}
+                                    placeholder={draft.manualKey === '__NULL_VALUE__' ? 'Fallback' : 'Mapped value'}
                                     value={draft.manualValue}
                                     onChange={(e) =>
                                       updateDraft(draft.sourceId, (curr) => ({ ...curr, manualValue: e.target.value }))
@@ -1178,7 +1565,7 @@ const BuildStructure: React.FC<BuildStructureProps> = ({ project, onUpdateProjec
                                   {draft.uniqueValues.length === 0 && Object.keys(draft.valueMap).length === 0 && (
                                     <tr>
                                       <td className="px-4 py-3 text-xs text-gray-400" colSpan={2}>
-                                        No mapped values yet. Add mappings below.
+                                        No mapped values.
                                       </td>
                                     </tr>
                                   )}
@@ -1187,7 +1574,7 @@ const BuildStructure: React.FC<BuildStructureProps> = ({ project, onUpdateProjec
                             </div>
 
                             <div className="px-4 py-3 bg-gray-50 border-t border-gray-200">
-                              <div className="text-[10px] text-gray-500 mb-2 font-medium">Add custom map (if value not found)</div>
+                              <div className="text-[10px] text-gray-500 mb-2 font-medium">Custom Map</div>
                               <div className="flex space-x-2">
                                 <input
                                   className="flex-1 px-2 py-1.5 border border-gray-300 rounded text-xs outline-none"
@@ -1249,7 +1636,7 @@ const BuildStructure: React.FC<BuildStructureProps> = ({ project, onUpdateProjec
           <div className="bg-white rounded-xl shadow-2xl w-full max-w-lg p-6">
             <div className="flex items-center justify-between mb-4">
               <div>
-                <p className="text-xs uppercase tracking-wide text-blue-600 font-semibold">Save structured output</p>
+                <p className="text-xs uppercase tracking-wide text-blue-600 font-semibold">Save</p>
                 <h3 className="text-lg font-semibold text-gray-900">Preparation Data</h3>
               </div>
               <button onClick={() => setShowSaveModal(false)} className="text-gray-400 hover:text-gray-600">
@@ -1257,17 +1644,126 @@ const BuildStructure: React.FC<BuildStructureProps> = ({ project, onUpdateProjec
               </button>
             </div>
 
-            <div className="space-y-2">
-              <label className="text-sm font-medium text-gray-700">Table name</label>
-              <input
-                value={saveName}
-                onChange={(e) => {
-                  setSaveName(e.target.value);
-                  setSaveError('');
-                }}
-                className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-200"
-                placeholder="Structured table name"
-              />
+            <div className="space-y-4">
+              <div className="flex bg-gray-100 p-1 rounded-lg">
+                <button
+                  onClick={() => {
+                    setSaveMode('new');
+                    setSaveError('');
+                  }}
+                  className={`flex-1 px-3 py-2 rounded-md text-sm font-medium transition-all ${
+                    saveMode === 'new' ? 'bg-white text-blue-600 shadow-sm' : 'text-gray-600 hover:text-gray-900'
+                  }`}
+                >
+                  Save As New
+                </button>
+                <button
+                  onClick={() => {
+                    setSaveMode('overwrite');
+                    setSaveError('');
+                  }}
+                  className={`flex-1 px-3 py-2 rounded-md text-sm font-medium transition-all ${
+                    saveMode === 'overwrite' ? 'bg-white text-blue-600 shadow-sm' : 'text-gray-600 hover:text-gray-900'
+                  }`}
+                >
+                  Overwrite
+                </button>
+              </div>
+
+              {saveMode === 'new' ? (
+                <div className="space-y-2">
+                  <label className="text-sm font-medium text-gray-700">Table Name</label>
+                  <input
+                    value={saveName}
+                    onChange={(e) => {
+                      setSaveName(e.target.value);
+                      setSaveError('');
+                    }}
+                    className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-200"
+                  />
+                </div>
+              ) : (
+                <div className="space-y-4">
+                  <div className="space-y-2">
+                    <label className="text-sm font-medium text-gray-700">Target Table</label>
+                    <select
+                      value={overwriteTargetId}
+                      onChange={(e) => {
+                        setOverwriteTargetId(e.target.value);
+                        setSaveError('');
+                      }}
+                      className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm bg-white shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-200"
+                    >
+                      <option value="">None</option>
+                      {preparedSources
+                        .slice()
+                        .sort((a, b) => b.updatedAt - a.updatedAt)
+                        .map((src) => (
+                          <option key={src.id} value={src.id}>
+                            {src.name}
+                          </option>
+                        ))}
+                    </select>
+                  </div>
+
+                  <div className="space-y-2">
+                    <label className="text-sm font-medium text-gray-700">Write Mode</label>
+                    <div className="flex bg-gray-100 p-1 rounded-lg">
+                      <button
+                        onClick={() => setOverwriteWriteMode('append')}
+                        className={`flex-1 px-3 py-2 rounded-md text-sm font-medium transition-all ${
+                          overwriteWriteMode === 'append'
+                            ? 'bg-white text-blue-600 shadow-sm'
+                            : 'text-gray-600 hover:text-gray-900'
+                        }`}
+                      >
+                        Append
+                      </button>
+                      <button
+                        onClick={() => setOverwriteWriteMode('replace')}
+                        className={`flex-1 px-3 py-2 rounded-md text-sm font-medium transition-all ${
+                          overwriteWriteMode === 'replace'
+                            ? 'bg-white text-blue-600 shadow-sm'
+                            : 'text-gray-600 hover:text-gray-900'
+                        }`}
+                      >
+                        Replace
+                      </button>
+                    </div>
+                  </div>
+
+                  {overwriteTarget && overwriteWriteMode === 'append' && overwriteSchema && (
+                    <div
+                      className={`rounded-lg border p-3 text-xs ${
+                        overwriteSchemaMatch
+                          ? 'bg-emerald-50 border-emerald-100 text-emerald-700'
+                          : 'bg-amber-50 border-amber-100 text-amber-700'
+                      }`}
+                    >
+                      <div className="font-semibold mb-1">
+                        {overwriteSchemaMatch ? 'Columns Match' : 'Columns Mismatch'}
+                      </div>
+                      {!overwriteSchemaMatch && (
+                        <div className="space-y-1">
+                          {overwriteSchema.missing.length > 0 && (
+                            <div>Missing: {overwriteSchema.missing.join(', ')}</div>
+                          )}
+                          {overwriteSchema.extra.length > 0 && <div>Extra: {overwriteSchema.extra.join(', ')}</div>}
+                          {overwriteSchema.typeMismatches.length > 0 && (
+                            <div>
+                              Types:{' '}
+                              {overwriteSchema.typeMismatches
+                                .map((m) => `${m.key} (${m.expectedType} → ${m.actualType})`)
+                                .join(', ')}
+                            </div>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+              )}
+
               {saveError && <p className="text-xs text-red-500">{saveError}</p>}
             </div>
 
@@ -1284,6 +1780,44 @@ const BuildStructure: React.FC<BuildStructureProps> = ({ project, onUpdateProjec
                 Save
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {confirm && (
+        <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 px-4">
+          <div className="bg-white rounded-xl shadow-2xl w-full max-w-lg p-6">
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-lg font-semibold text-gray-900">{confirm.title}</h3>
+              <button onClick={() => setConfirm(null)} className="text-gray-400 hover:text-gray-600">
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+            <div className="space-y-2 text-sm text-gray-700">
+              {confirm.lines.map((line, idx) => (
+                <div key={idx}>{line}</div>
+              ))}
+            </div>
+            <div className="flex justify-end space-x-3 mt-6">
+              <button onClick={() => setConfirm(null)} className="px-4 py-2 text-sm text-gray-600 rounded-lg hover:bg-gray-50">
+                Cancel
+              </button>
+              <button
+                onClick={confirm.onConfirm}
+                className="px-4 py-2 text-sm font-medium text-white bg-blue-600 rounded-lg shadow-sm hover:bg-blue-700 flex items-center"
+              >
+                {confirm.confirmLabel}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {isQueryModalOpen && (
+        <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 px-4">
+          <div className="bg-white rounded-xl shadow-2xl w-full max-w-md p-6 flex items-center space-x-3">
+            <Loader2 className="w-5 h-5 animate-spin text-blue-600" />
+            <div className="text-sm font-medium text-gray-900">Processing Query</div>
           </div>
         </div>
       )}

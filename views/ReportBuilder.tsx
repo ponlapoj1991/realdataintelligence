@@ -297,6 +297,7 @@ const ReportBuilder: React.FC<ReportBuilderProps> = ({ project, onUpdateProject 
   const handleIframeLoad = useCallback((iframe: HTMLIFrameElement | null) => {
     setIframeWindow(iframe?.contentWindow ?? null);
     setIsEditorReady(false);
+    lastSentLoadRef.current = null;
   }, []);
 
   const handlePptistMessage = useCallback(

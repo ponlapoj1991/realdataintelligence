@@ -16,15 +16,25 @@ import JSZip from 'jszip';
 import { saveAs } from 'file-saver';
 import {
   getProjectMetadata,
-  getAllDataChunks,
   saveProjectMetadata,
-  batchInsertData,
+  getDataChunk,
+  saveDataChunk,
+  getDataSourceChunk,
+  saveDataSourceChunk,
   deleteProjectV2,
 } from './storage-v2';
 import type { RawRow } from '../types';
 
-const BACKUP_VERSION = 1;
+const BACKUP_VERSION = 2;
 const CHUNK_SIZE = 1000;
+
+interface DataSourceManifestEntry {
+  id: string;
+  name: string;
+  kind: string;
+  rowCount: number;
+  chunkCount: number;
+}
 
 interface BackupManifest {
   version: number;
@@ -34,6 +44,7 @@ interface BackupManifest {
   projectName: string;
   rowCount: number;
   chunkCount: number;
+  dataSources?: DataSourceManifestEntry[];
 }
 
 export interface ExportProgress {
@@ -70,9 +81,22 @@ export const exportProject = async (
 
     report('metadata', 10, 'Loading project configuration...');
 
-    // Get all data chunks
-    report('data', 20, 'Loading project data...');
-    const allData = await getAllDataChunks(projectId);
+    report('data', 20, 'Preparing data chunks...');
+
+    const rawSources = Array.isArray((metadata as any).dataSources) ? ((metadata as any).dataSources as any[]) : [];
+    const sources: DataSourceManifestEntry[] = rawSources
+      .filter((s) => s && s.id)
+      .map((s) => {
+        const rowCount = typeof s.rowCount === 'number' ? s.rowCount : 0;
+        const chunkCount = typeof s.chunkCount === 'number' ? s.chunkCount : Math.ceil(rowCount / CHUNK_SIZE);
+        return {
+          id: String(s.id),
+          name: String(s.name || 'Table'),
+          kind: String(s.kind || 'ingestion'),
+          rowCount,
+          chunkCount,
+        };
+      });
 
     // Create ZIP file
     const zip = new JSZip();
@@ -84,8 +108,9 @@ export const exportProject = async (
       appVersion: '2.0.0',
       projectId: metadata.id,
       projectName: metadata.name,
-      rowCount: allData.length,
-      chunkCount: Math.ceil(allData.length / CHUNK_SIZE),
+      rowCount: typeof (metadata as any).rowCount === 'number' ? (metadata as any).rowCount : 0,
+      chunkCount: typeof (metadata as any).chunkCount === 'number' ? (metadata as any).chunkCount : 0,
+      dataSources: sources.length ? sources : undefined,
     };
     zip.file('manifest.json', JSON.stringify(manifest, null, 2));
 
@@ -95,27 +120,44 @@ export const exportProject = async (
     const metadataForExport = {
       ...metadata,
       // Clear data-related fields that will be reconstructed on import
-      rowCount: allData.length,
-      chunkCount: Math.ceil(allData.length / CHUNK_SIZE),
+      rowCount: manifest.rowCount,
+      chunkCount: manifest.chunkCount,
     };
     zip.file('metadata.json', JSON.stringify(metadataForExport, null, 2));
 
-    // Add data chunks
-    const dataFolder = zip.folder('data');
-    if (!dataFolder) {
-      throw new Error('Failed to create data folder in ZIP');
-    }
+    if (sources.length > 0) {
+      const root = zip.folder('data-sources');
+      if (!root) throw new Error('Failed to create data-sources folder in ZIP');
 
-    const totalChunks = Math.ceil(allData.length / CHUNK_SIZE);
-    for (let i = 0; i < totalChunks; i++) {
-      const start = i * CHUNK_SIZE;
-      const end = Math.min(start + CHUNK_SIZE, allData.length);
-      const chunkData = allData.slice(start, end);
+      const totalChunks = sources.reduce((sum, s) => sum + (s.chunkCount || 0), 0) || 1;
+      let written = 0;
 
-      dataFolder.file(`chunk_${i}.json`, JSON.stringify(chunkData));
+      for (const src of sources) {
+        const srcFolder = root.folder(src.id);
+        if (!srcFolder) throw new Error(`Failed to create folder for source ${src.id}`);
 
-      const percent = 30 + Math.round(((i + 1) / totalChunks) * 50);
-      report('data', percent, `Saving data chunk ${i + 1}/${totalChunks}...`);
+        for (let i = 0; i < src.chunkCount; i++) {
+          const chunkData = await getDataSourceChunk(projectId, src.id, i);
+          srcFolder.file(`chunk_${i}.json`, JSON.stringify(chunkData));
+
+          written += 1;
+          const percent = 30 + Math.round((written / totalChunks) * 50);
+          report('data', percent, `Saving data chunk ${written}/${totalChunks}...`);
+        }
+      }
+    } else {
+      // Fallback: export legacy active data chunks (v2)
+      const dataFolder = zip.folder('data');
+      if (!dataFolder) throw new Error('Failed to create data folder in ZIP');
+
+      const totalChunks = typeof (metadata as any).chunkCount === 'number' ? (metadata as any).chunkCount : 0;
+      for (let i = 0; i < totalChunks; i++) {
+        const chunkData = await getDataChunk(projectId, i);
+        dataFolder.file(`chunk_${i}.json`, JSON.stringify(chunkData));
+
+        const percent = 30 + Math.round(((i + 1) / Math.max(1, totalChunks)) * 50);
+        report('data', percent, `Saving data chunk ${i + 1}/${totalChunks}...`);
+      }
     }
 
     report('compressing', 85, 'Compressing backup file...');
@@ -203,54 +245,91 @@ export const importProject = async (
       }
     }
 
-    // Read all data chunks
     report('data', 40, 'Loading data chunks...');
 
-    const allData: RawRow[] = [];
-    const dataFolder = zip.folder('data');
+    const sourceEntries: DataSourceManifestEntry[] = Array.isArray(manifest.dataSources) ? manifest.dataSources : [];
 
-    if (dataFolder) {
+    const activeSourceId: string | undefined =
+      (metadata && metadata.activeDataSourceId) ||
+      (sourceEntries.length ? sourceEntries[0].id : undefined);
+
+    let activeRowCount = 0;
+    let activeChunkCount = 0;
+
+    if (manifest.version >= 2 && sourceEntries.length > 0) {
+      const root = zip.folder('data-sources');
+      if (!root) throw new Error('Invalid backup file: missing data-sources folder');
+
+      const totalChunks = sourceEntries.reduce((sum, s) => sum + (s.chunkCount || 0), 0) || 1;
+      let processed = 0;
+
+      for (const src of sourceEntries) {
+        const srcFolder = root.folder(src.id);
+        if (!srcFolder) continue;
+
+        if (src.id === activeSourceId) {
+          activeRowCount = src.rowCount;
+          activeChunkCount = src.chunkCount;
+        }
+
+        for (let i = 0; i < src.chunkCount; i++) {
+          const fileObj = srcFolder.file(`chunk_${i}.json`);
+          if (!fileObj) continue;
+          const chunkText = await fileObj.async('string');
+          const chunkData: RawRow[] = JSON.parse(chunkText);
+
+          await saveDataSourceChunk(projectId, src.id, i, chunkData);
+          if (src.id === activeSourceId) {
+            await saveDataChunk(projectId, i, chunkData);
+          }
+
+          processed += 1;
+          const percent = 40 + Math.round((processed / totalChunks) * 45);
+          report('data', percent, `Loading chunk ${processed}/${totalChunks}...`);
+        }
+      }
+    } else {
+      // Legacy v1 backup: data/chunk_*.json -> active project data store
+      const dataFolder = zip.folder('data');
       const chunkFiles: { index: number; file: JSZip.JSZipObject }[] = [];
 
-      dataFolder.forEach((relativePath, file) => {
-        const match = relativePath.match(/chunk_(\d+)\.json$/);
-        if (match) {
-          chunkFiles.push({ index: parseInt(match[1], 10), file });
-        }
-      });
+      if (dataFolder) {
+        dataFolder.forEach((relativePath, file) => {
+          const match = relativePath.match(/chunk_(\d+)\.json$/);
+          if (match) {
+            chunkFiles.push({ index: parseInt(match[1], 10), file });
+          }
+        });
+      }
 
-      // Sort by index
       chunkFiles.sort((a, b) => a.index - b.index);
+      activeChunkCount = chunkFiles.length;
+      activeRowCount = typeof manifest.rowCount === 'number' ? manifest.rowCount : 0;
 
       for (let i = 0; i < chunkFiles.length; i++) {
         const { file } = chunkFiles[i];
         const chunkText = await file.async('string');
         const chunkData: RawRow[] = JSON.parse(chunkText);
-        allData.push(...chunkData);
+        await saveDataChunk(projectId, i, chunkData);
 
-        const percent = 40 + Math.round(((i + 1) / chunkFiles.length) * 40);
+        const percent = 40 + Math.round(((i + 1) / Math.max(1, chunkFiles.length)) * 45);
         report('data', percent, `Loading chunk ${i + 1}/${chunkFiles.length}...`);
       }
     }
 
-    report('data', 85, 'Saving project data...');
+    report('metadata', 92, 'Saving project configuration...');
 
-    // Save data chunks
-    await batchInsertData(projectId, allData, (progress) => {
-      const percent = 85 + Math.round(progress * 0.1);
-      report('data', percent, `Saving data... ${progress}%`);
-    });
-
-    report('metadata', 95, 'Saving project configuration...');
-
-    // Save metadata with new ID and name
+    // Save metadata with new ID and name (ensure no embedded rows)
     const newMetadata = {
       ...metadata,
       id: projectId,
       name: projectName,
       lastModified: Date.now(),
-      rowCount: allData.length,
-      chunkCount: Math.ceil(allData.length / CHUNK_SIZE),
+      rowCount: activeRowCount,
+      chunkCount: activeChunkCount,
+      dataSources: Array.isArray(metadata?.dataSources)
+        ? metadata.dataSources.map((s: any) => ({ ...s, rows: [], rowCount: s.rowCount ?? 0, chunkCount: s.chunkCount ?? 0 }))
+        : metadata?.dataSources,
       storageVersion: 2,
     };
 
@@ -312,13 +391,14 @@ export const getProjectStorageSize = async (projectId: string): Promise<number> 
   const metadata = await getProjectMetadata(projectId);
   if (!metadata) return 0;
 
-  const allData = await getAllDataChunks(projectId);
-
-  // Rough estimate: metadata + data as JSON
+  // Rough estimate: metadata + first chunk as a proxy for average row size
   const metadataSize = JSON.stringify(metadata).length;
-  const dataSize = JSON.stringify(allData).length;
+  const firstChunk = await getDataChunk(projectId, 0);
+  const sampleSize = JSON.stringify(firstChunk).length;
+  const chunkCount = typeof (metadata as any).chunkCount === 'number' ? (metadata as any).chunkCount : 0;
+  const approxDataSize = sampleSize * Math.max(1, chunkCount);
 
-  return metadataSize + dataSize;
+  return metadataSize + approxDataSize;
 };
 
 /**

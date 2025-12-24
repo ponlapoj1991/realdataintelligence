@@ -93,8 +93,8 @@ const ChartTypeSelector: React.FC<ChartTypeSelectorProps> = ({
                     onClick={() => handleSelect(chart.type)}
                     className="group flex flex-col items-start gap-4 p-5 border border-gray-200 rounded-xl hover:border-gray-400 hover:shadow-lg transition-all duration-200 bg-white"
                   >
-                    <div className="w-full h-28 rounded-xl bg-gradient-to-br from-gray-50 to-gray-100 flex items-center justify-center">
-                      <IconComponent className="w-10 h-10 text-gray-700" />
+                    <div className="w-full h-32 rounded-xl bg-gradient-to-br from-gray-50 to-gray-100 flex items-center justify-center">
+                      <IconComponent className="w-12 h-12 text-gray-700" />
                     </div>
                     <div className="text-left">
                       <p className="text-base font-semibold text-gray-900">{chart.label}</p>

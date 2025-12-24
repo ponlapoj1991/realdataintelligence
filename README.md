@@ -10,7 +10,7 @@ If you are an AI Agent working on this repository, please adhere to the followin
 2.  **Branching Strategy**: Do NOT modify `main` directly. Always checkout a new feature branch (e.g., `feature/new-module` or `fix/bug-name`) before writing code.
 3.  **No "Localhost" Assumption**: Do not hallucinate that a local server is running or try to access `localhost` unless explicitly instructed to start the dev server. Focus on static code analysis and implementation.
 4.  **Hybrid Architecture**:
-    - **Core App**: React + TypeScript (`/src`, `/components`, `/views`).
+    - **Core App**: React + TypeScript (`App.tsx`, `index.tsx`, and `components/`, `views/`, `hooks/`, `utils/`, `constants/`, `workers/`).
     - **Presentation Tool (RealPPTX)**: Vue 3 + TypeScript (Sub-module/Integration in `/integrations/realpptx`).
 
 ## Architecture
@@ -48,7 +48,7 @@ To keep charts visually consistent across the app, both the Core App and Canvas 
 - **Charts**: ECharts (SVG renderer)
 - **Canvas Stars**: Vue 3, TypeScript, Pinia, ProseMirror (rich text)
 - **PPTX**: `pptxgenjs` (export) and `pptxtojson` (import)
-- **Storage**: IndexedDB (Core) + Dexie (Canvas Stars)
+- **Storage**: IndexedDB (Core; chunked storage in `utils/storage-v2.ts` with migration in `utils/storage-compat.ts`) + Dexie (Canvas Stars)
 - **Deployment**: Vercel
 
 ## Development

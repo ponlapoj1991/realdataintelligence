@@ -12,7 +12,7 @@ export interface DashboardChartInsertPayload {
   data: {
     labels: string[];
     legends: string[];
-    series: number[][];
+    series: unknown[][];
     seriesColors?: string[];
     dataColors?: string[];
   };
@@ -20,6 +20,7 @@ export interface DashboardChartInsertPayload {
     // Series/stack
     stack?: boolean;
     lineSmooth?: boolean;
+    connectNulls?: boolean;
     lineStrokeWidth?: number;
     lineStrokeStyle?: 'solid' | 'dashed' | 'dotted';
     seriesTypes?: SeriesVisualType[];
@@ -124,15 +125,19 @@ const mapWidgetType = (widget: DashboardWidget): PptChartType | null => {
     case 'column':
     case 'stacked-column':
     case '100-stacked-column':
+    case 'compare-column':
       return 'column';
+    case 'compare-bar':
     case 'bar':
     case 'stacked-bar':
     case '100-stacked-bar':
       return 'bar';
     case 'line':
     case 'smooth-line':
+    case 'multi-line':
       return 'line';
     case 'area':
+    case 'multi-area':
     case 'stacked-area':
     case '100-stacked-area':
       return 'area';
@@ -173,6 +178,15 @@ const buildStackedSeries = (rows: any[], stackKeys: string[]) => {
   const legends = stackKeys;
   const series = stackKeys.map(key => rows.map(row => Number(row[key]) || 0));
   const labels = rows.map(row => String(row.name ?? row.label ?? ''));
+  return { labels, legends, series };
+};
+
+const buildMultiValueSeries = (rows: any[], seriesKeys: string[]) => {
+  const legends = seriesKeys;
+  const series = seriesKeys.map((key) =>
+    rows.map((row) => (row[key] === undefined ? null : row[key]))
+  );
+  const labels = rows.map((row) => String(row.name ?? row.label ?? ''));
   return { labels, legends, series };
 };
 
@@ -391,7 +405,7 @@ export const buildDashboardChartPayload = (
 
   let labels: string[] = [];
   let legends: string[] = [];
-  let series: number[][] = [];
+  let series: unknown[][] = [];
   let pointSizes: number[] | undefined;
   let seriesColors: string[] | undefined;
   let dataColors: string[] | undefined;
@@ -404,7 +418,10 @@ export const buildDashboardChartPayload = (
     pointSizes = scatter.pointSizes;
     dataColors = scatter.dataColors;
   } else if (aggregated.stackKeys && aggregated.stackKeys.length) {
-    const result = buildStackedSeries(aggregated.data, aggregated.stackKeys);
+    const result =
+      widget.type === 'multi-line' || widget.type === 'multi-area'
+        ? buildMultiValueSeries(aggregated.data, aggregated.stackKeys)
+        : buildStackedSeries(aggregated.data, aggregated.stackKeys);
     labels = result.labels;
     legends = result.legends;
     series = result.series;
@@ -468,6 +485,7 @@ export const buildDashboardChartPayload = (
     options: {
       stack: aggregated.isStack,
       lineSmooth: widget.type === 'smooth-line' || widget.curveType === 'monotone',
+      connectNulls: widget.fillMode === 'connect',
       pointSizes,
       orientation,
       barWidth,

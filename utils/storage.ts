@@ -1,7 +1,7 @@
 import { Project, ProjectTab } from '../types';
 
 const DB_NAME = 'RealDataDB';
-const DB_VERSION = 1;
+const DB_VERSION = 3;
 const STORE_NAME = 'projects';
 const CONFIG_KEY = 'real_data_config_v1';
 

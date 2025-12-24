@@ -29,12 +29,13 @@ import {
 } from '../types';
 
 const DB_NAME = 'RealDataDB';
-const DB_VERSION = 2; // Upgraded from v1
+const DB_VERSION = 3; // Upgraded from v1/v2 (adds per-DataSource chunks)
 const CONFIG_KEY = 'real_data_config_v2';
 
 // Store names
 const STORE_PROJECTS = 'projects'; // Metadata only
 const STORE_DATA_CHUNKS = 'data_chunks'; // Chunked raw data
+const STORE_DATA_SOURCE_CHUNKS = 'data_source_chunks'; // Chunked data per DataSource
 const STORE_CACHE = 'cache'; // Aggregation cache
 
 // Configuration
@@ -71,6 +72,13 @@ interface ProjectMetadata {
 
 interface DataChunk {
   projectId: string;
+  chunkIndex: number;
+  data: RawRow[];
+}
+
+interface DataSourceChunk {
+  projectId: string;
+  sourceId: string;
   chunkIndex: number;
   data: RawRow[];
 }
@@ -114,6 +122,14 @@ const openDB = (): Promise<IDBDatabase> => {
       if (!db.objectStoreNames.contains(STORE_DATA_CHUNKS)) {
         const dataStore = db.createObjectStore(STORE_DATA_CHUNKS, { keyPath: ['projectId', 'chunkIndex'] });
         dataStore.createIndex('projectId', 'projectId', { unique: false });
+      }
+
+      if (!db.objectStoreNames.contains(STORE_DATA_SOURCE_CHUNKS)) {
+        const sourceDataStore = db.createObjectStore(STORE_DATA_SOURCE_CHUNKS, {
+          keyPath: ['projectId', 'sourceId', 'chunkIndex'],
+        });
+        sourceDataStore.createIndex('projectId', 'projectId', { unique: false });
+        sourceDataStore.createIndex('projectId_sourceId', ['projectId', 'sourceId'], { unique: false });
       }
 
       if (!db.objectStoreNames.contains(STORE_CACHE)) {
@@ -189,6 +205,12 @@ export const deleteProjectV2 = async (projectId: string): Promise<void> => {
 
   // Delete all data chunks
   await deleteAllDataChunks(projectId);
+  // Delete all per-DataSource chunks (v3+)
+  try {
+    await deleteAllDataSourceChunksForProject(projectId);
+  } catch (e) {
+    // Ignore if store doesn't exist (older DB) or delete fails
+  }
 
   // Delete cache
   await clearCache(projectId);
@@ -270,6 +292,130 @@ export const deleteAllDataChunks = async (projectId: string): Promise<void> => {
 
     request.onerror = () => reject(request.error);
   });
+};
+
+// --- DataSource Chunk Operations (v3) ---
+
+export const saveDataSourceChunk = async (
+  projectId: string,
+  sourceId: string,
+  chunkIndex: number,
+  data: RawRow[]
+): Promise<void> => {
+  const db = await openDB();
+  return new Promise((resolve, reject) => {
+    const transaction = db.transaction([STORE_DATA_SOURCE_CHUNKS], 'readwrite');
+    const store = transaction.objectStore(STORE_DATA_SOURCE_CHUNKS);
+
+    const chunk: DataSourceChunk = {
+      projectId,
+      sourceId,
+      chunkIndex,
+      data,
+    };
+
+    const request = store.put(chunk);
+    request.onsuccess = () => resolve();
+    request.onerror = () => reject(request.error);
+  });
+};
+
+export const getDataSourceChunk = async (projectId: string, sourceId: string, chunkIndex: number): Promise<RawRow[]> => {
+  const db = await openDB();
+  return new Promise((resolve, reject) => {
+    const transaction = db.transaction([STORE_DATA_SOURCE_CHUNKS], 'readonly');
+    const store = transaction.objectStore(STORE_DATA_SOURCE_CHUNKS);
+    const request = store.get([projectId, sourceId, chunkIndex]);
+
+    request.onsuccess = () => {
+      const chunk = request.result as DataSourceChunk | undefined;
+      resolve(chunk?.data || []);
+    };
+    request.onerror = () => reject(request.error);
+  });
+};
+
+export const getAllDataSourceChunks = async (projectId: string, sourceId: string): Promise<RawRow[]> => {
+  const db = await openDB();
+  return new Promise((resolve, reject) => {
+    const transaction = db.transaction([STORE_DATA_SOURCE_CHUNKS], 'readonly');
+    const store = transaction.objectStore(STORE_DATA_SOURCE_CHUNKS);
+    const index = store.index('projectId_sourceId');
+    const request = index.getAll([projectId, sourceId]);
+
+    request.onsuccess = () => {
+      const chunks = request.result as DataSourceChunk[];
+      const sortedData = chunks
+        .sort((a, b) => a.chunkIndex - b.chunkIndex)
+        .flatMap((chunk) => chunk.data);
+      resolve(sortedData);
+    };
+    request.onerror = () => reject(request.error);
+  });
+};
+
+export const deleteAllDataSourceChunksForSource = async (projectId: string, sourceId: string): Promise<void> => {
+  const db = await openDB();
+  return new Promise((resolve, reject) => {
+    const transaction = db.transaction([STORE_DATA_SOURCE_CHUNKS], 'readwrite');
+    const store = transaction.objectStore(STORE_DATA_SOURCE_CHUNKS);
+    const index = store.index('projectId_sourceId');
+    const request = index.openCursor(IDBKeyRange.only([projectId, sourceId]));
+
+    request.onsuccess = (event: any) => {
+      const cursor = event.target.result;
+      if (cursor) {
+        cursor.delete();
+        cursor.continue();
+      } else {
+        resolve();
+      }
+    };
+    request.onerror = () => reject(request.error);
+  });
+};
+
+export const deleteAllDataSourceChunksForProject = async (projectId: string): Promise<void> => {
+  const db = await openDB();
+  return new Promise((resolve, reject) => {
+    const transaction = db.transaction([STORE_DATA_SOURCE_CHUNKS], 'readwrite');
+    const store = transaction.objectStore(STORE_DATA_SOURCE_CHUNKS);
+    const index = store.index('projectId');
+    const request = index.openCursor(IDBKeyRange.only(projectId));
+
+    request.onsuccess = (event: any) => {
+      const cursor = event.target.result;
+      if (cursor) {
+        cursor.delete();
+        cursor.continue();
+      } else {
+        resolve();
+      }
+    };
+    request.onerror = () => reject(request.error);
+  });
+};
+
+export const batchInsertDataSource = async (
+  projectId: string,
+  sourceId: string,
+  data: RawRow[],
+  onProgress?: (percent: number) => void
+): Promise<void> => {
+  await deleteAllDataSourceChunksForSource(projectId, sourceId);
+
+  const chunkCount = Math.ceil(data.length / CHUNK_SIZE);
+  for (let i = 0; i < chunkCount; i++) {
+    const start = i * CHUNK_SIZE;
+    const end = Math.min(start + CHUNK_SIZE, data.length);
+    const chunkData = data.slice(start, end);
+
+    await saveDataSourceChunk(projectId, sourceId, i, chunkData);
+
+    if (onProgress) {
+      onProgress(Math.round(((i + 1) / chunkCount) * 100));
+    }
+  }
 };
 
 /**
@@ -361,6 +507,45 @@ export const getDataPaginated = async (
     page,
     pageSize,
     hasMore: endRow < metadata.rowCount
+  };
+};
+
+/**
+ * Paginated data retrieval for a specific DataSource (v3+).
+ * Falls back to empty if the datasource chunks are missing.
+ */
+export const getDataSourcePaginated = async (
+  projectId: string,
+  sourceId: string,
+  page: number = 0,
+  pageSize: number = 1000,
+  opts?: { totalRows?: number; totalChunks?: number }
+): Promise<PaginationResult> => {
+  const total = typeof opts?.totalRows === 'number' ? opts.totalRows : 0;
+  const chunkCount = typeof opts?.totalChunks === 'number' ? opts.totalChunks : Math.ceil(total / CHUNK_SIZE);
+
+  const startRow = page * pageSize;
+  const endRow = startRow + pageSize;
+
+  const startChunk = Math.floor(startRow / CHUNK_SIZE);
+  const endChunk = Math.ceil(endRow / CHUNK_SIZE);
+
+  const rows: RawRow[] = [];
+
+  for (let i = startChunk; i < endChunk && i < chunkCount; i++) {
+    const chunkData = await getDataSourceChunk(projectId, sourceId, i);
+    rows.push(...chunkData);
+  }
+
+  const offsetInFirstChunk = startRow % CHUNK_SIZE;
+  const slicedRows = rows.slice(offsetInFirstChunk, offsetInFirstChunk + pageSize);
+
+  return {
+    rows: slicedRows,
+    total,
+    page,
+    pageSize,
+    hasMore: endRow < total
   };
 };
 

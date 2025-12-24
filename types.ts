@@ -74,6 +74,10 @@ export interface DataSource {
   name: string;
   kind: DataSourceKind;
   rows: RawRow[];
+  /** Optional: stored in IndexedDB v2+ without loading rows into memory */
+  rowCount?: number;
+  /** Optional: chunk count for the stored rows */
+  chunkCount?: number;
   columns: ColumnConfig[];
   createdAt: number;
   updatedAt: number;
@@ -122,16 +126,20 @@ export type ChartType =
   | 'column'
   | 'stacked-column'
   | '100-stacked-column'
+  | 'compare-column'
 
   // Bar Charts (horizontal)
   | 'bar'
   | 'stacked-bar'
   | '100-stacked-bar'
+  | 'compare-bar'
 
   // Line Charts
   | 'line'
   | 'smooth-line'
+  | 'multi-line'
   | 'area'
+  | 'multi-area'
   | 'stacked-area'
   | '100-stacked-area'
 
@@ -285,6 +293,10 @@ export interface DashboardWidget {
   measureCol?: string;
   stackBy?: string;       // For stacked charts (stacked-column, stacked-bar, stacked-area)
   filters?: DashboardFilter[];
+  /** Hide specific series values (applies when chart uses Series By). */
+  seriesFilter?: string[];
+  /** Split series values by separators (",", ";", "|", newline). */
+  seriesGroupByString?: boolean;
 
   // Bubble Chart Specific
   xDimension?: string;    // X-axis dimension for bubble/scatter
@@ -306,6 +318,7 @@ export interface DashboardWidget {
   curveType?: 'linear' | 'monotone' | 'step';
   strokeWidth?: number;
   strokeStyle?: 'solid' | 'dashed' | 'dotted';
+  fillMode?: 'gaps' | 'zero' | 'connect';
 
   // KPI (Number) Specific
   kpiCountMode?: 'row' | 'group';
@@ -373,6 +386,8 @@ export interface DrillDownState {
   filterCol: string;
   filterVal: string;
   data: RawRow[];
+  isLoading?: boolean;
+  error?: string;
 }
 
 // --- Report Builder Types (Phase 5) ---
@@ -482,6 +497,8 @@ export interface Project {
   lastModified: number;
   data: RawRow[];          // Legacy active data snapshot
   columns: ColumnConfig[]; // Legacy active schema
+  /** Optional: v2 metadata row count (avoids loading all rows just to show counts) */
+  rowCount?: number;
 
   dataSources?: DataSource[]; // Multi-table support
   activeDataSourceId?: string; // Which table powers features
@@ -505,21 +522,8 @@ export interface Project {
   aiSettings?: AISettings; // Per-project AI settings (legacy/compat)
 }
 
-// Interface for the globally available XLSX object from CDN
-export interface XLSXLibrary {
-  read: (data: any, options?: any) => any;
-  utils: {
-    sheet_to_json: (worksheet: any, options?: any) => any[];
-    json_to_sheet: (data: any[]) => any;
-    book_new: () => any;
-    book_append_sheet: (workbook: any, worksheet: any, name: string) => void;
-  };
-  writeFile: (workbook: any, filename: string, options?: any) => void;
-}
-
 declare global {
   interface Window {
-    XLSX: XLSXLibrary;
     html2canvas: any;
     PptxGenJS: any;
     JSZip: any;

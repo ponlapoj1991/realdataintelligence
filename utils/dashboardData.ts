@@ -32,7 +32,14 @@ export const resolveDashboardBaseData = (
       ? applyTransformation(sourceRows, project.transformRules)
       : sourceRows;
 
-  const availableColumns = transformedRows[0] ? Object.keys(transformedRows[0]) : [];
+  const availableColumns =
+    project.transformRules && project.transformRules.length > 0
+      ? project.transformRules.map((r) => r.targetName)
+      : source?.columns?.length
+        ? source.columns.map((c) => c.key)
+        : transformedRows[0]
+          ? Object.keys(transformedRows[0])
+          : [];
 
   return {
     rows: transformedRows,

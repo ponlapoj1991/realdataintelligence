@@ -23,6 +23,7 @@ import {
 import EmptyState from '../components/EmptyState';
 import ChartBuilder from '../components/ChartBuilder';
 import MagicWidgetRenderer from '../components/MagicWidgetRenderer';
+import DataSourcePickerModal from '../components/DataSourcePickerModal';
 import { Project, ProjectDashboard, DashboardWidget, DashboardFilter, DrillDownState, RawRow, FilterDataType } from '../types';
 import {
   ensureMagicDashboards,
@@ -34,14 +35,16 @@ import {
   updateMagicDashboardGlobalFilters,
   renameMagicDashboard,
 } from '../utils/dashboards';
-import { ensureDataSources } from '../utils/dataSources';
+import { ensureDataSources, getDataSourcesByKind } from '../utils/dataSources';
 import { resolveDashboardBaseData } from '../utils/dashboardData';
 import { saveProject } from '../utils/storage-compat';
+import { getAllDataChunks, getAllDataSourceChunks } from '../utils/storage-v2';
 import { REALPPTX_CHART_THEME } from '../constants/chartTheme';
 import { exportToExcel } from '../utils/excel';
 import { generatePowerPoint } from '../utils/report';
 import { useMagicAggregationWorker } from '../hooks/useMagicAggregationWorker';
 import { applyWidgetFilters, getTopNOverflowDimensionValues } from '../utils/widgetData';
+import { applyTransformation } from '../utils/transform';
 
 // --- Helper Functions (Ported from Analytics.tsx) ---
 const SAMPLE_SIZE = 50;
@@ -140,6 +143,8 @@ const DashboardMagic: React.FC<DashboardMagicProps> = ({ project, onUpdateProjec
   const [isCreateOpen, setIsCreateOpen] = useState(false);
   const [newDashboardName, setNewDashboardName] = useState('');
   const [selectedDataSourceId, setSelectedDataSourceId] = useState<string>('');
+  const [isCreateSourcePickerOpen, setCreateSourcePickerOpen] = useState(false);
+  const [isEditorSourcePickerOpen, setEditorSourcePickerOpen] = useState(false);
   const [widgets, setWidgets] = useState<DashboardWidget[]>(activeDashboard?.widgets || []);
   const [isBuilderOpen, setIsBuilderOpen] = useState(false);
   const [editingWidget, setEditingWidget] = useState<DashboardWidget | null>(null);
@@ -185,6 +190,9 @@ const DashboardMagic: React.FC<DashboardMagicProps> = ({ project, onUpdateProjec
     }
   }, [isCreateOpen, project.activeDataSourceId, project.dataSources]);
 
+  const ingestionSources = useMemo(() => getDataSourcesByKind(normalizedProject, 'ingestion'), [normalizedProject]);
+  const preparedSources = useMemo(() => getDataSourcesByKind(normalizedProject, 'prepared'), [normalizedProject]);
+
   useEffect(() => {
     if (activeDashboard) {
       setWidgets(activeDashboard.widgets);
@@ -208,7 +216,7 @@ const DashboardMagic: React.FC<DashboardMagicProps> = ({ project, onUpdateProjec
   }, [editingDashboard?.id]);
 
   // --- Data Logic (Moved from Analytics.tsx) ---
-  const { rows: baseData, availableColumns } = useMemo(() => {
+  const { rows: baseData, availableColumns, dataSourceId: baseDataSourceId } = useMemo(() => {
     return resolveDashboardBaseData(normalizedProject, editingDashboard ?? null);
   }, [
     // Keep base data stable while editing widgets to avoid re-sending huge rows to the worker.
@@ -217,6 +225,21 @@ const DashboardMagic: React.FC<DashboardMagicProps> = ({ project, onUpdateProjec
     normalizedProject.transformRules,
     editingDashboard?.dataSourceId,
   ]);
+
+  const workerSource = useMemo(() => {
+    const resolvedSource =
+      (baseDataSourceId && normalizedProject.dataSources?.find((s) => s.id === baseDataSourceId)) ||
+      (normalizedProject.activeDataSourceId && normalizedProject.dataSources?.find((s) => s.id === normalizedProject.activeDataSourceId)) ||
+      normalizedProject.dataSources?.[0];
+
+    return {
+      mode: 'dataSource' as const,
+      projectId: normalizedProject.id,
+      dataSourceId: baseDataSourceId || resolvedSource?.id,
+      dataVersion: resolvedSource?.updatedAt ?? normalizedProject.lastModified,
+      transformRules: normalizedProject.transformRules,
+    };
+  }, [baseDataSourceId, normalizedProject.dataSources, normalizedProject.activeDataSourceId, normalizedProject.id, normalizedProject.lastModified, normalizedProject.transformRules]);
 
   const columnTypeMap = useMemo(() => {
     const sampleRows = baseData.slice(0, SAMPLE_SIZE);
@@ -254,7 +277,42 @@ const DashboardMagic: React.FC<DashboardMagicProps> = ({ project, onUpdateProjec
     return baseData.filter(row => filters.every(f => matchesFilterCondition(row, f)));
   }, [baseData, filters, matchesFilterCondition]);
 
-  const magicAggWorker = useMagicAggregationWorker(baseData, REALPPTX_CHART_THEME);
+  const magicAggWorker = useMagicAggregationWorker(workerSource, REALPPTX_CHART_THEME);
+
+  const drilldownReqRef = useRef(0);
+  const drilldownRowsCacheRef = useRef<Map<string, { version: number; rows: RawRow[] }>>(new Map());
+
+  const loadRowsForSource = useCallback(
+    async (sourceId: string): Promise<RawRow[]> => {
+      const src = (normalizedProject.dataSources || []).find((s) => s.id === sourceId);
+      const version = src?.updatedAt ?? normalizedProject.lastModified ?? 0;
+
+      const cached = drilldownRowsCacheRef.current.get(sourceId);
+      if (cached && cached.version === version) return cached.rows;
+
+      let rows = await getAllDataSourceChunks(normalizedProject.id, sourceId);
+      if (rows.length === 0 && src && Array.isArray((src as any).rows) && (src as any).rows.length > 0) {
+        rows = (src as any).rows as RawRow[];
+      }
+      if (rows.length === 0 && normalizedProject.activeDataSourceId === sourceId) {
+        rows = await getAllDataChunks(normalizedProject.id);
+      }
+      const transformed =
+        normalizedProject.transformRules && normalizedProject.transformRules.length > 0
+          ? applyTransformation(rows, normalizedProject.transformRules)
+          : rows;
+
+      drilldownRowsCacheRef.current.set(sourceId, { version, rows: transformed });
+      while (drilldownRowsCacheRef.current.size > 2) {
+        const oldestKey = drilldownRowsCacheRef.current.keys().next().value as string | undefined;
+        if (!oldestKey) break;
+        drilldownRowsCacheRef.current.delete(oldestKey);
+      }
+
+      return transformed;
+    },
+    [normalizedProject.dataSources, normalizedProject.id, normalizedProject.lastModified, normalizedProject.transformRules]
+  );
 
   const persistProject = useCallback(
     async (updated: Project) => {
@@ -693,72 +751,255 @@ const DashboardMagic: React.FC<DashboardMagicProps> = ({ project, onUpdateProjec
 
 
   // --- Interaction Handler (Filter vs Drill) ---
-  const handleChartValueSelect = (widget: DashboardWidget, activeLabel?: string, activeSeries?: string) => {
-    const label = String(activeLabel ?? '').trim();
-    if (!label) return;
+  const handleChartValueSelect = useCallback(
+    (widget: DashboardWidget, activeLabel?: string, activeSeries?: string) => {
+      void (async () => {
+        const label = String(activeLabel ?? '').trim();
+        if (!label) return;
 
-    const filterColumn = widget.dimension;
-    if (!filterColumn) return;
+        const reqId = ++drilldownReqRef.current;
+        setDrillDown({
+          isOpen: true,
+          title: widget.title,
+          filterCol: '',
+          filterVal: '',
+          data: [],
+          isLoading: true,
+          error: undefined,
+        });
 
-    const normalizeDim = (raw: any) => {
-      const s = String(raw ?? '').trim();
-      return s ? s : '(Empty)';
-    };
-    const getDimValues = (row: RawRow) => {
-      const base = normalizeDim(row[filterColumn]);
-      if (!widget.groupByString) return [base];
-      const tokens = base.split(/[,\n;|]+/).map((t) => t.trim()).filter(Boolean);
-      return tokens.length ? tokens : ['(Empty)'];
-    };
+        const sourceId =
+          baseDataSourceId ||
+          workerSource.dataSourceId ||
+          normalizedProject.activeDataSourceId ||
+          normalizedProject.dataSources?.[0]?.id;
+        if (!sourceId) return;
 
-    const rowsForWidget = applyWidgetFilters(filteredData, widget.filters);
+        const sourceRows =
+          baseData.length > 0 && baseDataSourceId === sourceId ? baseData : await loadRowsForSource(sourceId);
+        if (reqId !== drilldownReqRef.current) return;
 
-    const isStackedChart = [
-      'stacked-column', '100-stacked-column',
-      'stacked-bar', '100-stacked-bar',
-      'stacked-area', '100-stacked-area'
-    ].includes(widget.type);
+        const globalFiltered =
+          filters.length === 0
+            ? sourceRows
+            : sourceRows.filter((row) => filters.every((f) => matchesFilterCondition(row, f)));
+        const rowsForWidget = applyWidgetFilters(globalFiltered, widget.filters);
 
-    const stackColumn = isStackedChart ? widget.stackBy : undefined;
-    const stackLabel = stackColumn ? String(activeSeries ?? '').trim() : '';
-    const normalizeStack = (raw: any) => {
-      const s = String(raw ?? '').trim();
-      if (s) return s;
-      return raw === null || raw === undefined ? '(Other)' : '(Empty)';
-    };
+        const columnsForInference =
+          availableColumns.length > 0 ? availableColumns : rowsForWidget[0] ? Object.keys(rowsForWidget[0]) : [];
 
-    if (label === 'Others' && widget.topN && widget.groupOthers !== false) {
-      const overflowKeys = getTopNOverflowDimensionValues(widget, rowsForWidget);
-      const overflowSet = new Set(overflowKeys);
-      const clickedData = rowsForWidget.filter((row) => {
-        if (!getDimValues(row).some((v) => overflowSet.has(v))) return false;
-        if (!stackColumn) return true;
-        return normalizeStack(row[stackColumn]) === stackLabel;
+        const inferFilterColumn = () => {
+          const dim = String((widget as any)?.dimension ?? '').trim();
+          if (dim) return dim;
+          if (!columnsForInference.length) return '';
+
+          const sample = rowsForWidget.slice(0, 400);
+          if (sample.length === 0) return '';
+
+          const normalizeCandidate = (raw: any) => {
+            const s = String(raw ?? '').trim();
+            return s ? s : '(Empty)';
+          };
+
+          const labelRange = (() => {
+            const text = label.trim();
+            if (!text) return null;
+            const parts = text.split(' - ');
+            if (parts.length === 2) {
+              const start = toDateValue(parts[0].trim());
+              const end = toDateValue(parts[1].trim());
+              if (!start || !end) return null;
+              start.setHours(0, 0, 0, 0);
+              end.setHours(23, 59, 59, 999);
+              return { startMs: start.getTime(), endMs: end.getTime() };
+            }
+            const d = toDateValue(text);
+            if (!d) return null;
+            d.setHours(0, 0, 0, 0);
+            return { startMs: d.getTime(), endMs: d.getTime() + 24 * 60 * 60 * 1000 - 1 };
+          })();
+
+          if (labelRange) {
+            let bestCol = '';
+            let bestScore = 0;
+            for (const col of columnsForInference) {
+              let score = 0;
+              for (const row of sample) {
+                const d = toDateValue((row as any)[col]);
+                if (!d) continue;
+                const ms = d.getTime();
+                if (ms >= labelRange.startMs && ms <= labelRange.endMs) score += 1;
+              }
+              if (score > bestScore) {
+                bestScore = score;
+                bestCol = col;
+              }
+            }
+            if (bestScore > 0) return bestCol;
+          }
+
+          let bestCol = '';
+          let bestScore = 0;
+          for (const col of columnsForInference) {
+            let score = 0;
+            for (const row of sample) {
+              const base = normalizeCandidate((row as any)[col]);
+              if (!widget.groupByString) {
+                if (base === label) score += 1;
+                continue;
+              }
+              const tokens = base.split(/[,\n;|]+/).map((t) => t.trim()).filter(Boolean);
+              if (tokens.includes(label)) score += 1;
+            }
+            if (score > bestScore) {
+              bestScore = score;
+              bestCol = col;
+            }
+          }
+          if (bestScore > 0) return bestCol;
+
+          return '';
+        };
+
+        const filterColumn = inferFilterColumn();
+        if (!filterColumn) {
+          if (reqId !== drilldownReqRef.current) return;
+          setDrillDown((prev) => (prev ? { ...prev, isLoading: false, error: 'Drilldown failed' } : prev));
+          return;
+        }
+
+        const widgetForDrill: DashboardWidget = widget.dimension ? widget : { ...widget, dimension: filterColumn };
+
+        const normalizeDim = (raw: any) => {
+          const s = String(raw ?? '').trim();
+          return s ? s : '(Empty)';
+        };
+        const getDimValues = (row: RawRow) => {
+          const base = normalizeDim(row[filterColumn]);
+          if (!widgetForDrill.groupByString) return [base];
+          const tokens = base.split(/[,\n;|]+/).map((t) => t.trim()).filter(Boolean);
+          return tokens.length ? tokens : ['(Empty)'];
+        };
+
+        const isStackedChart = [
+          'stacked-column',
+          '100-stacked-column',
+          'stacked-bar',
+          '100-stacked-bar',
+          'stacked-area',
+          '100-stacked-area',
+        ].includes(widget.type);
+
+        const seriesColumn =
+          isStackedChart ||
+          widget.type === 'multi-line' ||
+          widget.type === 'multi-area' ||
+          widget.type === 'compare-column' ||
+          widget.type === 'compare-bar'
+            ? widget.stackBy
+            : undefined;
+        const seriesLabel = seriesColumn ? String(activeSeries ?? '').trim() : '';
+        const normalizeStack = (raw: any) => {
+          const s = String(raw ?? '').trim();
+          if (s) return s;
+          return raw === null || raw === undefined ? '(Other)' : '(Empty)';
+        };
+        const getSeriesValues = (row: RawRow) => {
+          if (!seriesColumn) return [];
+          const base = normalizeStack(row[seriesColumn]);
+          if (!widget.seriesGroupByString) return [base];
+          const tokens = base.split(/[,\n;|]+/).map((t) => t.trim()).filter(Boolean);
+          return tokens.length ? tokens : ['(Empty)'];
+        };
+
+        const parseDateLabelRange = (raw: string) => {
+          const text = raw.trim();
+          if (!text) return null;
+          const parts = text.split(' - ');
+          if (parts.length === 2) {
+            const start = toDateValue(parts[0].trim());
+            const end = toDateValue(parts[1].trim());
+            if (!start || !end) return null;
+            start.setHours(0, 0, 0, 0);
+            end.setHours(23, 59, 59, 999);
+            return { startMs: start.getTime(), endMs: end.getTime() };
+          }
+          const d = toDateValue(text);
+          if (!d) return null;
+          d.setHours(0, 0, 0, 0);
+          return { startMs: d.getTime(), endMs: d.getTime() + 24 * 60 * 60 * 1000 - 1 };
+        };
+
+        const labelRange = parseDateLabelRange(label);
+        const matchesDimension = (row: RawRow) => {
+          if (labelRange) {
+            const d = toDateValue(row[filterColumn]);
+            if (!d) return false;
+            const ms = d.getTime();
+            return ms >= labelRange.startMs && ms <= labelRange.endMs;
+          }
+          return getDimValues(row).includes(label);
+        };
+
+        if (label === 'Others' && widgetForDrill.topN && widgetForDrill.groupOthers !== false) {
+          const overflowKeys = getTopNOverflowDimensionValues(widgetForDrill, rowsForWidget);
+          const overflowSet = new Set(overflowKeys);
+          const clickedData = rowsForWidget.filter((row) => {
+            if (!getDimValues(row).some((v) => overflowSet.has(v))) return false;
+            if (!seriesColumn) return true;
+            if (!seriesLabel) return true;
+            return getSeriesValues(row).includes(seriesLabel);
+          });
+
+          if (reqId !== drilldownReqRef.current) return;
+          setDrillDown({
+            isOpen: true,
+            title: `${widget.title} - Others`,
+            filterCol: seriesColumn ? `${filterColumn} & ${seriesColumn}` : filterColumn,
+            filterVal: `${overflowKeys.length ? `Others (${overflowKeys.length})` : 'Others'}${
+              seriesColumn ? ` / ${seriesLabel}` : ''
+            }`,
+            data: clickedData,
+            isLoading: false,
+            error: undefined,
+          });
+          return;
+        }
+
+        const clickedData = rowsForWidget.filter((row) => {
+          if (!matchesDimension(row)) return false;
+          if (!seriesColumn) return true;
+          if (!seriesLabel) return true;
+          return getSeriesValues(row).includes(seriesLabel);
+        });
+
+        if (reqId !== drilldownReqRef.current) return;
+        setDrillDown({
+          isOpen: true,
+          title: `${widget.title} - ${label}`,
+          filterCol: seriesColumn ? `${filterColumn} & ${seriesColumn}` : filterColumn,
+          filterVal: seriesColumn ? `${label} / ${seriesLabel}` : label,
+          data: clickedData,
+          isLoading: false,
+          error: undefined,
+        });
+      })().catch((e) => {
+        console.error('[DashboardMagic] Drilldown failed:', e);
+        setDrillDown((prev) => (prev ? { ...prev, isLoading: false, error: 'Drilldown failed' } : prev));
       });
-      setDrillDown({
-        isOpen: true,
-        title: `${widget.title} - Others`,
-        filterCol: stackColumn ? `${filterColumn} & ${stackColumn}` : filterColumn,
-        filterVal: `${overflowKeys.length ? `Others (${overflowKeys.length})` : 'Others'}${stackColumn ? ` / ${stackLabel}` : ''}`,
-        data: clickedData,
-      });
-      return;
-    }
-
-    const clickedData = rowsForWidget.filter((row) => {
-      if (!getDimValues(row).includes(label)) return false;
-      if (!stackColumn) return true;
-      return normalizeStack(row[stackColumn]) === stackLabel;
-    });
-
-    setDrillDown({
-      isOpen: true,
-      title: `${widget.title} - ${label}`,
-      filterCol: stackColumn ? `${filterColumn} & ${stackColumn}` : filterColumn,
-      filterVal: stackColumn ? `${label} / ${stackLabel}` : label,
-      data: clickedData,
-    });
-  };
+    },
+    [
+      availableColumns,
+      baseData,
+      baseDataSourceId,
+      filters,
+      loadRowsForSource,
+      matchesFilterCondition,
+      normalizedProject.activeDataSourceId,
+      normalizedProject.dataSources,
+      workerSource.dataSourceId,
+    ]
+  );
 
   const renderListView = () => (
     <div className="h-full flex flex-col px-10 py-8 overflow-y-auto w-full bg-[#F8F9FA]">
@@ -845,9 +1086,6 @@ const DashboardMagic: React.FC<DashboardMagicProps> = ({ project, onUpdateProjec
         <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-40 p-4">
           <div className="bg-white rounded-xl shadow-2xl w-full max-w-md p-6 space-y-4">
             <h3 className="text-lg font-bold text-gray-900">Create Magic Dashboard</h3>
-            <p className="text-sm text-gray-500">
-              Organize charts for RealPPTX-compatible rendering.
-            </p>
             <div>
               <label className="text-xs font-semibold text-gray-600">Dashboard Name</label>
               <input
@@ -860,23 +1098,31 @@ const DashboardMagic: React.FC<DashboardMagicProps> = ({ project, onUpdateProjec
             </div>
             <div>
               <label className="text-xs font-semibold text-gray-600">Data Source</label>
-              <select
-                value={selectedDataSourceId}
-                onChange={(e) => setSelectedDataSourceId(e.target.value)}
-                className="mt-2 w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white"
+              <button
+                type="button"
+                onClick={() => setCreateSourcePickerOpen(true)}
+                className="mt-2 w-full px-3 py-2 border border-gray-300 rounded-lg text-sm bg-white hover:bg-gray-50 flex items-center justify-between gap-3"
               >
-                {(project.dataSources || []).map((ds) => (
-                  <option key={ds.id} value={ds.id}>
-                    {ds.name} ({ds.kind})
-                  </option>
-                ))}
-              </select>
+                <span className="truncate text-gray-900">
+                  {(() => {
+                    const src = (normalizedProject.dataSources || []).find((s) => s.id === selectedDataSourceId);
+                    return src ? src.name : 'Select Data Source';
+                  })()}
+                </span>
+                <span className="text-xs text-gray-500 flex-shrink-0">
+                  {(() => {
+                    const src = (normalizedProject.dataSources || []).find((s) => s.id === selectedDataSourceId);
+                    return src ? `(${src.kind})` : '';
+                  })()}
+                </span>
+              </button>
             </div>
             <div className="flex justify-end space-x-2">
               <button
                 onClick={() => {
                   setIsCreateOpen(false);
                   setNewDashboardName('');
+                  setCreateSourcePickerOpen(false);
                 }}
                 className="px-4 py-2 text-sm text-gray-600 hover:text-gray-900"
               >
@@ -892,6 +1138,19 @@ const DashboardMagic: React.FC<DashboardMagicProps> = ({ project, onUpdateProjec
           </div>
         </div>
       )}
+
+      <DataSourcePickerModal
+        isOpen={isCreateSourcePickerOpen}
+        title="Select Data Source"
+        ingestionSources={ingestionSources}
+        preparedSources={preparedSources}
+        selectedSourceId={selectedDataSourceId}
+        onSelect={(src) => {
+          setSelectedDataSourceId(src.id);
+          setCreateSourcePickerOpen(false);
+        }}
+        onClose={() => setCreateSourcePickerOpen(false)}
+      />
     </div>
   );
 
@@ -963,27 +1222,33 @@ const DashboardMagic: React.FC<DashboardMagicProps> = ({ project, onUpdateProjec
 
             <div className="flex flex-wrap gap-2.5">
               {/* Data Source Selector */}
-              <div className="flex items-center space-x-2 bg-gray-50 border border-gray-200 rounded-lg px-3 py-1.5 shadow-sm">
+              <button
+                type="button"
+                onClick={() => setEditorSourcePickerOpen(true)}
+                className="flex items-center space-x-2 bg-gray-50 border border-gray-200 rounded-lg px-3 py-1.5 shadow-sm hover:bg-gray-100 transition-colors max-w-full"
+              >
                 <span className="text-xs font-semibold text-gray-500 uppercase">Data Source:</span>
-                <select
-                  value={editingDashboard.dataSourceId || project.activeDataSourceId || ''}
-                  onChange={(e) => handleActiveDataSourceChange(e.target.value)}
-                  className="text-xs text-gray-900 bg-transparent border-none focus:ring-0 cursor-pointer outline-none"
-                >
-                  {(project.dataSources || []).map((ds) => (
-                    <option key={ds.id} value={ds.id}>
-                      {ds.name} ({ds.kind})
-                    </option>
-                  ))}
-                </select>
-              </div>
+                <span className="text-xs text-gray-900 font-medium truncate">
+                  {(() => {
+                    const id = editingDashboard.dataSourceId || project.activeDataSourceId || '';
+                    const ds = (project.dataSources || []).find((s) => s.id === id);
+                    return ds ? ds.name : 'Select Data Source';
+                  })()}
+                </span>
+                <span className="text-[10px] font-semibold tracking-wide uppercase text-gray-400 flex-shrink-0">
+                  {(() => {
+                    const id = editingDashboard.dataSourceId || project.activeDataSourceId || '';
+                    const ds = (project.dataSources || []).find((s) => s.id === id);
+                    return ds ? ds.kind : '';
+                  })()}
+                </span>
+              </button>
 
               {/* Interaction Toggle */}
               <div className="bg-white border border-gray-300 rounded-lg flex p-0.5 shadow-sm">
                 <button
                   onClick={() => setInteractionMode('drill')}
                   className="flex items-center px-3 py-1.5 rounded-md text-xs font-medium transition-all bg-blue-100 text-blue-700"
-                  title="Click charts to see data rows"
                 >
                   <MousePointer2 className="w-3 h-3 mr-1.5" />
                   Drill
@@ -1300,6 +1565,19 @@ const DashboardMagic: React.FC<DashboardMagicProps> = ({ project, onUpdateProjec
     <>
       {mode === 'list' ? renderListView() : renderEditorView()}
 
+      <DataSourcePickerModal
+        isOpen={isEditorSourcePickerOpen}
+        title="Select Data Source"
+        ingestionSources={ingestionSources}
+        preparedSources={preparedSources}
+        selectedSourceId={editingDashboard?.dataSourceId || normalizedProject.activeDataSourceId || null}
+        onSelect={(src) => {
+          setEditorSourcePickerOpen(false);
+          void handleActiveDataSourceChange(src.id);
+        }}
+        onClose={() => setEditorSourcePickerOpen(false)}
+      />
+
       <ChartBuilder
         isOpen={isBuilderOpen}
         onClose={() => setIsBuilderOpen(false)}
@@ -1308,6 +1586,7 @@ const DashboardMagic: React.FC<DashboardMagicProps> = ({ project, onUpdateProjec
         initialWidget={editingWidget}
         data={filteredData}
         chartTheme={REALPPTX_CHART_THEME}
+        workerSource={workerSource}
       />
 
       {/* Drill Down Modal */}
@@ -1319,14 +1598,21 @@ const DashboardMagic: React.FC<DashboardMagicProps> = ({ project, onUpdateProjec
                 <h3 className="font-bold text-lg text-gray-800 flex items-center">
                   Drill Down: {drillDown.title}
                 </h3>
-                <p className="text-xs text-gray-500">
-                  Filtered by <span className="font-semibold">{drillDown.filterCol} = {drillDown.filterVal}</span> ({drillDown.data.length} rows)
-                </p>
+                {drillDown.isLoading ? (
+                  <p className="text-xs text-gray-500">Loading...</p>
+                ) : drillDown.error ? (
+                  <p className="text-xs text-red-600">{drillDown.error}</p>
+                ) : (
+                  <p className="text-xs text-gray-500">
+                    Filtered by <span className="font-semibold">{drillDown.filterCol} = {drillDown.filterVal}</span> ({drillDown.data.length} rows)
+                  </p>
+                )}
               </div>
               <div className="flex space-x-2">
                 <button
                   onClick={() => exportToExcel(drillDown.data, `DrillDown_${drillDown.title}`)}
-                  className="flex items-center space-x-1.5 px-3 py-1.5 bg-green-600 text-white rounded-md text-xs font-medium hover:bg-green-700"
+                  disabled={!!drillDown.isLoading || !!drillDown.error || drillDown.data.length === 0}
+                  className="flex items-center space-x-1.5 px-3 py-1.5 bg-green-600 text-white rounded-md text-xs font-medium hover:bg-green-700 disabled:opacity-60"
                 >
                   <Download className="w-3.5 h-3.5" /> <span>Export Excel</span>
                 </button>
@@ -1337,32 +1623,40 @@ const DashboardMagic: React.FC<DashboardMagicProps> = ({ project, onUpdateProjec
             </div>
 
             <div className="flex-1 overflow-auto p-0">
-              <table className="w-full text-left text-sm border-collapse">
-                <thead className="bg-white text-gray-500 text-xs uppercase sticky top-0 z-10 shadow-sm">
-                  <tr>
-                    <th className="px-6 py-3 border-b border-gray-200 w-12">#</th>
-                    {availableColumns.map(col => (
-                      <th key={col} className="px-6 py-3 border-b border-gray-200 font-semibold whitespace-nowrap">{col}</th>
-                    ))}
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-gray-100">
-                  {drillDown.data.slice(0, 200).map((row, idx) => (
-                    <tr key={idx} className="hover:bg-blue-50">
-                      <td className="px-6 py-3 text-gray-400 font-mono text-xs bg-gray-50/50">{idx + 1}</td>
-                      {availableColumns.map(col => (
-                        <td key={col} className="px-6 py-3 text-gray-700 truncate max-w-xs" title={String(row[col])}>
-                          {String(row[col])}
-                        </td>
-                      ))}
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-              {drillDown.data.length > 200 && (
-                <div className="p-4 text-center text-gray-500 text-sm bg-gray-50 border-t">
-                  Preview: 200 of {drillDown.data.length} rows.
+              {drillDown.isLoading ? (
+                <div className="h-full flex items-center justify-center text-gray-300">
+                  <Loader2 className="w-5 h-5 animate-spin" />
                 </div>
+              ) : (
+                <>
+                  <table className="w-full text-left text-sm border-collapse">
+                    <thead className="bg-white text-gray-500 text-xs uppercase sticky top-0 z-10 shadow-sm">
+                      <tr>
+                        <th className="px-6 py-3 border-b border-gray-200 w-12">#</th>
+                        {availableColumns.map(col => (
+                          <th key={col} className="px-6 py-3 border-b border-gray-200 font-semibold whitespace-nowrap">{col}</th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-gray-100">
+                      {drillDown.data.slice(0, 200).map((row, idx) => (
+                        <tr key={idx} className="hover:bg-blue-50">
+                          <td className="px-6 py-3 text-gray-400 font-mono text-xs bg-gray-50/50">{idx + 1}</td>
+                          {availableColumns.map(col => (
+                            <td key={col} className="px-6 py-3 text-gray-700 truncate max-w-xs" title={String(row[col])}>
+                              {String(row[col])}
+                            </td>
+                          ))}
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                  {drillDown.data.length > 200 && (
+                    <div className="p-4 text-center text-gray-500 text-sm bg-gray-50 border-t">
+                      Rows: 200 / {drillDown.data.length}
+                    </div>
+                  )}
+                </>
               )}
             </div>
           </div>

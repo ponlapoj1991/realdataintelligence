@@ -1,45 +1,76 @@
 
-import React, { useState, useMemo, useEffect } from 'react';
-import { Search, Check, X, Filter } from 'lucide-react';
+import React, { useLayoutEffect, useMemo, useState, useEffect } from 'react';
+import { createPortal } from 'react-dom';
+import { Loader2, Search, X } from 'lucide-react';
 
 interface TableColumnFilterProps {
   column: string;
   data: any[]; // The full dataset to extract unique values from
+  options?: string[]; // Optional precomputed options list
   activeFilters: string[] | null; // Current selected values (null means all)
   onApply: (selected: string[] | null) => void;
   onClose: () => void;
+  anchorRect?: Pick<DOMRect, 'left' | 'top' | 'right' | 'bottom'> | null;
 }
 
 const TableColumnFilter: React.FC<TableColumnFilterProps> = ({
   column,
   data,
+  options,
   activeFilters,
   onApply,
-  onClose
+  onClose,
+  anchorRect
 }) => {
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedValues, setSelectedValues] = useState<Set<string>>(new Set());
+  const [isDirty, setIsDirty] = useState(false);
+  const [portalPos, setPortalPos] = useState<{ left: number; top: number } | null>(null);
 
   // Extract unique values from data
   const uniqueValues = useMemo(() => {
+    if (Array.isArray(options) && options.length > 0) {
+      return options;
+    }
     const values = new Set<string>();
     data.forEach(row => {
       const val = row[column];
       // Convert to string for filtering consistencies
-      const strVal = val === null || val === undefined ? '(Blank)' : String(val);
+      const strVal = val === null || val === undefined || val === '' ? '(Blank)' : String(val);
       values.add(strVal);
     });
     return Array.from(values).sort();
-  }, [data, column]);
+  }, [data, column, options]);
+
+  const isLoadingOptions = options === undefined && data.length === 0;
 
   // Initialize selection
   useEffect(() => {
+    setIsDirty(false);
     if (activeFilters) {
       setSelectedValues(new Set(activeFilters));
     } else {
       setSelectedValues(new Set(uniqueValues));
     }
-  }, [activeFilters, uniqueValues]);
+  }, [activeFilters, column]);
+
+  useEffect(() => {
+    if (activeFilters) return;
+    if (isDirty) return;
+    setSelectedValues(new Set(uniqueValues));
+  }, [activeFilters, isDirty, uniqueValues]);
+
+  useLayoutEffect(() => {
+    if (!anchorRect) {
+      setPortalPos(null);
+      return;
+    }
+    const POPOVER_WIDTH = 256; // w-64
+    const margin = 8;
+    const left = Math.max(margin, Math.min(anchorRect.left, window.innerWidth - POPOVER_WIDTH - margin));
+    const top = Math.max(margin, anchorRect.bottom + 6);
+    setPortalPos({ left, top });
+  }, [anchorRect]);
 
   const filteredOptions = uniqueValues.filter(v => 
     v.toLowerCase().includes(searchTerm.toLowerCase())
@@ -53,6 +84,7 @@ const TableColumnFilter: React.FC<TableColumnFilterProps> = ({
       newSet.add(val);
     }
     setSelectedValues(newSet);
+    setIsDirty(true);
   };
 
   const handleSelectAll = () => {
@@ -67,6 +99,7 @@ const TableColumnFilter: React.FC<TableColumnFilterProps> = ({
       filteredOptions.forEach(v => newSet.add(v));
       setSelectedValues(newSet);
     }
+    setIsDirty(true);
   };
 
   const applyFilter = () => {
@@ -79,15 +112,10 @@ const TableColumnFilter: React.FC<TableColumnFilterProps> = ({
     onClose();
   };
 
-  const clearFilter = () => {
-    onApply(null);
-    onClose();
-  };
-
-  return (
-    <div 
-      className="absolute top-full left-0 mt-1 w-64 bg-white border border-gray-300 shadow-xl rounded-lg z-50 flex flex-col text-gray-800 font-normal animate-in fade-in zoom-in duration-100"
-      onClick={(e) => e.stopPropagation()} // Prevent click from bubbling to header sort/select
+  const content = (
+    <div
+      className="w-64 bg-white border border-gray-300 shadow-xl rounded-lg flex flex-col text-gray-800 font-normal animate-in fade-in zoom-in duration-100"
+      onClick={(e) => e.stopPropagation()}
     >
       {/* Header */}
       <div className="p-3 border-b border-gray-100 flex items-center justify-between bg-gray-50 rounded-t-lg">
@@ -116,16 +144,22 @@ const TableColumnFilter: React.FC<TableColumnFilterProps> = ({
       <div className="flex-1 overflow-y-auto max-h-60 p-1 custom-scrollbar">
         <button 
           onClick={handleSelectAll}
+          disabled={isLoadingOptions}
           className="flex items-center w-full px-2 py-1.5 hover:bg-blue-50 rounded text-xs text-blue-600 font-medium mb-1"
         >
            {selectedValues.size === filteredOptions.length ? 'Deselect Visible' : 'Select Visible'}
         </button>
         
-        {filteredOptions.length === 0 && (
-            <div className="text-xs text-gray-400 text-center py-4">No matches found</div>
-        )}
+        {isLoadingOptions ? (
+          <div className="flex items-center justify-center gap-2 text-xs text-gray-400 text-center py-4">
+            <Loader2 className="w-3.5 h-3.5 animate-spin" />
+            Loading...
+          </div>
+        ) : filteredOptions.length === 0 ? (
+          <div className="text-xs text-gray-400 text-center py-4">No matches found</div>
+        ) : null}
 
-        {filteredOptions.map(val => (
+        {!isLoadingOptions && filteredOptions.map(val => (
           <label key={val} className="flex items-center px-2 py-1 hover:bg-gray-50 cursor-pointer rounded">
             <input 
               type="checkbox"
@@ -139,13 +173,7 @@ const TableColumnFilter: React.FC<TableColumnFilterProps> = ({
       </div>
 
       {/* Footer Actions */}
-      <div className="p-3 border-t border-gray-100 flex justify-between items-center bg-gray-50 rounded-b-lg">
-        <button 
-          onClick={clearFilter}
-          className="text-xs text-red-500 hover:text-red-700 font-medium"
-        >
-          Clear
-        </button>
+      <div className="p-3 border-t border-gray-100 flex justify-end items-center bg-gray-50 rounded-b-lg">
         <button 
           onClick={applyFilter}
           className="px-3 py-1.5 bg-blue-600 text-white text-xs font-medium rounded shadow-sm hover:bg-blue-700"
@@ -153,6 +181,24 @@ const TableColumnFilter: React.FC<TableColumnFilterProps> = ({
           Apply
         </button>
       </div>
+    </div>
+  )
+
+  if (anchorRect && portalPos) {
+    return createPortal(
+      <div style={{ position: 'fixed', left: portalPos.left, top: portalPos.top, zIndex: 1000 }}>
+        {content}
+      </div>,
+      document.body
+    );
+  }
+
+  return (
+    <div
+      className="absolute top-full left-0 mt-1 z-50"
+      onClick={(e) => e.stopPropagation()}
+    >
+      {content}
     </div>
   );
 };

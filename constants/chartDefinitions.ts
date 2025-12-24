@@ -30,6 +30,13 @@ export const CHART_DEFINITIONS: ChartDefinition[] = [
     icon: 'Percent',
     description: 'Normalize each column to 100% to compare proportions'
   },
+  {
+    type: 'compare-column',
+    category: 'column',
+    label: 'Compare Column',
+    icon: 'BarChart3',
+    description: 'Compare categories across multiple series'
+  },
 
   // ========================================
   // BAR CHARTS (Horizontal)
@@ -40,6 +47,13 @@ export const CHART_DEFINITIONS: ChartDefinition[] = [
     label: 'Clustered Bar',
     icon: 'BarChartHorizontal',
     description: 'Horizontal version of clustered column for ranking'
+  },
+  {
+    type: 'compare-bar',
+    category: 'bar',
+    label: 'Compare Bar',
+    icon: 'BarChartHorizontal',
+    description: 'Compare categories across multiple series (horizontal)'
   },
   {
     type: 'stacked-bar',
@@ -73,6 +87,13 @@ export const CHART_DEFINITIONS: ChartDefinition[] = [
     icon: 'TrendingUp',
     description: 'Smooth line chart - show trends with curve interpolation'
   },
+  {
+    type: 'multi-line',
+    category: 'line',
+    label: 'Multi-Line',
+    icon: 'LineChart',
+    description: 'Multiple lines - compare series over time'
+  },
 
   // ========================================
   // AREA CHARTS
@@ -83,6 +104,13 @@ export const CHART_DEFINITIONS: ChartDefinition[] = [
     label: 'Area',
     icon: 'AreaChart',
     description: 'Area chart - emphasize magnitude of change over time'
+  },
+  {
+    type: 'multi-area',
+    category: 'area',
+    label: 'Multi-Area',
+    icon: 'AreaChart',
+    description: 'Multiple areas - compare series over time'
   },
   {
     type: 'stacked-area',

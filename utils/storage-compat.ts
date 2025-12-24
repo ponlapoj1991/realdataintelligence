@@ -10,12 +10,14 @@
  * Usage: Drop-in replacement for storage.ts
  */
 
-import { Project, ProjectTab, RawRow } from '../types';
+import { DataSource, Project, ProjectTab, RawRow } from '../types';
 import {
   getProjectMetadata,
   saveProjectMetadata,
   getAllDataChunks,
   batchInsertData,
+  getAllDataSourceChunks,
+  batchInsertDataSource,
   deleteProjectV2,
   getProjectsV2,
   appendData,
@@ -42,6 +44,45 @@ const normalizeProject = (project: Project): Project => {
   return withPresentations;
 };
 
+const toLightProjectFromMetadata = (metadata: any): Project => {
+  // IMPORTANT: for listing purposes only (Landing). Avoid loading chunked rows.
+  // Also strip any embedded rows in metadata.dataSources to reduce memory pressure.
+  const lightSources = Array.isArray(metadata?.dataSources)
+    ? metadata.dataSources.map((s: any) => ({ ...s, rows: Array.isArray(s?.rows) ? [] : [] }))
+    : undefined;
+
+  return normalizeProject({
+    id: metadata.id,
+    name: metadata.name,
+    description: metadata.description,
+    lastModified: metadata.lastModified,
+    data: [],
+    columns: metadata.columns || [],
+    rowCount: typeof metadata.rowCount === 'number' ? metadata.rowCount : undefined,
+    dataSources: lightSources,
+    activeDataSourceId: metadata.activeDataSourceId,
+    transformRules: metadata.transformRules,
+    buildStructureConfigs: metadata.buildStructureConfigs,
+    activeBuildConfigId: metadata.activeBuildConfigId,
+    dashboards: metadata.dashboards,
+    activeDashboardId: metadata.activeDashboardId,
+    magicDashboards: metadata.magicDashboards,
+    activeMagicDashboardId: metadata.activeMagicDashboardId,
+    dashboard: metadata.dashboard,
+    reportConfig: metadata.reportConfig,
+    reportPresentations: metadata.reportPresentations,
+    activePresentationId: metadata.activePresentationId,
+    aiPresets: metadata.aiPresets,
+    aiSettings: metadata.aiSettings,
+  });
+};
+
+export const getProjectLight = async (projectId: string): Promise<Project | null> => {
+  const metadata = await getProjectMetadata(projectId)
+  if (!metadata) return null
+  return toLightProjectFromMetadata(metadata)
+}
+
 // --- Type Guards ---
 
 interface ProjectMetadataV2 {
@@ -52,6 +93,24 @@ interface ProjectMetadataV2 {
 
 const isProjectV2 = (project: any): project is ProjectMetadataV2 => {
   return project && project.storageVersion === 2;
+};
+
+const CHUNK_SIZE = 1000;
+
+const stripDataSourceRowsForMetadata = (source: DataSource): DataSource => {
+  const rowCount =
+    typeof source.rowCount === 'number'
+      ? source.rowCount
+      : Array.isArray(source.rows)
+        ? source.rows.length
+        : 0;
+  const chunkCount = Math.ceil(rowCount / CHUNK_SIZE);
+  return {
+    ...source,
+    rows: [],
+    rowCount,
+    chunkCount,
+  };
 };
 
 // --- Migration Functions ---
@@ -65,7 +124,10 @@ const migrateProjectToV2 = async (projectV1: Project): Promise<void> => {
   const startTime = Date.now();
   const normalized = normalizeProject(projectV1);
 
-  // Save metadata
+  const sources = normalized.dataSources || [];
+  const sourcesForMetadata = sources.map(stripDataSourceRowsForMetadata);
+
+  // Save metadata (avoid embedding full rows)
   await saveProjectMetadata({
     id: normalized.id,
     name: normalized.name,
@@ -74,7 +136,7 @@ const migrateProjectToV2 = async (projectV1: Project): Promise<void> => {
     rowCount: normalized.data.length,
     chunkCount: Math.ceil(normalized.data.length / 1000),
     columns: normalized.columns,
-    dataSources: normalized.dataSources,
+    dataSources: sourcesForMetadata,
     activeDataSourceId: normalized.activeDataSourceId,
     transformRules: normalized.transformRules,
     buildStructureConfigs: normalized.buildStructureConfigs,
@@ -88,6 +150,15 @@ const migrateProjectToV2 = async (projectV1: Project): Promise<void> => {
     aiPresets: normalized.aiPresets,
     storageVersion: 2
   });
+
+  // Save each DataSource in chunks (v3+)
+  await Promise.all(
+    sources.map(async (s) => {
+      if (Array.isArray(s.rows) && s.rows.length > 0) {
+        await batchInsertDataSource(normalized.id, s.id, s.rows);
+      }
+    })
+  );
 
   // Save data in chunks
   await batchInsertData(normalized.id, normalized.data);
@@ -111,7 +182,43 @@ const convertV2ToProject = async (projectId: string): Promise<Project | null> =>
   const metadata = await getProjectMetadata(projectId);
   if (!metadata) return null;
 
-  const data = await getAllDataChunks(projectId);
+  const sourceMetas = (metadata.dataSources || []) as DataSource[];
+  const activeId = metadata.activeDataSourceId || sourceMetas[0]?.id;
+
+  const hydratedSources: DataSource[] = [];
+  let activeRows: RawRow[] = [];
+
+  for (const src of sourceMetas) {
+    const rowCount = typeof (src as any).rowCount === 'number' ? (src as any).rowCount : 0;
+    const chunkCount =
+      typeof (src as any).chunkCount === 'number' ? (src as any).chunkCount : Math.ceil(rowCount / CHUNK_SIZE);
+
+    let rows: RawRow[] = [];
+    if (src.id === activeId) {
+      try {
+        rows = await getAllDataSourceChunks(projectId, src.id);
+      } catch (e) {
+        rows = [];
+      }
+
+      // Fallback for legacy metadata that still embeds rows (pre-v3)
+      if (rows.length === 0 && Array.isArray((src as any).rows) && (src as any).rows.length > 0) {
+        rows = (src as any).rows as RawRow[];
+      }
+
+      activeRows = rows;
+    }
+
+    hydratedSources.push({
+      ...src,
+      rows,
+      rowCount: typeof (src as any).rowCount === 'number' ? (src as any).rowCount : rows.length,
+      chunkCount: typeof (src as any).chunkCount === 'number' ? (src as any).chunkCount : Math.ceil(rows.length / CHUNK_SIZE),
+    });
+  }
+
+  const active = (activeId && hydratedSources.find((s) => s.id === activeId)) || hydratedSources[0];
+  const data = active ? activeRows : await getAllDataChunks(projectId);
 
   return {
     id: metadata.id,
@@ -120,7 +227,7 @@ const convertV2ToProject = async (projectId: string): Promise<Project | null> =>
     lastModified: metadata.lastModified,
     data,
     columns: metadata.columns,
-    dataSources: metadata.dataSources,
+    dataSources: hydratedSources.length ? hydratedSources : metadata.dataSources,
     activeDataSourceId: metadata.activeDataSourceId,
     transformRules: metadata.transformRules,
     buildStructureConfigs: metadata.buildStructureConfigs,
@@ -133,8 +240,42 @@ const convertV2ToProject = async (projectId: string): Promise<Project | null> =>
     reportConfig: metadata.reportConfig,
     reportPresentations: metadata.reportPresentations,
     activePresentationId: metadata.activePresentationId,
-    aiPresets: metadata.aiPresets
+    aiPresets: metadata.aiPresets,
+    rowCount: metadata.rowCount,
   };
+};
+
+/**
+ * Hydrate a single DataSource's rows into an in-memory Project object.
+ * Used by UI flows that still depend on `source.rows` for editing or preview.
+ */
+export const hydrateProjectDataSourceRows = async (project: Project, sourceId: string): Promise<Project> => {
+  try {
+    const rows = await getAllDataSourceChunks(project.id, sourceId);
+
+    const dataSources = (project.dataSources || []).map((s) => {
+      if (s.id !== sourceId) return s;
+      return {
+        ...s,
+        rows,
+        rowCount: typeof s.rowCount === 'number' ? s.rowCount : rows.length,
+        chunkCount: typeof s.chunkCount === 'number' ? s.chunkCount : Math.ceil(rows.length / CHUNK_SIZE),
+      };
+    });
+
+    const activeId = project.activeDataSourceId;
+    const active = dataSources.find((s) => s.id === (activeId || sourceId)) || dataSources[0];
+
+    return normalizeProject({
+      ...project,
+      dataSources,
+      data: active?.rows || project.data,
+      columns: active?.columns || project.columns,
+    });
+  } catch (e) {
+    console.error('[Storage] Failed to hydrate DataSource rows:', e);
+    return project;
+  }
 };
 
 // --- Unified API (Drop-in replacement for storage.ts) ---
@@ -146,18 +287,37 @@ export const getProjects = async (): Promise<Project[]> => {
   try {
     // Try v2 first
     const projectsV2 = await getProjectsV2();
+    const v2Ids = new Set(projectsV2.map((p: any) => String(p?.id)));
 
-    // Convert v2 to v1 format
-    const projects = await Promise.all(
-      projectsV2.map(async (meta) => {
-        return await convertV2ToProject(meta.id);
+    // NOTE: Do NOT load chunked rows for listing (Landing).
+    const validProjects = projectsV2.map((meta: any) => toLightProjectFromMetadata(meta));
+
+    // Background cleanup: strip embedded rows from metadata (older v2 writes)
+    Promise.all(
+      projectsV2.map(async (meta: any) => {
+        const sources = Array.isArray(meta?.dataSources) ? (meta.dataSources as DataSource[]) : [];
+        const hasEmbeddedRows = sources.some((s) => Array.isArray((s as any).rows) && (s as any).rows.length > 0);
+        if (!hasEmbeddedRows) return;
+
+        try {
+          await Promise.all(
+            sources.map(async (s) => {
+              if (Array.isArray((s as any).rows) && (s as any).rows.length > 0) {
+                await batchInsertDataSource(meta.id, s.id, (s as any).rows as RawRow[]);
+              }
+            })
+          );
+          await saveProjectMetadata({
+            ...meta,
+            dataSources: sources.map(stripDataSourceRowsForMetadata),
+          });
+        } catch (e) {
+          console.error('[Storage] Background metadata cleanup failed:', e);
+        }
       })
-    );
-
-    // Filter out nulls
-    const validProjects = projects
-      .filter((p): p is Project => p !== null)
-      .map((p) => normalizeProject(p));
+    ).catch(() => {
+      // ignore
+    });
 
     // Check for v1 projects
     let projectsV1: Project[] = [];
@@ -167,13 +327,15 @@ export const getProjects = async (): Promise<Project[]> => {
       // No v1 projects or v1 store doesn't exist
     }
 
+    const v1NotMigrated = projectsV1.filter((p) => !v2Ids.has(String(p?.id)));
+
     // Migrate v1 projects in background
-    if (projectsV1.length > 0) {
-      console.log(`[Migration] Found ${projectsV1.length} v1 projects, migrating...`);
+    if (v1NotMigrated.length > 0) {
+      console.log(`[Migration] Found ${v1NotMigrated.length} v1 projects, migrating...`);
 
       // Migrate asynchronously
       Promise.all(
-        projectsV1.map(async (project) => {
+        v1NotMigrated.map(async (project) => {
           // Check if already migrated
           const existing = await getProjectMetadata(project.id);
           if (!existing) {
@@ -185,7 +347,7 @@ export const getProjects = async (): Promise<Project[]> => {
       });
 
       // Return v1 projects for now (will be v2 on next load)
-      return [...validProjects, ...projectsV1.map((p) => normalizeProject(p))];
+      return [...validProjects, ...v1NotMigrated.map((p) => normalizeProject(p))];
     }
 
     return validProjects;
@@ -213,13 +375,16 @@ export const saveProject = async (project: Project): Promise<void> => {
     const existing = await getProjectMetadata(normalized.id);
 
     if (existing) {
+      const sources = normalized.dataSources || [];
+      const sourcesForMetadata = sources.map(stripDataSourceRowsForMetadata);
+
       // Update metadata
       await saveProjectMetadata({
         ...existing,
         name: normalized.name,
         description: normalized.description,
         columns: normalized.columns,
-        dataSources: normalized.dataSources,
+        dataSources: sourcesForMetadata,
         activeDataSourceId: normalized.activeDataSourceId,
         transformRules: normalized.transformRules,
         buildStructureConfigs: normalized.buildStructureConfigs,
@@ -235,8 +400,21 @@ export const saveProject = async (project: Project): Promise<void> => {
         aiPresets: normalized.aiPresets
       });
 
+      // Persist DataSources into per-DataSource chunks (v3+)
+      await Promise.all(
+        sources.map(async (s) => {
+          if (Array.isArray(s.rows) && s.rows.length > 0) {
+            await batchInsertDataSource(normalized.id, s.id, s.rows);
+          }
+        })
+      );
+
       // Check if data changed (row count different)
-      if (existing.rowCount !== normalized.data.length) {
+      const intendedRowCount =
+        typeof normalized.rowCount === 'number' ? normalized.rowCount : normalized.data.length;
+      const canRewriteActiveData = normalized.data.length > 0 || intendedRowCount === 0;
+
+      if (canRewriteActiveData && existing.rowCount !== normalized.data.length) {
         // Clear old data and re-insert
         await clearCache(normalized.id);
         await batchInsertData(normalized.id, normalized.data);
@@ -249,6 +427,9 @@ export const saveProject = async (project: Project): Promise<void> => {
         });
       }
     } else {
+      const sources = normalized.dataSources || [];
+      const sourcesForMetadata = sources.map(stripDataSourceRowsForMetadata);
+
       // New project - create as v2
       await saveProjectMetadata({
         id: normalized.id,
@@ -258,7 +439,7 @@ export const saveProject = async (project: Project): Promise<void> => {
         rowCount: normalized.data.length,
         chunkCount: Math.ceil(normalized.data.length / 1000),
         columns: normalized.columns,
-        dataSources: normalized.dataSources,
+        dataSources: sourcesForMetadata,
         activeDataSourceId: normalized.activeDataSourceId,
         transformRules: normalized.transformRules,
         buildStructureConfigs: normalized.buildStructureConfigs,
@@ -274,6 +455,14 @@ export const saveProject = async (project: Project): Promise<void> => {
         aiPresets: normalized.aiPresets,
         storageVersion: 2
       });
+
+      await Promise.all(
+        sources.map(async (s) => {
+          if (Array.isArray(s.rows) && s.rows.length > 0) {
+            await batchInsertDataSource(normalized.id, s.id, s.rows);
+          }
+        })
+      );
 
       await batchInsertData(normalized.id, normalized.data);
     }

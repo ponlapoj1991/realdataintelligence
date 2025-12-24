@@ -1,10 +1,15 @@
 import { ColumnConfig, DataSource, DataSourceKind, Project, RawRow } from '../types';
 
+const CHUNK_SIZE = 1000;
+const normalizeNameKey = (name: string) => name.trim().toLowerCase();
+
 const createDefaultSource = (project: Project): DataSource => ({
   id: project.id + '-primary',
   name: 'Primary Table',
   kind: 'ingestion',
   rows: project.data || [],
+  rowCount: project.data?.length || 0,
+  chunkCount: Math.ceil((project.data?.length || 0) / CHUNK_SIZE),
   columns: project.columns || [],
   createdAt: project.lastModified || Date.now(),
   updatedAt: project.lastModified || Date.now(),
@@ -54,10 +59,18 @@ export const upsertDataSource = (
   const { project: normalized } = ensureDataSources(project);
   const existingIndex = normalized.dataSources!.findIndex((s) => s.id === source.id);
   const dataSources = [...(normalized.dataSources || [])];
+  const rowCount =
+    typeof source.rowCount === 'number' ? source.rowCount : Array.isArray(source.rows) ? source.rows.length : 0;
+  const chunkCount = typeof source.chunkCount === 'number' ? source.chunkCount : Math.ceil(rowCount / CHUNK_SIZE);
+  const normalizedSource: DataSource = {
+    ...source,
+    rowCount,
+    chunkCount,
+  };
   if (existingIndex >= 0) {
-    dataSources[existingIndex] = { ...source, updatedAt: Date.now() };
+    dataSources[existingIndex] = { ...normalizedSource, updatedAt: Date.now() };
   } else {
-    dataSources.push({ ...source, createdAt: Date.now(), updatedAt: Date.now() });
+    dataSources.push({ ...normalizedSource, createdAt: Date.now(), updatedAt: Date.now() });
   }
 
   const activeId = options.setActive ? source.id : normalized.activeDataSourceId || source.id;
@@ -88,6 +101,8 @@ export const updateDataSourceRows = (
     return {
       ...s,
       rows: nextRows,
+      rowCount: nextRows.length,
+      chunkCount: Math.ceil(nextRows.length / CHUNK_SIZE),
       columns: mergedColumns,
       updatedAt: Date.now(),
     };
@@ -152,6 +167,8 @@ export const addDerivedDataSource = (
     name,
     kind,
     rows,
+    rowCount: rows.length,
+    chunkCount: Math.ceil(rows.length / CHUNK_SIZE),
     columns,
     createdAt: Date.now(),
     updatedAt: Date.now(),
@@ -162,4 +179,61 @@ export const addDerivedDataSource = (
 export const getDataSourcesByKind = (project: Project, kind: DataSourceKind) => {
   const { project: normalized } = ensureDataSources(project);
   return (normalized.dataSources || []).filter((s) => s.kind === kind);
+};
+
+export const isDataSourceNameTaken = (
+  project: Project,
+  params: { kind: DataSourceKind; name: string; excludeId?: string }
+): boolean => {
+  const { project: normalized } = ensureDataSources(project);
+  const needle = normalizeNameKey(params.name);
+  if (!needle) return false;
+  return (normalized.dataSources || []).some((s) => {
+    if (s.kind !== params.kind) return false;
+    if (params.excludeId && s.id === params.excludeId) return false;
+    return normalizeNameKey(s.name) === needle;
+  });
+};
+
+export type ColumnMismatch = {
+  key: string;
+  expectedType?: ColumnConfig['type'];
+  actualType?: ColumnConfig['type'];
+};
+
+export const diffColumns = (params: {
+  expected: ColumnConfig[];
+  actual: ColumnConfig[];
+}): {
+  missing: string[];
+  extra: string[];
+  typeMismatches: ColumnMismatch[];
+} => {
+  const expectedMap = new Map(params.expected.map((c) => [c.key, c.type] as const));
+  const actualMap = new Map(params.actual.map((c) => [c.key, c.type] as const));
+
+  const missing: string[] = [];
+  const extra: string[] = [];
+  const typeMismatches: ColumnMismatch[] = [];
+
+  for (const [key, expectedType] of expectedMap) {
+    if (!actualMap.has(key)) {
+      missing.push(key);
+      continue;
+    }
+    const actualType = actualMap.get(key);
+    if (expectedType && actualType && expectedType !== actualType) {
+      typeMismatches.push({ key, expectedType, actualType });
+    }
+  }
+
+  for (const key of actualMap.keys()) {
+    if (!expectedMap.has(key)) extra.push(key);
+  }
+
+  missing.sort();
+  extra.sort();
+  typeMismatches.sort((a, b) => a.key.localeCompare(b.key));
+
+  return { missing, extra, typeMismatches };
 };
