@@ -77,6 +77,12 @@ const toLightProjectFromMetadata = (metadata: any): Project => {
   });
 };
 
+export const getProjectLight = async (projectId: string): Promise<Project | null> => {
+  const metadata = await getProjectMetadata(projectId)
+  if (!metadata) return null
+  return toLightProjectFromMetadata(metadata)
+}
+
 // --- Type Guards ---
 
 interface ProjectMetadataV2 {
@@ -401,7 +407,11 @@ export const saveProject = async (project: Project): Promise<void> => {
       );
 
       // Check if data changed (row count different)
-      if (existing.rowCount !== normalized.data.length) {
+      const intendedRowCount =
+        typeof normalized.rowCount === 'number' ? normalized.rowCount : normalized.data.length;
+      const canRewriteActiveData = normalized.data.length > 0 || intendedRowCount === 0;
+
+      if (canRewriteActiveData && existing.rowCount !== normalized.data.length) {
         // Clear old data and re-insert
         await clearCache(normalized.id);
         await batchInsertData(normalized.id, normalized.data);

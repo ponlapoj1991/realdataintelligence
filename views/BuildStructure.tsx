@@ -1,8 +1,7 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Plus, Save, Play, Loader2, Table2, Layers, ChevronUp, ChevronDown, X, ArrowRight } from 'lucide-react';
 import {
   BuildStructureConfig,
-  ColumnConfig,
   DataSource,
   Project,
   RawRow,
@@ -10,12 +9,12 @@ import {
   TransformationRule,
   TransformMethod,
 } from '../types';
-import { ensureDataSources, getDataSourcesByKind, addDerivedDataSource } from '../utils/dataSources';
-import { hydrateProjectDataSourceRows, saveProject } from '../utils/storage-compat';
-import { inferColumns } from '../utils/excel';
-import { analyzeSourceColumn, applyTransformation, getAllUniqueValues } from '../utils/transform';
+import { ensureDataSources, getDataSourcesByKind } from '../utils/dataSources';
+import { getProjectLight, saveProject } from '../utils/storage-compat';
+import { analyzeSourceColumn, getAllUniqueValues } from '../utils/transform';
 import { useToast } from '../components/ToastProvider';
 import EmptyState from '../components/EmptyState';
+import { useTransformPipelineWorker } from '../hooks/useTransformPipelineWorker';
 
 const safeRender = (val: any) => {
   if (val === null || val === undefined) return '';
@@ -45,28 +44,6 @@ const BuildStructure: React.FC<BuildStructureProps> = ({ project, onUpdateProjec
     [ingestionSources, preparedSources]
   );
 
-  const getSourcesFromProject = (p: Project): DataSource[] => {
-    const ing = getDataSourcesByKind(p, 'ingestion');
-    const prep = getDataSourcesByKind(p, 'prepared');
-    return [...ing, ...prep].sort((a, b) => b.updatedAt - a.updatedAt);
-  };
-
-  const hydrateSourcesIfNeeded = async (sourceIds: string[]) => {
-    let nextProject = normalizedProject;
-    for (const sourceId of sourceIds) {
-      const src = nextProject.dataSources?.find((s) => s.id === sourceId);
-      const expected = typeof src?.rowCount === 'number' ? src.rowCount : 0;
-      const hasRows = Array.isArray(src?.rows) && src.rows.length > 0;
-      if (!hasRows && expected > 0) {
-        nextProject = await hydrateProjectDataSourceRows(nextProject, sourceId);
-      }
-    }
-    if (nextProject !== normalizedProject) {
-      onUpdateProject(nextProject);
-    }
-    return nextProject;
-  };
-
   const [configs, setConfigs] = useState<BuildStructureConfig[]>(normalizedProject.buildStructureConfigs || []);
   const [activeConfigId, setActiveConfigId] = useState<string | null>(normalizedProject.activeBuildConfigId || null);
   const [showConfigModal, setShowConfigModal] = useState(false);
@@ -80,6 +57,7 @@ const BuildStructure: React.FC<BuildStructureProps> = ({ project, onUpdateProjec
   const [previewTotal, setPreviewTotal] = useState<number>(0);
   const [isRunning, setIsRunning] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
+  const transformWorker = useTransformPipelineWorker();
 
   const [isRuleModalOpen, setIsRuleModalOpen] = useState(false);
   const [editingTargetName, setEditingTargetName] = useState<string | null>(null);
@@ -93,6 +71,7 @@ const BuildStructure: React.FC<BuildStructureProps> = ({ project, onUpdateProjec
     sourceId: string;
     sourceKey: string;
     method: TransformMethod;
+    autoMethod: boolean;
     params: any;
     valueMap: Record<string, string>;
     manualKey: string;
@@ -154,39 +133,113 @@ const BuildStructure: React.FC<BuildStructureProps> = ({ project, onUpdateProjec
     setPreviewTotal(sum);
   }, [activeConfig]);
 
+  const draftRequestRef = useRef<Record<string, number>>({});
+
+  const bumpDraftRequest = (sourceId: string) => {
+    draftRequestRef.current[sourceId] = (draftRequestRef.current[sourceId] || 0) + 1;
+    return draftRequestRef.current[sourceId];
+  };
+
   const buildDraftForSource = (sourceId: string, sources: DataSource[], existing?: StructureRule): RuleDraft => {
     const src = sources.find((s) => s.id === sourceId);
     const firstCol = existing?.sourceKey || src?.columns[0]?.key || '';
-    const analysis = src && firstCol ? analyzeSourceColumn(src.rows, firstCol) : null;
-    const inferredMethod: TransformMethod = existing?.method
-      ? existing.method
-      : analysis?.isDateLikely
-      ? 'date_extract'
-      : analysis?.isArrayLikely
-      ? 'array_count'
-      : 'copy';
+    const inferredMethod: TransformMethod = existing?.method ? existing.method : 'copy';
     return {
       sourceId,
       sourceKey: firstCol,
       method: inferredMethod,
+      autoMethod: !existing,
       params: existing?.params || (inferredMethod === 'date_extract' ? { datePart: 'date_only' } : {}),
       valueMap: existing?.valueMap || {},
       manualKey: '',
       manualValue: '',
-      analysis,
-      uniqueValues:
-        src && firstCol
-          ? getAllUniqueValues(src.rows, firstCol, inferredMethod || 'copy', 5000, existing?.params)
-          : [],
+      analysis: null,
+      uniqueValues: [],
     };
   };
 
-  const refreshDraftAnalysis = (srcId: string, sources: DataSource[], draft: RuleDraft) => {
-    const src = sources.find((s) => s.id === srcId);
-    if (!src || !draft.sourceKey) return draft;
-    const analysis = analyzeSourceColumn(src.rows, draft.sourceKey);
-    const uniqueValues = getAllUniqueValues(src.rows, draft.sourceKey, draft.method, 5000, draft.params);
-    return { ...draft, analysis, uniqueValues };
+  const refreshDraftAsync = (draft: RuleDraft) => {
+    const sourceId = draft.sourceId;
+    const sourceKey = draft.sourceKey;
+    const requestId = bumpDraftRequest(sourceId);
+
+    if (!sourceKey) {
+      setRuleDrafts((prev) => ({ ...prev, [sourceId]: { ...(prev[sourceId] || draft), analysis: null, uniqueValues: [] } }));
+      return;
+    }
+
+    const run = async () => {
+      try {
+        const projectId = normalizedProject.id;
+
+        const analysis = transformWorker.isSupported
+          ? await transformWorker.analyzeColumn({ projectId, sourceId, key: sourceKey })
+          : (() => {
+              const src = allSources.find((s) => s.id === sourceId);
+              return src ? analyzeSourceColumn(src.rows, sourceKey) : null;
+            })();
+
+        let nextMethod = draft.method;
+        let nextParams = draft.params || {};
+        let nextValueMap = draft.valueMap;
+        if (draft.autoMethod && analysis) {
+          if (analysis.isDateLikely) {
+            nextMethod = 'date_extract';
+            nextParams = { datePart: 'date_only' };
+          } else if (analysis.isArrayLikely) {
+            nextMethod = 'array_count';
+            nextParams = {};
+          } else {
+            nextMethod = 'copy';
+            nextParams = {};
+          }
+          nextValueMap = {};
+        }
+
+        const uniqueValues = transformWorker.isSupported
+          ? await transformWorker.uniqueValues({
+              projectId,
+              sourceId,
+              key: sourceKey,
+              method: nextMethod,
+              limit: 5000,
+              params: nextParams,
+            })
+          : (() => {
+              const src = allSources.find((s) => s.id === sourceId);
+              return src ? getAllUniqueValues(src.rows, sourceKey, nextMethod, 5000, nextParams) : [];
+            })();
+
+        setRuleDrafts((prev) => {
+          if ((draftRequestRef.current[sourceId] || 0) !== requestId) return prev;
+          const current = prev[sourceId] || draft;
+          if (current.sourceKey !== sourceKey) return prev;
+
+          const shouldAuto = current.autoMethod;
+          const next: RuleDraft = {
+            ...current,
+            analysis: analysis || null,
+            uniqueValues,
+          };
+          if (shouldAuto) {
+            next.method = nextMethod;
+            next.params = nextParams;
+            next.valueMap = nextValueMap;
+          }
+          return { ...prev, [sourceId]: next };
+        });
+      } catch (e) {
+        console.error('[BuildStructure] draft refresh failed:', e);
+        setRuleDrafts((prev) => {
+          if ((draftRequestRef.current[sourceId] || 0) !== requestId) return prev;
+          const current = prev[sourceId] || draft;
+          if (current.sourceKey !== sourceKey) return prev;
+          return { ...prev, [sourceId]: { ...current, analysis: null, uniqueValues: [] } };
+        });
+      }
+    };
+
+    void run();
   };
 
   const persistConfigs = async (nextConfigs: BuildStructureConfig[], nextActiveId?: string | null) => {
@@ -234,23 +287,19 @@ const BuildStructure: React.FC<BuildStructureProps> = ({ project, onUpdateProjec
   };
 
   const openAddRule = () => {
-    void (async () => {
-      if (!selectedSources.length) {
-        showToast('Select sources first', 'Choose one or more tables before adding columns.', 'warning');
-        return;
-      }
-      const hydratedProject = await hydrateSourcesIfNeeded(selectedSources);
-      const sources = getSourcesFromProject(hydratedProject);
-
-      setEditingTargetName(null);
-      setNewRuleName('');
-      const drafts: Record<string, RuleDraft> = {};
-      selectedSources.forEach((srcId) => {
-        drafts[srcId] = buildDraftForSource(srcId, sources);
-      });
-      setRuleDrafts(drafts);
-      setIsRuleModalOpen(true);
-    })();
+    if (!selectedSources.length) {
+      showToast('Select sources first', 'Choose one or more tables before adding columns.', 'warning');
+      return;
+    }
+    setEditingTargetName(null);
+    setNewRuleName('');
+    const drafts: Record<string, RuleDraft> = {};
+    selectedSources.forEach((srcId) => {
+      drafts[srcId] = buildDraftForSource(srcId, allSources);
+    });
+    setRuleDrafts(drafts);
+    setIsRuleModalOpen(true);
+    Object.values(drafts).forEach((draft) => refreshDraftAsync(draft));
   };
 
   const closeRuleModal = () => {
@@ -261,31 +310,33 @@ const BuildStructure: React.FC<BuildStructureProps> = ({ project, onUpdateProjec
   };
 
   const openEditRule = (targetName: string) => {
-    void (async () => {
-      const relevant = rules.filter((r) => r.targetName === targetName);
-      const hydratedProject = await hydrateSourcesIfNeeded(selectedSources);
-      const sources = getSourcesFromProject(hydratedProject);
-
-      setEditingTargetName(targetName);
-      setNewRuleName(targetName);
-      const drafts: Record<string, RuleDraft> = {};
-      selectedSources.forEach((srcId) => {
-        const existing = relevant.find((r) => r.sourceId === srcId);
-        drafts[srcId] = buildDraftForSource(srcId, sources, existing);
-      });
-      setRuleDrafts(drafts);
-      setIsRuleModalOpen(true);
-    })();
+    const relevant = rules.filter((r) => r.targetName === targetName);
+    setEditingTargetName(targetName);
+    setNewRuleName(targetName);
+    const drafts: Record<string, RuleDraft> = {};
+    selectedSources.forEach((srcId) => {
+      const existing = relevant.find((r) => r.sourceId === srcId);
+      drafts[srcId] = buildDraftForSource(srcId, allSources, existing);
+    });
+    setRuleDrafts(drafts);
+    setIsRuleModalOpen(true);
+    Object.values(drafts).forEach((draft) => refreshDraftAsync(draft));
   };
 
   const updateDraft = (srcId: string, updater: (draft: RuleDraft) => RuleDraft) => {
     setRuleDrafts((prev) => {
-      const next = { ...prev };
       const current = prev[srcId];
       if (!current) return prev;
-      next[srcId] = refreshDraftAnalysis(srcId, allSources, updater(current));
-      return next;
+      return { ...prev, [srcId]: updater(current) };
     });
+  };
+
+  const updateDraftWithRefresh = (srcId: string, updater: (draft: RuleDraft) => RuleDraft) => {
+    const current = ruleDrafts[srcId];
+    if (!current) return;
+    const nextDraft = updater(current);
+    setRuleDrafts((prev) => ({ ...prev, [srcId]: nextDraft }));
+    refreshDraftAsync(nextDraft);
   };
 
   const saveRule = async () => {
@@ -375,26 +426,40 @@ const BuildStructure: React.FC<BuildStructureProps> = ({ project, onUpdateProjec
       showToast('Setup incomplete', 'Choose sources and add mappings before querying.', 'warning');
       return;
     }
-    const hydratedProject = await hydrateSourcesIfNeeded(selectedSources);
-    const sources = getSourcesFromProject(hydratedProject);
-    const sourcesById = new Map(sources.map((s) => [s.id, s]));
     if (!silent) {
       setIsRunning(true);
     }
-    const output: RawRow[] = [];
-    selectedSources.forEach((sourceId) => {
-      const source = sourcesById.get(sourceId);
-      if (!source) return;
-      const scopedRules = workingRules.filter((r) => r.sourceId === sourceId);
-      if (!scopedRules.length) return;
-      const baseRules = scopedRules.map(({ sourceId: _sid, ...rest }) => rest);
-      const structured = applyTransformation(source.rows, baseRules);
-      output.push(...structured);
-    });
-    setResultRows(output);
-    setPreviewTotal(output.length);
+
+    const sourcesPayload = selectedSources
+      .map((sourceId) => {
+        const scopedRules = workingRules.filter((r) => r.sourceId === sourceId);
+        if (!scopedRules.length) return null;
+        const baseRules = scopedRules.map(({ sourceId: _sid, ...rest }) => rest) as TransformationRule[];
+        return { sourceId, rules: baseRules };
+      })
+      .filter((v): v is { sourceId: string; rules: TransformationRule[] } => !!v);
+
+    if (sourcesPayload.length === 0) {
+      showToast('Setup incomplete', 'Add at least one mapping before querying.', 'warning');
+      if (!silent) setIsRunning(false);
+      return;
+    }
+
+    try {
+      const preview = await transformWorker.previewMulti({
+        projectId: normalizedProject.id,
+        sources: sourcesPayload,
+        limit: 50,
+      });
+      setResultRows(preview.rows);
+      setPreviewTotal(preview.totalRows);
+    } finally {
+      if (!silent) {
+        setTimeout(() => setIsRunning(false), 150);
+      }
+    }
     if (!silent) {
-      setTimeout(() => setIsRunning(false), 300);
+      // handled above
     }
   };
 
@@ -416,13 +481,36 @@ const BuildStructure: React.FC<BuildStructureProps> = ({ project, onUpdateProjec
       return;
     }
     setIsSaving(true);
-    const columns: ColumnConfig[] = inferColumns(resultRows[0]);
-    const updated = addDerivedDataSource(normalizedProject, trimmed, resultRows, columns, 'prepared');
-    await saveProject(updated);
-    onUpdateProject(updated);
-    showToast('Saved', `${trimmed} stored in Preparation Data.`, 'success');
-    setShowSaveModal(false);
-    setTimeout(() => setIsSaving(false), 400);
+
+    const sourcesPayload = selectedSources
+      .map((sourceId) => {
+        const scopedRules = rules.filter((r) => r.sourceId === sourceId);
+        if (!scopedRules.length) return null;
+        const baseRules = scopedRules.map(({ sourceId: _sid, ...rest }) => rest) as TransformationRule[];
+        return { sourceId, rules: baseRules };
+      })
+      .filter((v): v is { sourceId: string; rules: TransformationRule[] } => !!v);
+
+    try {
+      await transformWorker.buildMulti({
+        projectId: normalizedProject.id,
+        name: trimmed,
+        kind: 'prepared',
+        sources: sourcesPayload,
+      });
+
+      const refreshed = await getProjectLight(normalizedProject.id);
+      if (refreshed) {
+        onUpdateProject(refreshed);
+      }
+
+      showToast('Saved', `${trimmed} stored in Preparation Data.`, 'success');
+      setShowSaveModal(false);
+    } catch (e: any) {
+      showToast('Save failed', e?.message || 'Failed to save', 'error');
+    } finally {
+      setTimeout(() => setIsSaving(false), 400);
+    }
   };
 
   const hasConfig = Boolean(activeConfig);
@@ -796,31 +884,14 @@ const BuildStructure: React.FC<BuildStructureProps> = ({ project, onUpdateProjec
                           value={draft.sourceKey}
                           onChange={(e) => {
                             const nextKey = e.target.value;
-                            updateDraft(draft.sourceId, (curr) => {
-                              const srcRef = allSources.find((s) => s.id === draft.sourceId);
-                              const analysis = srcRef && nextKey ? analyzeSourceColumn(srcRef.rows, nextKey) : null;
-                              let nextMethod = curr.method;
-                              let nextParams = curr.params || {};
-                              if (!editingTargetName) {
-                                if (analysis?.isDateLikely) {
-                                  nextMethod = 'date_extract';
-                                  nextParams = { datePart: 'date_only' };
-                                } else if (analysis?.isArrayLikely) {
-                                  nextMethod = 'array_count';
-                                  nextParams = {};
-                                } else {
-                                  nextMethod = 'copy';
-                                  nextParams = {};
-                                }
-                              }
-                              return {
-                                ...curr,
-                                sourceKey: nextKey,
-                                method: nextMethod,
-                                params: nextParams,
-                                valueMap: editingTargetName ? curr.valueMap : {},
-                              };
-                            });
+                            updateDraftWithRefresh(draft.sourceId, (curr) => ({
+                              ...curr,
+                              sourceKey: nextKey,
+                              autoMethod: editingTargetName ? curr.autoMethod : true,
+                              method: editingTargetName ? curr.method : 'copy',
+                              params: editingTargetName ? curr.params : {},
+                              valueMap: editingTargetName ? curr.valueMap : {},
+                            }));
                           }}
                           className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm"
                         >
@@ -841,9 +912,10 @@ const BuildStructure: React.FC<BuildStructureProps> = ({ project, onUpdateProjec
                           value={draft.method}
                           onChange={(e) => {
                             const method = e.target.value as TransformMethod;
-                            updateDraft(draft.sourceId, (curr) => ({
+                            updateDraftWithRefresh(draft.sourceId, (curr) => ({
                               ...curr,
                               method,
+                              autoMethod: false,
                               params:
                                 method === 'date_extract'
                                   ? { datePart: curr.params?.datePart || 'date_only' }
@@ -858,6 +930,7 @@ const BuildStructure: React.FC<BuildStructureProps> = ({ project, onUpdateProjec
                                   : method === 'array_includes'
                                   ? { keyword: curr.params?.keyword || '' }
                                   : {},
+                              valueMap: editingTargetName ? curr.valueMap : {},
                             }));
                           }}
                           className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm"
@@ -881,8 +954,9 @@ const BuildStructure: React.FC<BuildStructureProps> = ({ project, onUpdateProjec
                           <label className="text-sm font-medium text-gray-700">Delimiter</label>
                           <input
                             value={draft.params?.delimiter || ', '}
-                            onChange={(e) => updateDraft(draft.sourceId, (curr) => ({
+                            onChange={(e) => updateDraftWithRefresh(draft.sourceId, (curr) => ({
                               ...curr,
+                              autoMethod: false,
                               params: { ...curr.params, delimiter: e.target.value },
                             }))}
                             className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm"
@@ -898,8 +972,9 @@ const BuildStructure: React.FC<BuildStructureProps> = ({ project, onUpdateProjec
                           <input
                             type="number"
                             value={draft.params?.index ?? 0}
-                            onChange={(e) => updateDraft(draft.sourceId, (curr) => ({
+                            onChange={(e) => updateDraftWithRefresh(draft.sourceId, (curr) => ({
                               ...curr,
+                              autoMethod: false,
                               params: { ...curr.params, index: Number(e.target.value) },
                             }))}
                             className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm"
@@ -915,8 +990,9 @@ const BuildStructure: React.FC<BuildStructureProps> = ({ project, onUpdateProjec
                           <input
                             value={draft.params?.prefix ?? 'A-'}
                             onChange={(e) =>
-                              updateDraft(draft.sourceId, (curr) => ({
+                              updateDraftWithRefresh(draft.sourceId, (curr) => ({
                                 ...curr,
+                                autoMethod: false,
                                 params: { ...curr.params, prefix: e.target.value },
                               }))
                             }
@@ -936,8 +1012,9 @@ const BuildStructure: React.FC<BuildStructureProps> = ({ project, onUpdateProjec
                           <label className="text-sm font-medium text-gray-700">Keyword</label>
                           <input
                             value={draft.params?.keyword || ''}
-                            onChange={(e) => updateDraft(draft.sourceId, (curr) => ({
+                            onChange={(e) => updateDraftWithRefresh(draft.sourceId, (curr) => ({
                               ...curr,
+                              autoMethod: false,
                               params: { ...curr.params, keyword: e.target.value },
                             }))}
                             className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm"
@@ -952,8 +1029,9 @@ const BuildStructure: React.FC<BuildStructureProps> = ({ project, onUpdateProjec
                           <label className="text-sm font-medium text-gray-700">Date part</label>
                           <select
                             value={draft.params?.datePart || 'date_only'}
-                            onChange={(e) => updateDraft(draft.sourceId, (curr) => ({
+                            onChange={(e) => updateDraftWithRefresh(draft.sourceId, (curr) => ({
                               ...curr,
+                              autoMethod: false,
                               params: { ...curr.params, datePart: e.target.value },
                             }))}
                             className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm"
@@ -973,8 +1051,9 @@ const BuildStructure: React.FC<BuildStructureProps> = ({ project, onUpdateProjec
                           <label className="text-sm font-medium text-gray-700">Format</label>
                           <input
                             value={draft.params?.format || 'YYYY-MM-DD'}
-                            onChange={(e) => updateDraft(draft.sourceId, (curr) => ({
+                            onChange={(e) => updateDraftWithRefresh(draft.sourceId, (curr) => ({
                               ...curr,
+                              autoMethod: false,
                               params: { ...curr.params, format: e.target.value },
                             }))}
                             className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm"

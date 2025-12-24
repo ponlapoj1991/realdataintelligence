@@ -1,12 +1,13 @@
-import React, { useState, useMemo, useEffect } from 'react';
+import React, { useState, useMemo, useEffect, useRef } from 'react';
 import { Settings, Download, Save, Search, X, Eraser, Trash2, Replace, ArrowRight, Zap, Calendar, Split, Table2, Database, Plus, GripVertical, Check, ListFilter, ChevronUp, ChevronDown, Pencil } from 'lucide-react';
 import { Project, RawRow, ColumnConfig, TransformationRule, TransformMethod } from '../types';
 import { hydrateProjectDataSourceRows, saveProject } from '../utils/storage-compat';
-import { addDerivedDataSource, ensureDataSources, setActiveDataSource, updateDataSourceRows } from '../utils/dataSources';
-import { exportToExcel, smartParseDate, inferColumns } from '../utils/excel';
+import { ensureDataSources, setActiveDataSource, updateDataSourceRows } from '../utils/dataSources';
+import { exportToExcel, smartParseDate } from '../utils/excel';
 import { analyzeSourceColumn, applyTransformation, getAllUniqueValues } from '../utils/transform';
 import EmptyState from '../components/EmptyState';
 import { useToast } from '../components/ToastProvider';
+import { useTransformPipelineWorker } from '../hooks/useTransformPipelineWorker';
 
 interface DataPrepProps {
   project: Project;
@@ -26,8 +27,10 @@ const DataPrep: React.FC<DataPrepProps> = ({ project, onUpdateProject }) => {
 
   const [mode, setMode] = useState<Mode>('clean');
   const [isSaving, setIsSaving] = useState(false);
+  const [isSavingPrepared, setIsSavingPrepared] = useState(false);
 
   const { showToast } = useToast();
+  const transformWorker = useTransformPipelineWorker();
 
   // --- CLEAN MODE STATES ---
   const [editingCol, setEditingCol] = useState<string | null>(null);
@@ -49,6 +52,7 @@ const DataPrep: React.FC<DataPrepProps> = ({ project, onUpdateProject }) => {
   const [newRuleName, setNewRuleName] = useState('');
   const [selectedSourceCol, setSelectedSourceCol] = useState('');
   const [sourceAnalysis, setSourceAnalysis] = useState<{ isArrayLikely: boolean, isDateLikely: boolean, uniqueTags: string[], sampleValues: string[] } | null>(null);
+  const sourceAnalysisReqRef = useRef(0);
   const [selectedMethod, setSelectedMethod] = useState<TransformMethod>('copy');
   const [methodParams, setMethodParams] = useState<any>({});
   const [valueMap, setValueMap] = useState<Record<string, string>>({});
@@ -59,14 +63,52 @@ const DataPrep: React.FC<DataPrepProps> = ({ project, onUpdateProject }) => {
   // Manual Map State
   const [manualMapKey, setManualMapKey] = useState('');
   const [manualMapValue, setManualMapValue] = useState('');
+  const [uniqueValuesForMapping, setUniqueValuesForMapping] = useState<string[]>([]);
+  const uniqueValuesReqRef = useRef(0);
 
-  // Computed Structured Data
-  const structuredData = useMemo(() => {
-      if (mode === 'build' && rules.length > 0) {
-          return applyTransformation(activeData, rules);
+  const [structuredPreviewRows, setStructuredPreviewRows] = useState<RawRow[]>([]);
+  const [structuredTotalRows, setStructuredTotalRows] = useState(0);
+  const structuredPreviewReqRef = useRef(0);
+
+  useEffect(() => {
+    if (mode !== 'build' || rules.length === 0) {
+      setStructuredPreviewRows([]);
+      setStructuredTotalRows(0);
+      return;
+    }
+
+    const reqId = (structuredPreviewReqRef.current += 1);
+
+    const run = async () => {
+      try {
+        if (!transformWorker.isSupported) {
+          const transformed = applyTransformation(activeData, rules);
+          if (reqId !== structuredPreviewReqRef.current) return;
+          setStructuredPreviewRows(transformed.slice(0, 50));
+          setStructuredTotalRows(transformed.length);
+          return;
+        }
+
+        const resp = await transformWorker.previewSingle({
+          projectId: normalizedProject.id,
+          sourceId: activeSource.id,
+          rules,
+          limit: 50,
+        });
+
+        if (reqId !== structuredPreviewReqRef.current) return;
+        setStructuredPreviewRows(resp.rows);
+        setStructuredTotalRows(resp.totalRows);
+      } catch (e) {
+        if (reqId !== structuredPreviewReqRef.current) return;
+        console.error('[DataPrep] preview failed:', e);
+        setStructuredPreviewRows([]);
+        setStructuredTotalRows(0);
       }
-      return [];
-  }, [activeData, rules, mode]);
+    };
+
+    void run();
+  }, [mode, rules, normalizedProject.id, activeSource.id, transformWorker.isSupported, transformWorker.previewSingle, activeData]);
 
   // Sync Rules to Project
   useEffect(() => {
@@ -104,26 +146,97 @@ const DataPrep: React.FC<DataPrepProps> = ({ project, onUpdateProject }) => {
       setTimeout(() => setIsSaving(false), 800);
   };
 
-  const handleExport = () => {
+  const handleExport = async () => {
       if (mode === 'clean') {
         exportToExcel(activeData, `${project.name}_Raw_Cleaned`);
-      } else {
-        exportToExcel(structuredData, `${project.name}_Structured`);
+        return;
       }
+
+      if (rules.length === 0) {
+        showToast('No structure', 'Rules required.', 'warning');
+        return;
+      }
+
+      let rowsToExport = activeData;
+      if (rowsToExport.length === 0 && (activeSource.rowCount ?? 0) > 0) {
+        const hydrated = await hydrateProjectDataSourceRows(normalizedProject, activeSource.id);
+        const updated = setActiveDataSource(hydrated, activeSource.id);
+        onUpdateProject(updated);
+        rowsToExport = updated.dataSources?.find((s) => s.id === activeSource.id)?.rows || [];
+      }
+
+      exportToExcel(applyTransformation(rowsToExport, rules), `${project.name}_Structured`);
   };
 
   const handleSavePreparedTable = async () => {
-      if (structuredData.length === 0) {
+      if (rules.length === 0) {
         showToast('No structured data yet', 'Switch to Build Structure and add a rule before saving.', 'warning');
         return;
       }
       const name = prompt('Name for this prepared table', `${project.name} - Prepared`);
       if (!name) return;
-      const columns = inferColumns(structuredData[0]);
-      const updatedProject = addDerivedDataSource(normalizedProject, name, structuredData, columns, 'prepared');
-      onUpdateProject(updatedProject);
-      await saveProject(updatedProject);
-      showToast('Prepared table saved', 'Find it under Management Data > Preparation Data.', 'success');
+
+      setIsSavingPrepared(true);
+      try {
+        if (transformWorker.isSupported) {
+          const source = await transformWorker.buildSingle({
+            projectId: normalizedProject.id,
+            sourceId: activeSource.id,
+            name,
+            kind: 'prepared',
+            rules,
+          });
+
+          const updatedProject: Project = {
+            ...normalizedProject,
+            dataSources: [...(normalizedProject.dataSources || []), { ...source, rows: [] }],
+            lastModified: source.updatedAt,
+          };
+          onUpdateProject(updatedProject);
+          showToast('Prepared table saved', 'Find it under Management Data > Preparation Data.', 'success');
+          return;
+        }
+
+        const transformed = applyTransformation(activeData, rules);
+        if (transformed.length === 0) {
+          showToast('No structured data yet', 'Switch to Build Structure and add a rule before saving.', 'warning');
+          return;
+        }
+
+        const now = Date.now();
+        const columns: ColumnConfig[] = rules.map((r) => ({
+          key: r.targetName,
+          type: 'string',
+          visible: true,
+          label: r.targetName,
+        }));
+        const updatedProject: Project = {
+          ...normalizedProject,
+          dataSources: [
+            ...(normalizedProject.dataSources || []),
+            {
+              id: crypto.randomUUID(),
+              name,
+              kind: 'prepared',
+              rows: transformed,
+              rowCount: transformed.length,
+              chunkCount: Math.ceil(transformed.length / 1000),
+              columns,
+              createdAt: now,
+              updatedAt: now,
+            },
+          ],
+          lastModified: now,
+        };
+        onUpdateProject(updatedProject);
+        await saveProject(updatedProject);
+        showToast('Prepared table saved', 'Find it under Management Data > Preparation Data.', 'success');
+      } catch (e: any) {
+        console.error('[DataPrep] Save prepared failed:', e);
+        showToast('Save failed', e?.message || 'Unable to save prepared table.', 'error');
+      } finally {
+        setIsSavingPrepared(false);
+      }
   };
 
   // --- CLEAN MODE FUNCTIONS ---
@@ -187,23 +300,44 @@ const DataPrep: React.FC<DataPrepProps> = ({ project, onUpdateProject }) => {
   // --- BUILD MODE FUNCTIONS ---
   const handleSourceColSelect = (colKey: string) => {
       setSelectedSourceCol(colKey);
-      const analysis = analyzeSourceColumn(activeData, colKey);
-      setSourceAnalysis(analysis);
+      setSourceAnalysis(null);
+
+      const reqId = (sourceAnalysisReqRef.current += 1);
+      const run = async () => {
+        try {
+          const analysis = transformWorker.isSupported
+            ? await transformWorker.analyzeColumn({
+                projectId: normalizedProject.id,
+                sourceId: activeSource.id,
+                key: colKey,
+              })
+            : analyzeSourceColumn(activeData, colKey);
+
+          if (reqId !== sourceAnalysisReqRef.current) return;
+          setSourceAnalysis(analysis);
       
-      // Smart Default logic, only if we are NOT editing an existing rule
-      if (!editingRuleId) {
-          if (analysis.isDateLikely) {
+          // Smart Default logic, only if we are NOT editing an existing rule
+          if (!editingRuleId) {
+            if (analysis.isDateLikely) {
               setSelectedMethod('date_extract');
               setMethodParams({ datePart: 'date_only' });
-          } else if (analysis.isArrayLikely) {
+            } else if (analysis.isArrayLikely) {
               setSelectedMethod('array_count');
               setMethodParams({});
-          } else {
+            } else {
               setSelectedMethod('copy');
               setMethodParams({});
+            }
+            setValueMap({});
           }
-          setValueMap({});
-      }
+        } catch (e) {
+          if (reqId !== sourceAnalysisReqRef.current) return;
+          console.error('[DataPrep] analyze column failed:', e);
+          setSourceAnalysis(null);
+        }
+      };
+
+      void run();
   };
 
   const openAddModal = () => {
@@ -228,8 +362,27 @@ const DataPrep: React.FC<DataPrepProps> = ({ project, onUpdateProject }) => {
       setValueMap(rule.valueMap || {});
       
       // Run analysis to populate preview/options
-      const analysis = analyzeSourceColumn(activeData, rule.sourceKey);
-      setSourceAnalysis(analysis);
+      setSourceAnalysis(null);
+      const reqId = (sourceAnalysisReqRef.current += 1);
+      const run = async () => {
+        try {
+          const analysis = transformWorker.isSupported
+            ? await transformWorker.analyzeColumn({
+                projectId: normalizedProject.id,
+                sourceId: activeSource.id,
+                key: rule.sourceKey,
+              })
+            : analyzeSourceColumn(activeData, rule.sourceKey);
+
+          if (reqId !== sourceAnalysisReqRef.current) return;
+          setSourceAnalysis(analysis);
+        } catch (e) {
+          if (reqId !== sourceAnalysisReqRef.current) return;
+          console.error('[DataPrep] analyze column failed:', e);
+          setSourceAnalysis(null);
+        }
+      };
+      void run();
 
       setIsRuleModalOpen(true);
   };
@@ -286,11 +439,46 @@ const DataPrep: React.FC<DataPrepProps> = ({ project, onUpdateProject }) => {
   };
 
   // UPDATED: More robust extraction of values for mapping
-  const uniqueValuesForMapping = useMemo(() => {
-      if (!selectedSourceCol) return [];
-      // Use the comprehensive scan function here, scanning up to 5000 rows
-      return getAllUniqueValues(activeData, selectedSourceCol, selectedMethod, 5000);
-  }, [selectedSourceCol, selectedMethod, activeData]);
+  useEffect(() => {
+    if (!selectedSourceCol) {
+      setUniqueValuesForMapping([]);
+      return;
+    }
+
+    const reqId = (uniqueValuesReqRef.current += 1);
+    const run = async () => {
+      try {
+        const values = transformWorker.isSupported
+          ? await transformWorker.uniqueValues({
+              projectId: normalizedProject.id,
+              sourceId: activeSource.id,
+              key: selectedSourceCol,
+              method: selectedMethod,
+              limit: 5000,
+              params: methodParams,
+            })
+          : getAllUniqueValues(activeData, selectedSourceCol, selectedMethod, 5000, methodParams);
+
+        if (reqId !== uniqueValuesReqRef.current) return;
+        setUniqueValuesForMapping(values);
+      } catch (e) {
+        if (reqId !== uniqueValuesReqRef.current) return;
+        console.error('[DataPrep] unique values failed:', e);
+        setUniqueValuesForMapping([]);
+      }
+    };
+
+    void run();
+  }, [
+    selectedSourceCol,
+    selectedMethod,
+    methodParams,
+    activeData,
+    normalizedProject.id,
+    activeSource.id,
+    transformWorker.isSupported,
+    transformWorker.uniqueValues,
+  ]);
 
   // Clean Mode Filter Logic
   const filteredRawData = useMemo(() => {
@@ -352,8 +540,12 @@ const DataPrep: React.FC<DataPrepProps> = ({ project, onUpdateProject }) => {
             </button>
             <button
                 onClick={handleSavePreparedTable}
-                disabled={mode !== 'build'}
-                className={`flex items-center space-x-2 px-4 py-2 rounded-lg transition-colors shadow-sm border ${mode === 'build' ? 'bg-emerald-600 text-white hover:bg-emerald-700 border-emerald-600' : 'bg-white text-gray-400 border-gray-200 cursor-not-allowed'}`}
+                disabled={mode !== 'build' || isSavingPrepared}
+                className={`flex items-center space-x-2 px-4 py-2 rounded-lg transition-colors shadow-sm border ${
+                  mode === 'build' && !isSavingPrepared
+                    ? 'bg-emerald-600 text-white hover:bg-emerald-700 border-emerald-600'
+                    : 'bg-white text-gray-400 border-gray-200 cursor-not-allowed'
+                }`}
             >
                 <Save className="w-4 h-4" />
                 <span>Save as prepared table</span>
@@ -564,7 +756,7 @@ const DataPrep: React.FC<DataPrepProps> = ({ project, onUpdateProject }) => {
               <div className="flex-1 bg-gray-100 flex flex-col overflow-hidden">
                   <div className="px-6 py-3 bg-white border-b border-gray-200 flex justify-between items-center shadow-sm z-10">
                       <span className="text-sm font-semibold text-gray-700">Live Preview (Top 50 rows)</span>
-                      <span className="text-xs text-gray-400">{structuredData.length} rows generated</span>
+                      <span className="text-xs text-gray-400">{structuredTotalRows || activeSource.rowCount || activeData.length} rows generated</span>
                   </div>
                   
                   <div className="flex-1 overflow-auto p-6">
@@ -585,7 +777,7 @@ const DataPrep: React.FC<DataPrepProps> = ({ project, onUpdateProject }) => {
                                       </tr>
                                   </thead>
                                   <tbody className="divide-y divide-gray-100">
-                                      {structuredData.slice(0, 50).map((row, idx) => (
+                                      {structuredPreviewRows.map((row, idx) => (
                                           <tr key={idx} className="hover:bg-blue-50/30 transition-colors">
                                               <td className="px-6 py-3 text-gray-400 text-xs font-mono">{idx + 1}</td>
                                               {rules.map(r => (
