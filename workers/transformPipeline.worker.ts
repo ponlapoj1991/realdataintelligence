@@ -112,6 +112,15 @@ type CleanApplyFindReplaceMessage = {
   replaceText: string
 }
 
+type CleanOverwriteFromSourceMessage = {
+  type: 'cleanOverwriteFromSource'
+  requestId: string
+  projectId: string
+  sourceId: string
+  targetSourceId: string
+  ops: Array<{ targetCol: string; findText: string; replaceText: string }>
+}
+
 type CleanApplyTransformDateMessage = {
   type: 'cleanApplyTransformDate'
   requestId: string
@@ -176,6 +185,7 @@ type WorkerMessage =
   | CleanPreviewMessage
   | CleanQueryPageMessage
   | CleanApplyFindReplaceMessage
+  | CleanOverwriteFromSourceMessage
   | CleanApplyTransformDateMessage
   | CleanApplyExplodeMessage
   | CleanDeleteRowMessage
@@ -1368,6 +1378,116 @@ const cleanApplyFindReplace = async (msg: CleanApplyFindReplaceMessage): Promise
   return { type: 'cleanDone', requestId: msg.requestId, rowCount, chunkCount, updatedAt: now }
 }
 
+const applyFindReplaceOpsToChunk = (
+  chunk: RawRow[],
+  ops: Array<{ targetCol: string; findText: string; replaceText: string }>
+): RawRow[] => {
+  if (!ops.length) return chunk
+
+  return chunk.map((row) => {
+    let next: RawRow | null = null
+
+    for (const op of ops) {
+      const findText = String(op.findText || '')
+      if (!findText) continue
+
+      const replaceText = String(op.replaceText || '')
+
+      if (op.targetCol === 'all') {
+        const base = next || row
+        const keys = Object.keys(base)
+        for (const key of keys) {
+          const v = (base as any)[key]
+          if (typeof v !== 'string') continue
+          if (!v.includes(findText)) continue
+          if (!next) next = { ...base }
+          ;(next as any)[key] = v.split(findText).join(replaceText)
+        }
+        continue
+      }
+
+      const key = String(op.targetCol || '')
+      if (!key) continue
+      const base = next || row
+      const v = (base as any)[key]
+      if (typeof v !== 'string') continue
+      if (!v.includes(findText)) continue
+      if (!next) next = { ...base }
+      ;(next as any)[key] = v.split(findText).join(replaceText)
+    }
+
+    return next || row
+  })
+}
+
+const cleanOverwriteFromSource = async (msg: CleanOverwriteFromSourceMessage): Promise<BuildResponse> => {
+  const metadata = await getProjectMetadata(msg.projectId)
+  if (!metadata) throw new Error('Project not found')
+
+  const sources = Array.isArray(metadata?.dataSources) ? (metadata.dataSources as any[]) : []
+  const src = sources.find((s) => s?.id === msg.sourceId)
+  if (!src) throw new Error('Source not found')
+  const target = sources.find((s) => s?.id === msg.targetSourceId)
+  if (!target) throw new Error('Target not found')
+  if (target.kind !== 'prepared') throw new Error('Target must be prepared')
+  if (msg.sourceId === msg.targetSourceId) throw new Error('Source and target must differ')
+
+  const { rowCount, chunkCount } = await resolveSourceStats({
+    metadata,
+    projectId: msg.projectId,
+    sourceId: msg.sourceId,
+  })
+
+  await deleteAllDataSourceChunksForSource(msg.projectId, msg.targetSourceId)
+
+  for (let i = 0; i < chunkCount; i++) {
+    const chunk = await safeGetSourceChunk({
+      metadata,
+      projectId: msg.projectId,
+      sourceId: msg.sourceId,
+      chunkIndex: i,
+    })
+    const nextChunk = applyFindReplaceOpsToChunk(chunk, msg.ops || [])
+    await saveDataSourceChunk(msg.projectId, msg.targetSourceId, i, nextChunk)
+  }
+
+  const now = Date.now()
+  const srcColumns = Array.isArray((src as any).columns) ? ((src as any).columns as ColumnConfig[]) : []
+  const nextSources = sources.map((s) => {
+    if (s?.id !== msg.targetSourceId) return s
+    return {
+      ...s,
+      columns: srcColumns.length ? srcColumns : Array.isArray(s.columns) ? s.columns : [],
+      rowCount,
+      chunkCount,
+      updatedAt: now,
+      rows: [],
+    }
+  })
+
+  await saveProjectMetadata({
+    ...metadata,
+    dataSources: nextSources,
+    ...(metadata?.activeDataSourceId === msg.targetSourceId ? { rowCount, chunkCount } : {}),
+    lastModified: now,
+  })
+
+  return {
+    type: 'buildDone',
+    requestId: msg.requestId,
+    source: {
+      id: msg.targetSourceId,
+      name: String(target.name || ''),
+      kind: target.kind as DataSourceKind,
+      rowCount,
+      chunkCount,
+      columns: srcColumns.length ? srcColumns : Array.isArray(target.columns) ? (target.columns as ColumnConfig[]) : [],
+      createdAt: typeof target.createdAt === 'number' ? target.createdAt : now,
+      updatedAt: now,
+    },
+  }
+}
+
 const cleanApplyTransformDate = async (msg: CleanApplyTransformDateMessage): Promise<CleanDoneResponse> => {
   const metadata = await getProjectMetadata(msg.projectId)
   if (!metadata) throw new Error('Project not found')
@@ -1647,6 +1767,11 @@ self.onmessage = (event: MessageEvent<WorkerMessage>) => {
       if (msg.type === 'cleanApplyFindReplace') {
         const resp = await cleanApplyFindReplace(msg)
         self.postMessage(resp satisfies CleanDoneResponse)
+        return
+      }
+      if (msg.type === 'cleanOverwriteFromSource') {
+        const resp = await cleanOverwriteFromSource(msg)
+        self.postMessage(resp satisfies BuildResponse)
         return
       }
       if (msg.type === 'cleanApplyTransformDate') {

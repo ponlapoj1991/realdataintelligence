@@ -27,14 +27,31 @@ const ACTION_WIDTH = 56;
 
 type PageEntry = { rows: RawRow[]; rowIndices: number[] };
 
+type FindReplaceOp = { targetCol: string; findText: string; replaceText: string };
+
 const renderCellValue = (val: any) => {
   if (val === null || val === undefined) return '';
   if (typeof val === 'object') return JSON.stringify(val);
   return String(val);
 };
 
+const applyFindReplaceDraft = (val: any, colKey: string, ops: FindReplaceOp[]) => {
+  if (!ops.length) return val;
+  if (typeof val !== 'string') return val;
+
+  let out = val;
+  for (const op of ops) {
+    const findText = String(op.findText || '');
+    if (!findText) continue;
+    if (op.targetCol !== 'all' && op.targetCol !== colKey) continue;
+    if (!out.includes(findText)) continue;
+    out = out.split(findText).join(String(op.replaceText || ''));
+  }
+  return out;
+};
+
 const CleansingRow = React.memo(function CleansingRow(props: any) {
-  const { index, style, columns, pages, pageSize, onDelete, tableWidth, scrollLeft } = props as {
+  const { index, style, columns, pages, pageSize, onDelete, tableWidth, scrollLeft, draftOps } = props as {
     index: number;
     style: React.CSSProperties;
     columns: ColumnConfig[];
@@ -43,6 +60,7 @@ const CleansingRow = React.memo(function CleansingRow(props: any) {
     onDelete: (rowIndex: number) => void;
     tableWidth: number;
     scrollLeft: number;
+    draftOps: FindReplaceOp[];
   };
 
   const page = Math.floor(index / pageSize);
@@ -58,7 +76,8 @@ const CleansingRow = React.memo(function CleansingRow(props: any) {
           {typeof rowIndex === 'number' ? rowIndex + 1 : ''}
         </div>
         {columns.map((col) => {
-          const v = row ? (row as any)[col.key] : '';
+          const raw = row ? (row as any)[col.key] : '';
+          const v = row ? applyFindReplaceDraft(raw, col.key, draftOps) : '';
           const rendered = row ? renderCellValue(v) : '';
           return (
             <div
@@ -107,9 +126,11 @@ const CleansingData: React.FC<CleansingDataProps> = ({ project, onUpdateProject 
 
   const [selectedSourceId, setSelectedSourceId] = useState<string | null>(null);
   const [showPicker, setShowPicker] = useState(false);
-  const [showNameModal, setShowNameModal] = useState(false);
-  const [tableName, setTableName] = useState('');
-  const [nameError, setNameError] = useState('');
+  const [showSaveModal, setShowSaveModal] = useState(false);
+  const [saveMode, setSaveMode] = useState<'new' | 'overwrite'>('new');
+  const [saveName, setSaveName] = useState('');
+  const [overwriteTargetId, setOverwriteTargetId] = useState<string>('');
+  const [saveError, setSaveError] = useState('');
 
   const [searchQuery, setSearchQuery] = useState('');
   const [activeToolMode, setActiveToolMode] = useState<'none' | 'cleaner'>('none');
@@ -117,6 +138,7 @@ const CleansingData: React.FC<CleansingDataProps> = ({ project, onUpdateProject 
   const [replaceText, setReplaceText] = useState('');
   const [targetCol, setTargetCol] = useState<string>('all');
   const [isSaving, setIsSaving] = useState(false);
+  const [draftOps, setDraftOps] = useState<FindReplaceOp[]>([]);
   const [openFilterCol, setOpenFilterCol] = useState<string | null>(null);
   const [filterAnchorRect, setFilterAnchorRect] = useState<Pick<DOMRect, 'left' | 'top' | 'right' | 'bottom'> | null>(null);
   const [filters, setFilters] = useState<Record<string, string[] | null>>({});
@@ -148,15 +170,27 @@ const CleansingData: React.FC<CleansingDataProps> = ({ project, onUpdateProject 
   const [totalRows, setTotalRows] = useState(0);
   const [hasResultCount, setHasResultCount] = useState(false);
   const [queryError, setQueryError] = useState<string | null>(null);
+  const [isQuerying, setIsQuerying] = useState(false);
+  const [stalePageCache, setStalePageCache] = useState<Record<number, { rows: RawRow[]; rowIndices: number[] }> | null>(null);
+  const [staleTotalRows, setStaleTotalRows] = useState(0);
+  const [staleHasResultCount, setStaleHasResultCount] = useState(false);
   const [pageCache, setPageCache] = useState<Record<number, { rows: RawRow[]; rowIndices: number[] }>>({});
   const pageCacheRef = useRef<Record<number, { rows: RawRow[]; rowIndices: number[] }>>({});
   useEffect(() => {
     pageCacheRef.current = pageCache;
   }, [pageCache]);
 
+  const totalRowsRef = useRef(0);
+  const hasResultCountRef = useRef(false);
+  useEffect(() => {
+    totalRowsRef.current = totalRows;
+    hasResultCountRef.current = hasResultCount;
+  }, [totalRows, hasResultCount]);
+
   const queryReqRef = useRef(0);
   const loadingPagesRef = useRef<Set<number>>(new Set());
   const lastErrorReqRef = useRef<number | null>(null);
+  const prevSourceIdRef = useRef<string | null>(null);
 
   const queryKey = useMemo(() => {
     return JSON.stringify({
@@ -189,6 +223,12 @@ const CleansingData: React.FC<CleansingDataProps> = ({ project, onUpdateProject 
           if (reqId !== queryReqRef.current) return;
           setTotalRows(resp.totalRows);
           setHasResultCount(true);
+          if (page === 0) {
+            setIsQuerying(false);
+            setStalePageCache(null);
+            setStaleTotalRows(0);
+            setStaleHasResultCount(false);
+          }
           if (page === 0) {
             setQueryError(null);
             lastErrorReqRef.current = null;
@@ -230,6 +270,12 @@ const CleansingData: React.FC<CleansingDataProps> = ({ project, onUpdateProject 
         setTotalRows(allRowIndices.length);
         setHasResultCount(true);
         if (page === 0) {
+          setIsQuerying(false);
+          setStalePageCache(null);
+          setStaleTotalRows(0);
+          setStaleHasResultCount(false);
+        }
+        if (page === 0) {
           setQueryError(null);
           lastErrorReqRef.current = null;
         }
@@ -238,9 +284,11 @@ const CleansingData: React.FC<CleansingDataProps> = ({ project, onUpdateProject 
         if (reqId !== queryReqRef.current) return;
         console.error('[CleansingData] query page failed:', e);
         if (page === 0) {
+          setIsQuerying(false);
+          // Keep stale table visible when the newest query fails.
           setTotalRows(0);
           setPageCache({});
-          setHasResultCount(true);
+          setHasResultCount(hasResultCountRef.current);
           setQueryError('Query failed');
         }
         if (lastErrorReqRef.current !== reqId) {
@@ -257,11 +305,45 @@ const CleansingData: React.FC<CleansingDataProps> = ({ project, onUpdateProject 
   useEffect(() => {
     queryReqRef.current += 1;
     loadingPagesRef.current.clear();
+    setQueryError(null);
+
+    const nextSourceId = selectedSource?.id ?? null;
+    const prevSourceId = prevSourceIdRef.current;
+    prevSourceIdRef.current = nextSourceId;
+
+    if (!selectedSource) {
+      setIsQuerying(false);
+      setStalePageCache(null);
+      setStaleTotalRows(0);
+      setStaleHasResultCount(false);
+      setPageCache({});
+      setTotalRows(0);
+      setHasResultCount(false);
+      return;
+    }
+
+    const sourceChanged = prevSourceId !== nextSourceId;
+    if (sourceChanged) {
+      // Do not show stale rows from a different table (columns differ).
+      setIsQuerying(false);
+      setStalePageCache(null);
+      setStaleTotalRows(0);
+      setStaleHasResultCount(false);
+      setPageCache({});
+      setTotalRows(0);
+      setHasResultCount(false);
+      void loadPage(0);
+      return;
+    }
+
+    setStalePageCache(pageCacheRef.current);
+    setStaleTotalRows(totalRowsRef.current);
+    setStaleHasResultCount(hasResultCountRef.current);
+    setIsQuerying(true);
     setPageCache({});
     setTotalRows(0);
-    setHasResultCount(false);
-    setQueryError(null);
-    if (!selectedSource) return;
+    // Keep the table visible; swap to the new result set when page 0 arrives.
+    setHasResultCount(hasResultCountRef.current);
     void loadPage(0);
   }, [queryKey, selectedSource?.id, loadPage]);
 
@@ -337,6 +419,13 @@ const CleansingData: React.FC<CleansingDataProps> = ({ project, onUpdateProject 
   const sourceRowCount =
     typeof selectedSource?.rowCount === 'number' ? selectedSource.rowCount : selectedSource?.rows.length || 0;
 
+  const displayPageCache =
+    stalePageCache && (isQuerying || Object.keys(pageCache).length === 0) ? stalePageCache : pageCache;
+  const displayTotalRows =
+    stalePageCache && (isQuerying || Object.keys(pageCache).length === 0) ? staleTotalRows : totalRows;
+  const displayHasResultCount =
+    stalePageCache && (isQuerying || Object.keys(pageCache).length === 0) ? staleHasResultCount : hasResultCount;
+
   useEffect(() => {
     if (!openFilterCol || !selectedSource) return;
     if (filterOptions[openFilterCol]?.length) return;
@@ -385,6 +474,7 @@ const CleansingData: React.FC<CleansingDataProps> = ({ project, onUpdateProject 
     setSelectedSourceId(source.id);
     setShowPicker(false);
     setOpenFilterCol(null);
+    setFilterAnchorRect(null);
     setFilters({});
     setFilterOptions({});
     setSearchQuery('');
@@ -392,6 +482,7 @@ const CleansingData: React.FC<CleansingDataProps> = ({ project, onUpdateProject 
     setFindText('');
     setReplaceText('');
     setTargetCol('all');
+    setDraftOps([]);
     setQueryVersion((v) => v + 1);
     if (!transformWorker.isSupported) {
       void (async () => {
@@ -403,45 +494,10 @@ const CleansingData: React.FC<CleansingDataProps> = ({ project, onUpdateProject 
 
   const handleFindReplace = async () => {
     if (!findText.trim()) return;
-    if (selectedSource && transformWorker.isSupported) {
-      try {
-        await transformWorker.cleanApplyFindReplace({
-          projectId: normalizedProject.id,
-          sourceId: selectedSource.id,
-          targetCol,
-          findText,
-          replaceText,
-        });
-        const refreshed = await getProjectLight(normalizedProject.id);
-        if (refreshed) onUpdateProject(refreshed);
-        setOpenFilterCol(null);
-        setFilterOptions({});
-        setFilters({});
-        setSearchQuery('');
-        setQueryVersion((v) => v + 1);
-      } catch (e: any) {
-        console.error('[CleansingData] Find & Replace failed:', e);
-        showToast('Apply failed', e?.message || 'Unable to update rows.', 'error');
-      }
-      return;
-    }
-    const colsToSearch = targetCol === 'all' ? workingColumns.map((c) => c.key) : [targetCol];
-    const newRows = workingRows.map((row) => {
-      const next = { ...row };
-      colsToSearch.forEach((key) => {
-        const val = next[key];
-        if (typeof val === 'string' && val.includes(findText)) {
-          next[key] = val.split(findText).join(replaceText);
-        }
-      });
-      return next;
-    });
-    await persistSource(newRows, workingColumns);
     setOpenFilterCol(null);
+    setFilterAnchorRect(null);
     setFilterOptions({});
-    setFilters({});
-    setSearchQuery('');
-    setQueryVersion((v) => v + 1);
+    setDraftOps((prev) => [...prev, { targetCol, findText, replaceText }]);
   };
 
   const handleDeleteRow = async (index: number) => {
@@ -470,37 +526,79 @@ const CleansingData: React.FC<CleansingDataProps> = ({ project, onUpdateProject 
     setQueryVersion((v) => v + 1);
   };
 
-  const openNameModal = () => {
+  const openSaveModal = () => {
     if (!selectedSource) return;
-    setTableName(`${selectedSource.name} - Cleansed`);
-    setNameError('');
-    setShowNameModal(true);
+    setSaveMode('new');
+    setSaveName(`${selectedSource.name} - Cleansed`);
+    setOverwriteTargetId(selectedSource.kind === 'prepared' ? selectedSource.id : (preparedSources[0]?.id ?? ''));
+    setSaveError('');
+    setShowSaveModal(true);
   };
 
   const confirmSave = async () => {
-    const trimmed = tableName.trim();
-    if (!trimmed) {
-      setNameError('Name required.');
-      return;
-    }
-    if (isDataSourceNameTaken(normalizedProject, { kind: 'prepared', name: trimmed })) {
-      setNameError('Name exists.');
-      return;
-    }
     if (!selectedSource) return;
+    const trimmed = saveName.trim();
+    if (saveMode === 'new') {
+      if (!trimmed) {
+        setSaveError('Name required.');
+        return;
+      }
+      if (isDataSourceNameTaken(normalizedProject, { kind: 'prepared', name: trimmed })) {
+        setSaveError('Name exists.');
+        return;
+      }
+    } else {
+      if (!overwriteTargetId) {
+        setSaveError('Target required.');
+        return;
+      }
+    }
     setIsSaving(true);
     try {
       if (transformWorker.isSupported) {
-        await transformWorker.cloneSource({
-          projectId: normalizedProject.id,
-          sourceId: selectedSource.id,
-          name: trimmed,
-          kind: 'prepared',
-        });
+        if (saveMode === 'new') {
+          const cloned = await transformWorker.cloneSource({
+            projectId: normalizedProject.id,
+            sourceId: selectedSource.id,
+            name: trimmed,
+            kind: 'prepared',
+          });
+          if (draftOps.length) {
+            for (const op of draftOps) {
+              await transformWorker.cleanApplyFindReplace({
+                projectId: normalizedProject.id,
+                sourceId: cloned.id,
+                targetCol: op.targetCol,
+                findText: op.findText,
+                replaceText: op.replaceText,
+              });
+            }
+          }
+        } else {
+          if (overwriteTargetId === selectedSource.id) {
+            for (const op of draftOps) {
+              await transformWorker.cleanApplyFindReplace({
+                projectId: normalizedProject.id,
+                sourceId: selectedSource.id,
+                targetCol: op.targetCol,
+                findText: op.findText,
+                replaceText: op.replaceText,
+              });
+            }
+          } else {
+            await transformWorker.cleanOverwriteFromSource({
+              projectId: normalizedProject.id,
+              sourceId: selectedSource.id,
+              targetSourceId: overwriteTargetId,
+              ops: draftOps,
+            });
+          }
+        }
         const refreshed = await getProjectLight(normalizedProject.id);
         if (refreshed) onUpdateProject(refreshed);
         showToast('Saved', 'Table stored under Preparation Data.', 'success');
-        setShowNameModal(false);
+        setDraftOps([]);
+        setShowSaveModal(false);
         setTimeout(() => setIsSaving(false), 300);
         return;
       }
@@ -509,12 +607,39 @@ const CleansingData: React.FC<CleansingDataProps> = ({ project, onUpdateProject 
         ? normalizedProject
         : await hydrateProjectDataSourceRows(normalizedProject, selectedSource.id);
       const src = (hydrated.dataSources || []).find((s) => s.id === selectedSource.id) || selectedSource;
-      const updated = addDerivedDataSource(hydrated, trimmed, src.rows, src.columns, 'prepared');
-      await saveProject(updated);
-      onUpdateProject(updated);
+      const applyOpsToRow = (row: RawRow) => {
+        if (!draftOps.length) return row;
+        const next: any = { ...row };
+        for (const op of draftOps) {
+          const findText = String(op.findText || '');
+          if (!findText) continue;
+          const replaceText = String(op.replaceText || '');
+          const keys = op.targetCol === 'all' ? Object.keys(next) : [op.targetCol];
+          for (const key of keys) {
+            const v = next[key];
+            if (typeof v === 'string' && v.includes(findText)) {
+              next[key] = v.split(findText).join(replaceText);
+            }
+          }
+        }
+        return next as RawRow;
+      };
+
+      if (saveMode === 'new') {
+        const nextRows = (src.rows || []).map(applyOpsToRow);
+        const updated = addDerivedDataSource(hydrated, trimmed, nextRows, src.columns, 'prepared');
+        await saveProject(updated);
+        onUpdateProject(updated);
+      } else {
+        const nextRows = (src.rows || []).map(applyOpsToRow);
+        const updated = updateDataSourceRows(hydrated, overwriteTargetId, nextRows, src.columns, 'replace');
+        await saveProject(updated);
+        onUpdateProject(updated);
+      }
       showToast('Saved', 'Table stored under Preparation Data.', 'success');
+      setDraftOps([]);
       setTimeout(() => setIsSaving(false), 300);
-      setShowNameModal(false);
+      setShowSaveModal(false);
     } catch (e: any) {
       console.error('[CleansingData] Save failed:', e);
       showToast('Save failed', e?.message || 'Unable to save table.', 'error');
@@ -531,7 +656,7 @@ const CleansingData: React.FC<CleansingDataProps> = ({ project, onUpdateProject 
         <div className="flex items-center space-x-3">
           {selectedSource && (
             <button
-              onClick={openNameModal}
+              onClick={openSaveModal}
               disabled={isSaving}
               className="inline-flex items-center px-4 py-2 bg-blue-600 text-white rounded-lg shadow-sm hover:bg-blue-700 transition disabled:opacity-60"
             >
@@ -565,8 +690,13 @@ const CleansingData: React.FC<CleansingDataProps> = ({ project, onUpdateProject 
               <div className="flex items-center space-x-2 text-gray-900 font-semibold">
                 <span>{selectedSource.name}</span>
                 <span className="text-xs font-medium text-gray-500">
-                  {(hasResultCount ? totalRows : sourceRowCount).toLocaleString()} rows
+                  {(displayHasResultCount ? displayTotalRows : sourceRowCount).toLocaleString()} rows
                 </span>
+                {isQuerying && (
+                  <span className="text-xs text-gray-300 flex items-center">
+                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                  </span>
+                )}
               </div>
             </div>
             <div className="flex items-center space-x-2 text-sm text-gray-600">
@@ -709,26 +839,26 @@ const CleansingData: React.FC<CleansingDataProps> = ({ project, onUpdateProject 
               </div>
 
               <div ref={listContainerRef} className="flex-1 overflow-hidden">
-                {queryError ? (
+                {!displayHasResultCount && queryError ? (
                   <div className="h-full flex items-center justify-center text-gray-400 text-sm">
                     {queryError}
                   </div>
-                ) : !hasResultCount ? (
+                ) : !displayHasResultCount ? (
                   <div className="h-full flex items-center justify-center text-gray-300">
                     <Loader2 className="w-5 h-5 animate-spin" />
                   </div>
-                ) : totalRows === 0 ? (
+                ) : displayTotalRows === 0 ? (
                   <div className="h-full flex items-center justify-center text-gray-400 text-sm">
                     No records
                   </div>
                 ) : (
                   <List
                     defaultHeight={listHeight}
-                    rowCount={totalRows}
+                    rowCount={displayTotalRows}
                     rowHeight={ROW_HEIGHT}
                     overscanCount={5}
                     rowComponent={CleansingRow as any}
-                    rowProps={{ columns: workingColumns, pages: pageCache, pageSize: PAGE_SIZE, onDelete: handleDeleteRow, tableWidth, scrollLeft }}
+                    rowProps={{ columns: workingColumns, pages: displayPageCache, pageSize: PAGE_SIZE, onDelete: handleDeleteRow, tableWidth, scrollLeft, draftOps }}
                     onRowsRendered={handleItemsRendered as any}
                     style={{ height: listHeight, width: '100%', overflowX: 'hidden' }}
                   />
@@ -832,39 +962,102 @@ const CleansingData: React.FC<CleansingDataProps> = ({ project, onUpdateProject 
         </div>
       )}
 
-      {showNameModal && (
+      {showSaveModal && (
         <div className="fixed inset-0 bg-black/40 z-40 flex items-center justify-center px-4">
           <div className="bg-white rounded-xl shadow-2xl max-w-md w-full p-6 space-y-4">
             <div className="space-y-1">
-              <p className="text-sm uppercase tracking-wide text-blue-600 font-semibold">Prepared table</p>
-              <h3 className="text-xl font-bold text-gray-900">Table Name</h3>
+              <p className="text-sm uppercase tracking-wide text-blue-600 font-semibold">Preparation Data</p>
+              <h3 className="text-xl font-bold text-gray-900">Save</h3>
             </div>
-            <div className="space-y-2">
-              <label className="text-sm font-medium text-gray-700">Table name</label>
-              <input
-                autoFocus
-                value={tableName}
-                onChange={(e) => {
-                  setTableName(e.target.value);
-                  setNameError('');
+
+            <div className="flex gap-2">
+              <button
+                type="button"
+                onClick={() => {
+                  setSaveMode('new');
+                  setSaveError('');
                 }}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter') {
-                    e.preventDefault();
-                    confirmSave();
+                className={`flex-1 px-3 py-2 rounded-lg text-sm font-medium border ${
+                  saveMode === 'new' ? 'bg-blue-50 border-blue-300 text-blue-700' : 'bg-white border-gray-200 text-gray-700 hover:bg-gray-50'
+                }`}
+              >
+                New
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setSaveMode('overwrite');
+                  setSaveError('');
+                  if (!overwriteTargetId) {
+                    const fallback = (preparedSources[0]?.id ?? '');
+                    setOverwriteTargetId(fallback);
                   }
                 }}
-                className={`w-full rounded-lg border ${nameError ? 'border-red-300 focus:ring-red-200' : 'border-gray-200 focus:ring-blue-200'} px-3 py-2 text-sm shadow-sm focus:outline-none focus:ring-2`}
-                placeholder="Table"
-              />
-              {nameError && <p className="text-xs text-red-600">{nameError}</p>}
+                className={`flex-1 px-3 py-2 rounded-lg text-sm font-medium border ${
+                  saveMode === 'overwrite' ? 'bg-blue-50 border-blue-300 text-blue-700' : 'bg-white border-gray-200 text-gray-700 hover:bg-gray-50'
+                }`}
+              >
+                Overwrite
+              </button>
             </div>
+
+            {saveMode === 'new' ? (
+              <div className="space-y-2">
+                <label className="text-sm font-medium text-gray-700">Table Name</label>
+                <input
+                  autoFocus
+                  value={saveName}
+                  onChange={(e) => {
+                    setSaveName(e.target.value);
+                    setSaveError('');
+                  }}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') {
+                      e.preventDefault();
+                      void confirmSave();
+                    }
+                  }}
+                  className={`w-full rounded-lg border ${
+                    saveError ? 'border-red-300 focus:ring-red-200' : 'border-gray-200 focus:ring-blue-200'
+                  } px-3 py-2 text-sm shadow-sm focus:outline-none focus:ring-2`}
+                  placeholder="Table"
+                />
+              </div>
+            ) : (
+              <div className="space-y-2">
+                <label className="text-sm font-medium text-gray-700">Target Table</label>
+                <select
+                  value={overwriteTargetId}
+                  onChange={(e) => {
+                    setOverwriteTargetId(e.target.value);
+                    setSaveError('');
+                  }}
+                  className={`w-full rounded-lg border ${
+                    saveError ? 'border-red-300 focus:ring-red-200' : 'border-gray-200 focus:ring-blue-200'
+                  } px-3 py-2 text-sm shadow-sm focus:outline-none focus:ring-2 bg-white`}
+                >
+                  <option value="">-</option>
+                  {preparedSources.map((s) => (
+                    <option key={s.id} value={s.id}>
+                      {s.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            )}
+
+            {saveError && <p className="text-xs text-red-600">{saveError}</p>}
+
             <div className="flex justify-end space-x-3 pt-2">
-              <button onClick={() => setShowNameModal(false)} className="px-4 py-2 text-sm text-gray-600 rounded-lg hover:bg-gray-50">
+              <button
+                onClick={() => setShowSaveModal(false)}
+                disabled={isSaving}
+                className="px-4 py-2 text-sm text-gray-600 rounded-lg hover:bg-gray-50 disabled:opacity-60"
+              >
                 Cancel
               </button>
               <button
-                onClick={confirmSave}
+                onClick={() => void confirmSave()}
                 disabled={isSaving}
                 className="px-4 py-2 text-sm font-medium text-white bg-blue-600 rounded-lg shadow-sm hover:bg-blue-700 disabled:opacity-60"
               >

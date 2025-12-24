@@ -77,6 +77,12 @@ type CleanColumnOptionsResponse = {
   values: string[]
 }
 
+type CleanOverwriteFromSourceResponse = {
+  type: 'buildDone'
+  requestId: string
+  source: BuildDoneResponse['source']
+}
+
 type ErrorResponse = {
   type: 'error'
   requestId: string
@@ -92,6 +98,7 @@ type WorkerResponse =
   | CleanQueryPageResponse
   | CleanDoneResponse
   | CleanColumnOptionsResponse
+  | CleanOverwriteFromSourceResponse
   | ErrorResponse
 
 export interface TransformPipelineWorkerClient {
@@ -176,6 +183,12 @@ export interface TransformPipelineWorkerClient {
     delimiter: string
   }) => Promise<CleanDoneResponse>
   cleanDeleteRow: (params: { projectId: string; sourceId: string; rowIndex: number }) => Promise<CleanDoneResponse>
+  cleanOverwriteFromSource: (params: {
+    projectId: string
+    sourceId: string
+    targetSourceId: string
+    ops: Array<{ targetCol: string; findText: string; replaceText: string }>
+  }) => Promise<BuildDoneResponse['source']>
   cleanUpdateColumnType: (params: {
     projectId: string
     sourceId: string
@@ -446,6 +459,20 @@ export function useTransformPipelineWorker(): TransformPipelineWorkerClient {
     [call]
   )
 
+  const cleanOverwriteFromSource: TransformPipelineWorkerClient['cleanOverwriteFromSource'] = useCallback(
+    async ({ projectId, sourceId, targetSourceId, ops }) => {
+      const resp = (await call({
+        type: 'cleanOverwriteFromSource',
+        projectId,
+        sourceId,
+        targetSourceId,
+        ops,
+      })) as BuildDoneResponse
+      return resp.source
+    },
+    [call]
+  )
+
   const cleanUpdateColumnType: TransformPipelineWorkerClient['cleanUpdateColumnType'] = useCallback(
     async ({ projectId, sourceId, columnKey, columnType }) => {
       const resp = (await call({
@@ -490,6 +517,7 @@ export function useTransformPipelineWorker(): TransformPipelineWorkerClient {
     cleanApplyTransformDate,
     cleanApplyExplode,
     cleanDeleteRow,
+    cleanOverwriteFromSource,
     cleanUpdateColumnType,
     cloneSource,
   }
