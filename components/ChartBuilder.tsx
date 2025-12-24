@@ -446,6 +446,7 @@ const ChartBuilder: React.FC<ChartBuilderProps> = ({
   const [curveType, setCurveType] = useState<'linear' | 'monotone' | 'step'>('linear');
   const [strokeWidth, setStrokeWidth] = useState(2);
   const [strokeStyle, setStrokeStyle] = useState<'solid' | 'dashed' | 'dotted'>('solid');
+  const [fillMode, setFillMode] = useState<'gaps' | 'zero' | 'connect'>('gaps');
   const [barSize, setBarSize] = useState(22);
   const [categoryGap, setCategoryGap] = useState(20);
 
@@ -515,6 +516,7 @@ const [sortSeriesId, setSortSeriesId] = useState('');
     setCurveType('linear');
     setStrokeWidth(2);
     setStrokeStyle('solid');
+    setFillMode('gaps');
     setPrimaryColor(COLORS[0]);
     setBarSize(22);
     setCategoryGap(20);
@@ -616,6 +618,7 @@ const [sortSeriesId, setSortSeriesId] = useState('');
       setCurveType(initialWidget.curveType || (initialWidget.type === 'smooth-line' ? 'monotone' : 'linear'));
       setStrokeWidth(typeof initialWidget.strokeWidth === 'number' ? initialWidget.strokeWidth : 2);
       setStrokeStyle(initialWidget.strokeStyle || 'solid');
+      setFillMode(initialWidget.fillMode || 'gaps');
       setPrimaryColor(initialWidget.color || COLORS[0]);
 
       setLegend(initialWidget.legend || createDefaultLegend());
@@ -841,9 +844,10 @@ const [sortSeriesId, setSortSeriesId] = useState('');
       startAngle: (type === 'pie' || type === 'donut') ? startAngle : undefined,
 
       // Line
-      curveType: (type === 'line' || type === 'smooth-line' || type?.includes('area')) ? curveType : undefined,
-      strokeWidth: (type === 'line' || type === 'smooth-line' || type?.includes('area')) ? strokeWidth : undefined,
-      strokeStyle: (type === 'line' || type === 'smooth-line' || type?.includes('area')) ? strokeStyle : undefined,
+      curveType: (type === 'line' || type === 'smooth-line' || type === 'multi-line' || type?.includes('area')) ? curveType : undefined,
+      strokeWidth: (type === 'line' || type === 'smooth-line' || type === 'multi-line' || type?.includes('area')) ? strokeWidth : undefined,
+      strokeStyle: (type === 'line' || type === 'smooth-line' || type === 'multi-line' || type?.includes('area')) ? strokeStyle : undefined,
+      fillMode: (type === 'line' || type === 'smooth-line' || type === 'multi-line' || type?.includes('area')) ? fillMode : undefined,
 
       // KPI
       kpiCountMode: type === 'kpi' ? kpiCountMode : undefined
@@ -942,7 +946,14 @@ const [sortSeriesId, setSortSeriesId] = useState('');
     const supports = getChartSupports(selectedType);
 
     // Reset fields based on type
-    setDimension(supports.dimension ? (availableColumns[0] || '') : '');
+    setDimension(() => {
+      if (!supports.dimension) return '';
+      if (selectedType === 'multi-line') {
+        const dateCol = availableColumns.find((col) => columnProfiles[col]?.type === 'date');
+        return dateCol || availableColumns[0] || '';
+      }
+      return availableColumns[0] || '';
+    });
     setStackBy('');
     setSeries([]);
     setSortSeriesId('');
@@ -966,6 +977,7 @@ const [sortSeriesId, setSortSeriesId] = useState('');
     setCurveType(selectedType === 'smooth-line' ? 'monotone' : 'linear');
     setStrokeWidth(2);
     setStrokeStyle('solid');
+    setFillMode('gaps');
     setBarSize(22);
     setCategoryGap(20);
     setLegend(createDefaultLegend());
@@ -1040,6 +1052,7 @@ const [sortSeriesId, setSortSeriesId] = useState('');
       type === 'combo' ||
       type === 'line' ||
       type === 'smooth-line' ||
+      type === 'multi-line' ||
       type === 'area' ||
       type === 'stacked-area' ||
       type === '100-stacked-area';
@@ -1114,6 +1127,7 @@ const [sortSeriesId, setSortSeriesId] = useState('');
       curveType,
       strokeWidth,
       strokeStyle,
+      fillMode,
       categoryFilter: categoryFilter.length > 0 ? categoryFilter : undefined,
       sortBy,
       barOrientation,
@@ -1154,6 +1168,7 @@ const [sortSeriesId, setSortSeriesId] = useState('');
     subtitle,
     legend,
     dataLabels,
+    fillMode,
     innerRadius,
     startAngle,
     curveType,
@@ -1391,6 +1406,8 @@ const [sortSeriesId, setSortSeriesId] = useState('');
                     setStrokeWidth={setStrokeWidth}
                     strokeStyle={strokeStyle}
                     setStrokeStyle={setStrokeStyle}
+                    fillMode={fillMode}
+                    setFillMode={setFillMode}
                     barSize={barSize}
                     setBarSize={setBarSize}
                     sortBy={sortBy}

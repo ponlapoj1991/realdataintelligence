@@ -51,6 +51,7 @@ export interface SharedSeriesDataLabel {
 export interface SharedChartOptions {
   // Series/stack
   lineSmooth?: boolean
+  connectNulls?: boolean
   lineStrokeWidth?: number
   lineStrokeStyle?: 'solid' | 'dashed' | 'dotted'
   stack?: boolean

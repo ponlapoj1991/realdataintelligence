@@ -442,7 +442,7 @@ export const aggregateWidgetData = (
     'stacked-area', '100-stacked-area'
   ].includes(widget.type);
 
-  const isLineFamily = ['line', 'smooth-line', 'area', 'stacked-area', '100-stacked-area'].includes(widget.type);
+  const isLineFamily = ['line', 'smooth-line', 'multi-line', 'area', 'stacked-area', '100-stacked-area'].includes(widget.type);
   const major = widget.xAxis?.major ?? 0;
   const majorBucket =
     isLineFamily && widget.dimension
@@ -543,6 +543,143 @@ export const aggregateWidgetData = (
     }
 
     return { data: finalRows, isStack: isStackedChart, stackKeys: stackKeyList };
+  }
+
+  if (widget.type === 'multi-line' && widget.stackBy) {
+    const seriesColumn = widget.stackBy;
+    const seriesKeys = new Set<string>();
+    const statsBySeries: Record<string, Record<string, { sum: number; count: number }>> = {};
+    const measure = widget.measure || 'count';
+    const fillMode = widget.fillMode || 'gaps';
+    const fillValue: number | null = fillMode === 'zero' ? 0 : null;
+
+    const isDateAxis = inferredForLine === 'date';
+    const rawValues = rows.map((r) => r[widget.dimension]);
+
+    const toBucketLabel = (() => {
+      if (!isDateAxis) return null;
+      let minMs = Infinity;
+      let maxMs = -Infinity;
+      for (const v of rawValues) {
+        const d = toDate(v);
+        if (!d) continue;
+        const ms = d.getTime();
+        if (ms < minMs) minMs = ms;
+        if (ms > maxMs) maxMs = ms;
+      }
+      if (!Number.isFinite(minMs) || !Number.isFinite(maxMs)) return null;
+
+      const min = new Date(minMs);
+      min.setHours(0, 0, 0, 0);
+      const max = new Date(maxMs);
+      max.setHours(0, 0, 0, 0);
+      const msPerDay = 24 * 60 * 60 * 1000;
+      const diffDays = Math.max(0, Math.floor((max.getTime() - min.getTime()) / msPerDay));
+      const majorDays = Number.isFinite(major) && major > 0 ? Math.floor(major) : 0;
+      const bucketCount = majorDays > 0 ? Math.floor(diffDays / majorDays) + 1 : diffDays + 1;
+
+      const MAX_POINTS = 2000;
+      if (bucketCount > MAX_POINTS) return null;
+
+      return (raw: any) => {
+        const d = toDate(raw);
+        if (!d) return '(Empty)';
+        const date = new Date(d);
+        date.setHours(0, 0, 0, 0);
+        const days = Math.floor((date.getTime() - min.getTime()) / msPerDay);
+        const idx = majorDays > 0 ? Math.max(0, Math.floor(days / majorDays)) : Math.max(0, days);
+        const start = new Date(min.getTime() + (majorDays > 0 ? idx * majorDays : idx) * msPerDay);
+        if (majorDays > 0) {
+          const end = new Date(start.getTime() + (majorDays - 1) * msPerDay);
+          return `${toISODate(start)} - ${toISODate(end)}`;
+        }
+        return toISODate(start);
+      };
+    })();
+
+    const getLabel = (row: RawRow) => {
+      if (toBucketLabel) return toBucketLabel(row[widget.dimension]);
+      return getDimensionKey(row);
+    };
+
+    rows.forEach((row) => {
+      const label = getLabel(row);
+      const seriesKey = normalizeKey(row[seriesColumn] ?? '(Other)');
+      seriesKeys.add(seriesKey);
+
+      if (!statsBySeries[seriesKey]) statsBySeries[seriesKey] = {};
+      if (!statsBySeries[seriesKey][label]) statsBySeries[seriesKey][label] = { sum: 0, count: 0 };
+
+      const cell = statsBySeries[seriesKey][label];
+      if (measure === 'count') {
+        cell.sum += 1;
+        cell.count += 1;
+      } else if ((measure === 'sum' || measure === 'avg') && widget.measureCol) {
+        cell.sum += Number(row[widget.measureCol]) || 0;
+        cell.count += 1;
+      }
+    });
+
+    const labelSet = new Set<string>();
+    Object.values(statsBySeries).forEach((byLabel) => Object.keys(byLabel).forEach((k) => labelSet.add(k)));
+
+    let labels: string[] = [];
+    if (toBucketLabel) {
+      let minMs = Infinity;
+      let maxMs = -Infinity;
+      for (const v of rawValues) {
+        const d = toDate(v);
+        if (!d) continue;
+        const ms = d.getTime();
+        if (ms < minMs) minMs = ms;
+        if (ms > maxMs) maxMs = ms;
+      }
+
+      if (Number.isFinite(minMs) && Number.isFinite(maxMs)) {
+        const min = new Date(minMs);
+        min.setHours(0, 0, 0, 0);
+        const max = new Date(maxMs);
+        max.setHours(0, 0, 0, 0);
+        const msPerDay = 24 * 60 * 60 * 1000;
+        const diffDays = Math.max(0, Math.floor((max.getTime() - min.getTime()) / msPerDay));
+        const majorDays = Number.isFinite(major) && major > 0 ? Math.floor(major) : 0;
+        const bucketCount = majorDays > 0 ? Math.floor(diffDays / majorDays) + 1 : diffDays + 1;
+        const MAX_POINTS = 2000;
+        if (bucketCount <= MAX_POINTS) {
+          labels = Array.from({ length: bucketCount }, (_, idx) => {
+            const start = new Date(min.getTime() + (majorDays > 0 ? idx * majorDays : idx) * msPerDay);
+            if (majorDays > 0) {
+              const end = new Date(start.getTime() + (majorDays - 1) * msPerDay);
+              return `${toISODate(start)} - ${toISODate(end)}`;
+            }
+            return toISODate(start);
+          });
+        }
+      }
+    }
+
+    if (labels.length === 0) {
+      const labelRows = Array.from(labelSet).map((name) => ({ name, value: 0 }));
+      labels = applySorting(labelRows, resolvedSortBy, 'value').map((r) => r.name);
+    }
+
+    const seriesKeyList = Array.from(seriesKeys).sort((a, b) => a.localeCompare(b));
+    const data = labels.map((name) => {
+      const row: any = { name };
+      for (const key of seriesKeyList) {
+        const cell = statsBySeries[key]?.[name];
+        if (!cell) {
+          row[key] = fillValue;
+        } else if (measure === 'avg') {
+          row[key] = cell.count > 0 ? cell.sum / cell.count : fillValue;
+        } else {
+          row[key] = cell.sum;
+        }
+      }
+      return row;
+    });
+
+    return { data, isStack: false, stackKeys: seriesKeyList };
   }
 
   const measure = widget.measure || 'count';
@@ -663,7 +800,7 @@ export const processMultiSeriesData = (widget: DashboardWidget, rows: RawRow[]) 
   });
 
   const rowEntries = Object.values(result);
-  const isLineFamily = ['line', 'smooth-line', 'area', 'stacked-area', '100-stacked-area'].includes(widget.type);
+  const isLineFamily = ['line', 'smooth-line', 'multi-line', 'area', 'stacked-area', '100-stacked-area'].includes(widget.type);
   const inferredForLine = isLineFamily && widget.dimension
     ? inferTemporalOrSequential(rows.map(r => r[widget.dimension!]))
     : null;
@@ -715,7 +852,7 @@ export const getTopNOverflowDimensionValues = (widget: DashboardWidget, rows: Ra
     'stacked-area', '100-stacked-area'
   ].includes(widget.type);
 
-  const isLineFamily = ['line', 'smooth-line', 'area', 'stacked-area', '100-stacked-area'].includes(widget.type);
+  const isLineFamily = ['line', 'smooth-line', 'multi-line', 'area', 'stacked-area', '100-stacked-area'].includes(widget.type);
   const major = widget.xAxis?.major ?? 0;
   const majorBucket =
     isLineFamily && widget.dimension

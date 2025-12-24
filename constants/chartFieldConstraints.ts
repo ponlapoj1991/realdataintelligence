@@ -65,6 +65,14 @@ const stackConstraint: FieldConstraint = {
   helper: 'Break each column/bar into parts using this category'
 };
 
+const seriesByConstraint: FieldConstraint = {
+  key: 'stackBy',
+  label: 'Series By',
+  required: true,
+  allowedTypes: textOnly,
+  helper: 'Group lines by this category'
+};
+
 const scatterX: FieldConstraint = {
   key: 'xDimension',
   label: 'X-Axis',
@@ -111,6 +119,7 @@ const constraintsMap: Partial<Record<ChartType, FieldConstraint[]>> = {
   '100-stacked-bar': [baseDimension(), stackConstraint],
   line: [baseDimension()],
   'smooth-line': [baseDimension()],
+  'multi-line': [baseDimension('Date'), seriesByConstraint],
   area: [baseDimension()],
   'stacked-area': [baseDimension(), stackConstraint],
   '100-stacked-area': [baseDimension(), stackConstraint],
