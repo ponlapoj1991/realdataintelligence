@@ -1,7 +1,7 @@
 import React, { useState, useMemo, useEffect, useRef } from 'react';
 import { Settings, Download, Save, Search, X, Eraser, Trash2, Replace, ArrowRight, Zap, Calendar, Split, Table2, Database, Plus, GripVertical, Check, ListFilter, ChevronUp, ChevronDown, Pencil } from 'lucide-react';
 import { Project, RawRow, ColumnConfig, TransformationRule, TransformMethod } from '../types';
-import { hydrateProjectDataSourceRows, saveProject } from '../utils/storage-compat';
+import { getProjectLight, hydrateProjectDataSourceRows, saveProject } from '../utils/storage-compat';
 import { ensureDataSources, setActiveDataSource, updateDataSourceRows } from '../utils/dataSources';
 import { exportToExcel, smartParseDate } from '../utils/excel';
 import { analyzeSourceColumn, applyTransformation, getAllUniqueValues } from '../utils/transform';
@@ -59,6 +59,12 @@ const DataPrep: React.FC<DataPrepProps> = ({ project, onUpdateProject }) => {
 
   const activeData = activeSource.rows;
   const activeColumns = activeSource.columns;
+
+  const [cleanPreviewRows, setCleanPreviewRows] = useState<RawRow[]>([]);
+  const [cleanPreviewRowIndices, setCleanPreviewRowIndices] = useState<number[]>([]);
+  const [isCleanPreviewLoading, setIsCleanPreviewLoading] = useState(false);
+  const cleanPreviewReqRef = useRef(0);
+  const [cleanPreviewVersion, setCleanPreviewVersion] = useState(0);
   
   // Manual Map State
   const [manualMapKey, setManualMapKey] = useState('');
@@ -132,8 +138,15 @@ const DataPrep: React.FC<DataPrepProps> = ({ project, onUpdateProject }) => {
   };
 
   const handleActiveChange = async (value: string) => {
-    const hydrated = await hydrateProjectDataSourceRows(normalizedProject, value);
-    const updated = setActiveDataSource(hydrated, value);
+    if (!transformWorker.isSupported) {
+      const hydrated = await hydrateProjectDataSourceRows(normalizedProject, value);
+      const updated = setActiveDataSource(hydrated, value);
+      onUpdateProject(updated);
+      await saveProject(updated);
+      return;
+    }
+
+    const updated = setActiveDataSource(normalizedProject, value);
     onUpdateProject(updated);
     await saveProject(updated);
   };
@@ -241,61 +254,179 @@ const DataPrep: React.FC<DataPrepProps> = ({ project, onUpdateProject }) => {
 
   // --- CLEAN MODE FUNCTIONS ---
   const updateColumnType = async (key: string, type: ColumnConfig['type']) => {
-    const newCols = activeColumns.map(c => c.key === key ? { ...c, type } : c);
-    await persistActiveData(activeData, newCols);
     setEditingCol(null);
+
+    if (transformWorker.isSupported) {
+      await transformWorker.cleanUpdateColumnType({
+        projectId: normalizedProject.id,
+        sourceId: activeSource.id,
+        columnKey: key,
+        columnType: type,
+      });
+      const refreshed = await getProjectLight(normalizedProject.id);
+      if (refreshed) onUpdateProject(refreshed);
+      return;
+    }
+
+    const newCols = activeColumns.map((c) => (c.key === key ? { ...c, type } : c));
+    await persistActiveData(activeData, newCols);
   };
 
   const handleFindReplace = async () => {
     if (!findText) return;
-    const newData = activeData.map(row => {
-        const newRow = { ...row };
-        const colsToSearch = targetCol === 'all' ? activeColumns.map(c => c.key) : [targetCol];
-        colsToSearch.forEach(key => {
-            const val = newRow[key];
-            if (typeof val === 'string' && val.includes(findText)) {
-                newRow[key] = val.split(findText).join(replaceText);
-            }
-        });
-        return newRow;
+    if (transformWorker.isSupported) {
+      await transformWorker.cleanApplyFindReplace({
+        projectId: normalizedProject.id,
+        sourceId: activeSource.id,
+        targetCol,
+        findText,
+        replaceText,
+      });
+      const refreshed = await getProjectLight(normalizedProject.id);
+      if (refreshed) onUpdateProject(refreshed);
+      setCleanPreviewVersion((v) => v + 1);
+      return;
+    }
+
+    const newData = activeData.map((row) => {
+      const newRow = { ...row };
+      const colsToSearch = targetCol === 'all' ? activeColumns.map((c) => c.key) : [targetCol];
+      colsToSearch.forEach((k) => {
+        const val = newRow[k];
+        if (typeof val === 'string' && val.includes(findText)) {
+          newRow[k] = val.split(findText).join(replaceText);
+        }
+      });
+      return newRow;
     });
     await persistActiveData(newData, activeColumns);
   };
 
   const handleTransform = async () => {
     if (!transformCol) return;
+    if (transformWorker.isSupported) {
+      if (transformAction === 'date') {
+        await transformWorker.cleanApplyTransformDate({
+          projectId: normalizedProject.id,
+          sourceId: activeSource.id,
+          columnKey: transformCol,
+        });
+      } else if (transformAction === 'explode') {
+        await transformWorker.cleanApplyExplode({
+          projectId: normalizedProject.id,
+          sourceId: activeSource.id,
+          columnKey: transformCol,
+          delimiter,
+        });
+      }
+      const refreshed = await getProjectLight(normalizedProject.id);
+      if (refreshed) onUpdateProject(refreshed);
+      setTransformCol('');
+      setCleanPreviewVersion((v) => v + 1);
+      return;
+    }
+
     let newData = [...activeData];
     let newCols = [...activeColumns];
 
     if (transformAction === 'date') {
-        newData = newData.map(row => {
-            const val = row[transformCol];
-            if (typeof val === 'string') {
-                const parsed = smartParseDate(val);
-                return { ...row, [transformCol]: parsed || val };
-            }
-            return row;
-        });
-        newCols = newCols.map(c => c.key === transformCol ? { ...c, type: 'date' } : c);
+      newData = newData.map((row) => {
+        const val = row[transformCol];
+        if (typeof val === 'string') {
+          const parsed = smartParseDate(val);
+          return { ...row, [transformCol]: parsed || val };
+        }
+        return row;
+      });
+      newCols = newCols.map((c) => (c.key === transformCol ? { ...c, type: 'date' } : c));
     } else if (transformAction === 'explode') {
-        newData = newData.map(row => {
-            const val = row[transformCol];
-            if (typeof val === 'string') {
-                const parts = val.split(delimiter).map(s => s.trim()).filter(s => s);
-                return { ...row, [transformCol]: JSON.stringify(parts) };
-            }
-            return row;
-        });
-        newCols = newCols.map(c => c.key === transformCol ? { ...c, type: 'tag_array' } : c);
+      newData = newData.map((row) => {
+        const val = row[transformCol];
+        if (typeof val === 'string') {
+          const parts = val
+            .split(delimiter)
+            .map((s) => s.trim())
+            .filter((s) => s);
+          return { ...row, [transformCol]: JSON.stringify(parts) };
+        }
+        return row;
+      });
+      newCols = newCols.map((c) => (c.key === transformCol ? { ...c, type: 'tag_array' } : c));
     }
     await persistActiveData(newData, newCols);
     setTransformCol('');
   };
 
   const handleDeleteRow = async (index: number) => {
+    if (transformWorker.isSupported) {
+      await transformWorker.cleanDeleteRow({
+        projectId: normalizedProject.id,
+        sourceId: activeSource.id,
+        rowIndex: index,
+      });
+      const refreshed = await getProjectLight(normalizedProject.id);
+      if (refreshed) onUpdateProject(refreshed);
+      setCleanPreviewVersion((v) => v + 1);
+      return;
+    }
+
     const newData = activeData.filter((_, i) => i !== index);
     await persistActiveData(newData, activeColumns);
   };
+
+  useEffect(() => {
+    if (mode !== 'clean') return;
+
+    const reqId = (cleanPreviewReqRef.current += 1);
+    setIsCleanPreviewLoading(true);
+
+    const run = async () => {
+      try {
+        if (transformWorker.isSupported) {
+          const resp = await transformWorker.cleanPreview({
+            projectId: normalizedProject.id,
+            sourceId: activeSource.id,
+            searchQuery,
+            limit: 50,
+          });
+          if (reqId !== cleanPreviewReqRef.current) return;
+          setCleanPreviewRows(resp.rows);
+          setCleanPreviewRowIndices(resp.rowIndices);
+          return;
+        }
+
+        const lowerQuery = searchQuery.trim().toLowerCase();
+        const rows: RawRow[] = [];
+        const indices: number[] = [];
+        for (let i = 0; i < activeData.length && rows.length < 50; i++) {
+          const row = activeData[i];
+          const match =
+            !lowerQuery ||
+            Object.values(row).some((v) => String(v ?? '').toLowerCase().includes(lowerQuery));
+          if (!match) continue;
+          rows.push(row);
+          indices.push(i);
+        }
+        if (reqId !== cleanPreviewReqRef.current) return;
+        setCleanPreviewRows(rows);
+        setCleanPreviewRowIndices(indices);
+      } finally {
+        if (reqId !== cleanPreviewReqRef.current) return;
+        setIsCleanPreviewLoading(false);
+      }
+    };
+
+    void run();
+  }, [
+    mode,
+    searchQuery,
+    cleanPreviewVersion,
+    normalizedProject.id,
+    activeSource.id,
+    transformWorker.isSupported,
+    transformWorker.cleanPreview,
+    activeData,
+  ]);
 
   // --- BUILD MODE FUNCTIONS ---
   const handleSourceColSelect = (colKey: string) => {
@@ -480,14 +611,7 @@ const DataPrep: React.FC<DataPrepProps> = ({ project, onUpdateProject }) => {
     transformWorker.uniqueValues,
   ]);
 
-  // Clean Mode Filter Logic
-  const filteredRawData = useMemo(() => {
-    if (!searchQuery.trim()) return activeData;
-    const lowerQuery = searchQuery.toLowerCase();
-    return activeData.filter(row => Object.values(row).some(val => String(val).toLowerCase().includes(lowerQuery)));
-  }, [activeData, searchQuery]);
-
-  const displayRawData = useMemo(() => filteredRawData.slice(0, 50), [filteredRawData]);
+  const displayRawData = cleanPreviewRows;
 
   return (
     <div className="flex flex-col h-full bg-gray-50">
@@ -664,7 +788,12 @@ const DataPrep: React.FC<DataPrepProps> = ({ project, onUpdateProject }) => {
                                     </td>
                                 ))}
                                 <td className="px-4 py-3 text-center">
-                                    <button onClick={() => handleDeleteRow(idx)} className="text-gray-300 hover:text-red-500"><Trash2 className="w-4 h-4" /></button>
+                                    <button
+                                      onClick={() => handleDeleteRow(cleanPreviewRowIndices[idx] ?? idx)}
+                                      className="text-gray-300 hover:text-red-500"
+                                    >
+                                      <Trash2 className="w-4 h-4" />
+                                    </button>
                                 </td>
                             </tr>
                         ))}

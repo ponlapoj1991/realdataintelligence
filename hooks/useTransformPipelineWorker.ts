@@ -47,6 +47,22 @@ type UniqueValuesResponse = {
   values: string[]
 }
 
+type CleanPreviewResponse = {
+  type: 'cleanPreview'
+  requestId: string
+  rows: RawRow[]
+  rowIndices: number[]
+  totalRows: number
+}
+
+type CleanDoneResponse = {
+  type: 'cleanDone'
+  requestId: string
+  rowCount: number
+  chunkCount: number
+  updatedAt: number
+}
+
 type ErrorResponse = {
   type: 'error'
   requestId: string
@@ -58,6 +74,8 @@ type WorkerResponse =
   | BuildDoneResponse
   | ColumnAnalysisResponse
   | UniqueValuesResponse
+  | CleanPreviewResponse
+  | CleanDoneResponse
   | ErrorResponse
 
 export interface TransformPipelineWorkerClient {
@@ -99,6 +117,33 @@ export interface TransformPipelineWorkerClient {
     limit: number
     params?: any
   }) => Promise<string[]>
+  cleanPreview: (params: {
+    projectId: string
+    sourceId: string
+    searchQuery: string
+    limit: number
+  }) => Promise<{ rows: RawRow[]; rowIndices: number[]; totalRows: number }>
+  cleanApplyFindReplace: (params: {
+    projectId: string
+    sourceId: string
+    targetCol: string
+    findText: string
+    replaceText: string
+  }) => Promise<CleanDoneResponse>
+  cleanApplyTransformDate: (params: { projectId: string; sourceId: string; columnKey: string }) => Promise<CleanDoneResponse>
+  cleanApplyExplode: (params: {
+    projectId: string
+    sourceId: string
+    columnKey: string
+    delimiter: string
+  }) => Promise<CleanDoneResponse>
+  cleanDeleteRow: (params: { projectId: string; sourceId: string; rowIndex: number }) => Promise<CleanDoneResponse>
+  cleanUpdateColumnType: (params: {
+    projectId: string
+    sourceId: string
+    columnKey: string
+    columnType: ColumnConfig['type']
+  }) => Promise<CleanDoneResponse>
 }
 
 export function useTransformPipelineWorker(): TransformPipelineWorkerClient {
@@ -242,5 +287,102 @@ export function useTransformPipelineWorker(): TransformPipelineWorkerClient {
     [call]
   )
 
-  return { isSupported, previewSingle, previewMulti, buildSingle, buildMulti, analyzeColumn, uniqueValues }
+  const cleanPreview: TransformPipelineWorkerClient['cleanPreview'] = useCallback(
+    async ({ projectId, sourceId, searchQuery, limit }) => {
+      const resp = (await call({
+        type: 'cleanPreview',
+        projectId,
+        sourceId,
+        searchQuery,
+        limit,
+      })) as CleanPreviewResponse
+      return { rows: resp.rows, rowIndices: resp.rowIndices, totalRows: resp.totalRows }
+    },
+    [call]
+  )
+
+  const cleanApplyFindReplace: TransformPipelineWorkerClient['cleanApplyFindReplace'] = useCallback(
+    async ({ projectId, sourceId, targetCol, findText, replaceText }) => {
+      const resp = (await call({
+        type: 'cleanApplyFindReplace',
+        projectId,
+        sourceId,
+        targetCol,
+        findText,
+        replaceText,
+      })) as CleanDoneResponse
+      return resp
+    },
+    [call]
+  )
+
+  const cleanApplyTransformDate: TransformPipelineWorkerClient['cleanApplyTransformDate'] = useCallback(
+    async ({ projectId, sourceId, columnKey }) => {
+      const resp = (await call({
+        type: 'cleanApplyTransformDate',
+        projectId,
+        sourceId,
+        columnKey,
+      })) as CleanDoneResponse
+      return resp
+    },
+    [call]
+  )
+
+  const cleanApplyExplode: TransformPipelineWorkerClient['cleanApplyExplode'] = useCallback(
+    async ({ projectId, sourceId, columnKey, delimiter }) => {
+      const resp = (await call({
+        type: 'cleanApplyExplode',
+        projectId,
+        sourceId,
+        columnKey,
+        delimiter,
+      })) as CleanDoneResponse
+      return resp
+    },
+    [call]
+  )
+
+  const cleanDeleteRow: TransformPipelineWorkerClient['cleanDeleteRow'] = useCallback(
+    async ({ projectId, sourceId, rowIndex }) => {
+      const resp = (await call({
+        type: 'cleanDeleteRow',
+        projectId,
+        sourceId,
+        rowIndex,
+      })) as CleanDoneResponse
+      return resp
+    },
+    [call]
+  )
+
+  const cleanUpdateColumnType: TransformPipelineWorkerClient['cleanUpdateColumnType'] = useCallback(
+    async ({ projectId, sourceId, columnKey, columnType }) => {
+      const resp = (await call({
+        type: 'cleanUpdateColumnType',
+        projectId,
+        sourceId,
+        columnKey,
+        columnType,
+      })) as CleanDoneResponse
+      return resp
+    },
+    [call]
+  )
+
+  return {
+    isSupported,
+    previewSingle,
+    previewMulti,
+    buildSingle,
+    buildMulti,
+    analyzeColumn,
+    uniqueValues,
+    cleanPreview,
+    cleanApplyFindReplace,
+    cleanApplyTransformDate,
+    cleanApplyExplode,
+    cleanDeleteRow,
+    cleanUpdateColumnType,
+  }
 }

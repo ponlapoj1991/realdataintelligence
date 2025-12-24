@@ -13,6 +13,7 @@ import {
   getDataSourceChunk,
   saveDataSourceChunk,
   getDataChunk,
+  deleteAllDataSourceChunksForSource,
 } from '../utils/storage-v2'
 import { analyzeSourceColumn, applyTransformation, getAllUniqueValues } from '../utils/transform'
 
@@ -71,6 +72,59 @@ type UniqueValuesMessage = {
   params?: any
 }
 
+type CleanPreviewMessage = {
+  type: 'cleanPreview'
+  requestId: string
+  projectId: string
+  sourceId: string
+  searchQuery: string
+  limit: number
+}
+
+type CleanApplyFindReplaceMessage = {
+  type: 'cleanApplyFindReplace'
+  requestId: string
+  projectId: string
+  sourceId: string
+  targetCol: string
+  findText: string
+  replaceText: string
+}
+
+type CleanApplyTransformDateMessage = {
+  type: 'cleanApplyTransformDate'
+  requestId: string
+  projectId: string
+  sourceId: string
+  columnKey: string
+}
+
+type CleanApplyExplodeMessage = {
+  type: 'cleanApplyExplode'
+  requestId: string
+  projectId: string
+  sourceId: string
+  columnKey: string
+  delimiter: string
+}
+
+type CleanDeleteRowMessage = {
+  type: 'cleanDeleteRow'
+  requestId: string
+  projectId: string
+  sourceId: string
+  rowIndex: number
+}
+
+type CleanUpdateColumnTypeMessage = {
+  type: 'cleanUpdateColumnType'
+  requestId: string
+  projectId: string
+  sourceId: string
+  columnKey: string
+  columnType: ColumnConfig['type']
+}
+
 type WorkerMessage =
   | PreviewSingleMessage
   | PreviewMultiMessage
@@ -78,6 +132,12 @@ type WorkerMessage =
   | BuildMultiMessage
   | AnalyzeColumnMessage
   | UniqueValuesMessage
+  | CleanPreviewMessage
+  | CleanApplyFindReplaceMessage
+  | CleanApplyTransformDateMessage
+  | CleanApplyExplodeMessage
+  | CleanDeleteRowMessage
+  | CleanUpdateColumnTypeMessage
 
 type PreviewResponse = {
   type: 'preview'
@@ -112,6 +172,22 @@ type UniqueValuesResponse = {
   type: 'uniqueValues'
   requestId: string
   values: string[]
+}
+
+type CleanPreviewResponse = {
+  type: 'cleanPreview'
+  requestId: string
+  rows: RawRow[]
+  rowIndices: number[]
+  totalRows: number
+}
+
+type CleanDoneResponse = {
+  type: 'cleanDone'
+  requestId: string
+  rowCount: number
+  chunkCount: number
+  updatedAt: number
 }
 
 type ErrorResponse = {
@@ -402,6 +478,287 @@ const buildMulti = async (msg: BuildMultiMessage): Promise<BuildResponse> => {
   }
 }
 
+const smartParseDateLite = (val: any): string | null => {
+  if (val === null || val === undefined || val === '') return null
+
+  if (typeof val === 'number') {
+    if (val > 30000 && val < 60000) {
+      const totalMilliseconds = Math.round((val - 25569) * 86400 * 1000)
+      const date = new Date(totalMilliseconds)
+      return date.toISOString()
+    }
+  }
+
+  const strVal = String(val).trim()
+  if (!strVal) return null
+
+  const shortYearRegex = /^(\d{1,2})[\/\-\.](\d{1,2})[\/\-\.](\d{2})$/
+  const shortYearMatch = strVal.match(shortYearRegex)
+  if (shortYearMatch) {
+    const d = parseInt(shortYearMatch[1], 10)
+    const m = parseInt(shortYearMatch[2], 10) - 1
+    let y = parseInt(shortYearMatch[3], 10)
+    y += 2000
+    const date = new Date(y, m, d)
+    if (!isNaN(date.getTime())) return date.toISOString()
+  }
+
+  let date = new Date(strVal)
+  if (isNaN(date.getTime())) {
+    const parts = strVal.split(/[\/\-\.\s:]/)
+    if (parts.length >= 3) {
+      const d = parseInt(parts[0], 10)
+      const m = parseInt(parts[1], 10) - 1
+      let y = parseInt(parts[2], 10)
+      if (y > 2400) y -= 543
+      if (y < 100) y += 2000
+      let hours = 0
+      let mins = 0
+      if (parts.length >= 5) {
+        hours = parseInt(parts[3], 10) || 0
+        mins = parseInt(parts[4], 10) || 0
+      }
+      date = new Date(y, m, d, hours, mins, 0)
+    }
+  }
+
+  if (!isNaN(date.getTime())) return date.toISOString()
+  return null
+}
+
+const cleanPreview = async (msg: CleanPreviewMessage): Promise<CleanPreviewResponse> => {
+  const metadata = await getProjectMetadata(msg.projectId)
+  if (!metadata) throw new Error('Project not found')
+
+  const { rowCount, chunkCount } = getSourceStats(metadata, msg.sourceId)
+  const limit = Math.max(0, msg.limit || 0)
+  const search = String(msg.searchQuery || '').trim().toLowerCase()
+
+  const rows: RawRow[] = []
+  const rowIndices: number[] = []
+
+  for (let i = 0; i < chunkCount && rows.length < limit; i++) {
+    const chunk = await safeGetSourceChunk(msg.projectId, msg.sourceId, i)
+    if (!chunk.length) continue
+
+    for (let j = 0; j < chunk.length; j++) {
+      const row = chunk[j]
+      const match =
+        !search ||
+        Object.values(row).some((v) => String(v ?? '').toLowerCase().includes(search))
+      if (match) {
+        rows.push(row)
+        rowIndices.push(i * CHUNK_SIZE + j)
+        if (rows.length >= limit) break
+      }
+    }
+  }
+
+  return {
+    type: 'cleanPreview',
+    requestId: msg.requestId,
+    rows,
+    rowIndices,
+    totalRows: rowCount,
+  }
+}
+
+const updateSourceColumns = (metadata: any, sourceId: string, updater: (cols: ColumnConfig[]) => ColumnConfig[]) => {
+  const sources = Array.isArray(metadata?.dataSources) ? metadata.dataSources : []
+  const nextSources = sources.map((s: any) => {
+    if (s?.id !== sourceId) return s
+    return { ...s, columns: updater(Array.isArray(s.columns) ? s.columns : []), updatedAt: Date.now() }
+  })
+  return { ...metadata, dataSources: nextSources, lastModified: Date.now() }
+}
+
+const cleanUpdateColumnType = async (msg: CleanUpdateColumnTypeMessage): Promise<CleanDoneResponse> => {
+  const metadata = await getProjectMetadata(msg.projectId)
+  if (!metadata) throw new Error('Project not found')
+  const now = Date.now()
+
+  const nextMeta = updateSourceColumns(metadata, msg.sourceId, (cols) =>
+    cols.map((c) => (c.key === msg.columnKey ? { ...c, type: msg.columnType } : c))
+  )
+  await saveProjectMetadata({ ...nextMeta, lastModified: now })
+
+  const { rowCount, chunkCount } = getSourceStats(nextMeta, msg.sourceId)
+  return { type: 'cleanDone', requestId: msg.requestId, rowCount, chunkCount, updatedAt: now }
+}
+
+const cleanApplyFindReplace = async (msg: CleanApplyFindReplaceMessage): Promise<CleanDoneResponse> => {
+  const metadata = await getProjectMetadata(msg.projectId)
+  if (!metadata) throw new Error('Project not found')
+
+  const { rowCount, chunkCount } = getSourceStats(metadata, msg.sourceId)
+  const now = Date.now()
+
+  const findText = String(msg.findText || '')
+  const replaceText = String(msg.replaceText || '')
+  const targetCol = String(msg.targetCol || 'all')
+
+  for (let i = 0; i < chunkCount; i++) {
+    const chunk = await safeGetSourceChunk(msg.projectId, msg.sourceId, i)
+    if (!chunk.length) continue
+
+    let changed = false
+    const nextChunk = chunk.map((row) => {
+      const nextRow: RawRow = { ...row }
+      const keys = targetCol === 'all' ? Object.keys(nextRow) : [targetCol]
+      for (const key of keys) {
+        const v = nextRow[key]
+        if (typeof v === 'string' && v.includes(findText)) {
+          nextRow[key] = v.split(findText).join(replaceText)
+          changed = true
+        }
+      }
+      return nextRow
+    })
+
+    if (changed) {
+      await saveDataSourceChunk(msg.projectId, msg.sourceId, i, nextChunk)
+    }
+  }
+
+  const nextMeta = updateSourceColumns(metadata, msg.sourceId, (cols) => cols)
+  await saveProjectMetadata({ ...nextMeta, lastModified: now })
+
+  return { type: 'cleanDone', requestId: msg.requestId, rowCount, chunkCount, updatedAt: now }
+}
+
+const cleanApplyTransformDate = async (msg: CleanApplyTransformDateMessage): Promise<CleanDoneResponse> => {
+  const metadata = await getProjectMetadata(msg.projectId)
+  if (!metadata) throw new Error('Project not found')
+
+  const { rowCount, chunkCount } = getSourceStats(metadata, msg.sourceId)
+  const now = Date.now()
+
+  for (let i = 0; i < chunkCount; i++) {
+    const chunk = await safeGetSourceChunk(msg.projectId, msg.sourceId, i)
+    if (!chunk.length) continue
+
+    let changed = false
+    const nextChunk = chunk.map((row) => {
+      const v = row[msg.columnKey]
+      if (typeof v === 'string') {
+        const parsed = smartParseDateLite(v)
+        if (parsed && parsed !== v) {
+          changed = true
+          return { ...row, [msg.columnKey]: parsed }
+        }
+      }
+      return row
+    })
+
+    if (changed) {
+      await saveDataSourceChunk(msg.projectId, msg.sourceId, i, nextChunk)
+    }
+  }
+
+  const nextMeta = updateSourceColumns(metadata, msg.sourceId, (cols) =>
+    cols.map((c) => (c.key === msg.columnKey ? { ...c, type: 'date' } : c))
+  )
+  await saveProjectMetadata({ ...nextMeta, lastModified: now })
+
+  return { type: 'cleanDone', requestId: msg.requestId, rowCount, chunkCount, updatedAt: now }
+}
+
+const cleanApplyExplode = async (msg: CleanApplyExplodeMessage): Promise<CleanDoneResponse> => {
+  const metadata = await getProjectMetadata(msg.projectId)
+  if (!metadata) throw new Error('Project not found')
+
+  const { rowCount, chunkCount } = getSourceStats(metadata, msg.sourceId)
+  const now = Date.now()
+  const delimiter = String(msg.delimiter || ',')
+
+  for (let i = 0; i < chunkCount; i++) {
+    const chunk = await safeGetSourceChunk(msg.projectId, msg.sourceId, i)
+    if (!chunk.length) continue
+
+    let changed = false
+    const nextChunk = chunk.map((row) => {
+      const v = row[msg.columnKey]
+      if (typeof v === 'string') {
+        const parts = v
+          .split(delimiter)
+          .map((s) => s.trim())
+          .filter(Boolean)
+        const next = JSON.stringify(parts)
+        if (next !== v) {
+          changed = true
+          return { ...row, [msg.columnKey]: next }
+        }
+      }
+      return row
+    })
+
+    if (changed) {
+      await saveDataSourceChunk(msg.projectId, msg.sourceId, i, nextChunk)
+    }
+  }
+
+  const nextMeta = updateSourceColumns(metadata, msg.sourceId, (cols) =>
+    cols.map((c) => (c.key === msg.columnKey ? { ...c, type: 'tag_array' } : c))
+  )
+  await saveProjectMetadata({ ...nextMeta, lastModified: now })
+
+  return { type: 'cleanDone', requestId: msg.requestId, rowCount, chunkCount, updatedAt: now }
+}
+
+const cleanDeleteRow = async (msg: CleanDeleteRowMessage): Promise<CleanDoneResponse> => {
+  const metadata = await getProjectMetadata(msg.projectId)
+  if (!metadata) throw new Error('Project not found')
+  const { rowCount, chunkCount, src } = getSourceStats(metadata, msg.sourceId)
+  const indexToDelete = Math.max(0, msg.rowIndex)
+
+  if (indexToDelete >= rowCount) {
+    return { type: 'cleanDone', requestId: msg.requestId, rowCount, chunkCount, updatedAt: Date.now() }
+  }
+
+  await deleteAllDataSourceChunksForSource(msg.projectId, msg.sourceId)
+
+  let outIndex = 0
+  let buffer: RawRow[] = []
+
+  const flush = async () => {
+    if (!buffer.length) return
+    await saveDataSourceChunk(msg.projectId, msg.sourceId, outIndex, buffer)
+    outIndex += 1
+    buffer = []
+  }
+
+  for (let i = 0; i < chunkCount; i++) {
+    const chunk = await safeGetSourceChunk(msg.projectId, msg.sourceId, i)
+    if (!chunk.length) continue
+
+    for (let j = 0; j < chunk.length; j++) {
+      const gi = i * CHUNK_SIZE + j
+      if (gi === indexToDelete) continue
+      buffer.push(chunk[j])
+      if (buffer.length >= CHUNK_SIZE) await flush()
+    }
+  }
+  await flush()
+
+  const nextRowCount = Math.max(0, rowCount - 1)
+  const nextChunkCount = Math.ceil(nextRowCount / CHUNK_SIZE)
+  const now = Date.now()
+  const sources = Array.isArray(metadata?.dataSources) ? metadata.dataSources : []
+  const nextSources = sources.map((s: any) => {
+    if (s?.id !== msg.sourceId) return s
+    return { ...s, rowCount: nextRowCount, chunkCount: nextChunkCount, updatedAt: now, rows: [] }
+  })
+  const shouldUpdateLegacy = metadata?.activeDataSourceId === msg.sourceId && src
+  await saveProjectMetadata({
+    ...metadata,
+    dataSources: nextSources,
+    ...(shouldUpdateLegacy ? { rowCount: nextRowCount, chunkCount: nextChunkCount } : {}),
+    lastModified: now,
+  })
+
+  return { type: 'cleanDone', requestId: msg.requestId, rowCount: nextRowCount, chunkCount: nextChunkCount, updatedAt: now }
+}
+
 self.onmessage = (event: MessageEvent<WorkerMessage>) => {
   const msg = event.data
   const requestId = (msg as any)?.requestId
@@ -438,6 +795,36 @@ self.onmessage = (event: MessageEvent<WorkerMessage>) => {
         self.postMessage(resp satisfies UniqueValuesResponse)
         return
       }
+      if (msg.type === 'cleanPreview') {
+        const resp = await cleanPreview(msg)
+        self.postMessage(resp satisfies CleanPreviewResponse)
+        return
+      }
+      if (msg.type === 'cleanApplyFindReplace') {
+        const resp = await cleanApplyFindReplace(msg)
+        self.postMessage(resp satisfies CleanDoneResponse)
+        return
+      }
+      if (msg.type === 'cleanApplyTransformDate') {
+        const resp = await cleanApplyTransformDate(msg)
+        self.postMessage(resp satisfies CleanDoneResponse)
+        return
+      }
+      if (msg.type === 'cleanApplyExplode') {
+        const resp = await cleanApplyExplode(msg)
+        self.postMessage(resp satisfies CleanDoneResponse)
+        return
+      }
+      if (msg.type === 'cleanDeleteRow') {
+        const resp = await cleanDeleteRow(msg)
+        self.postMessage(resp satisfies CleanDoneResponse)
+        return
+      }
+      if (msg.type === 'cleanUpdateColumnType') {
+        const resp = await cleanUpdateColumnType(msg)
+        self.postMessage(resp satisfies CleanDoneResponse)
+        return
+      }
     } catch (e: any) {
       self.postMessage({
         type: 'error',
@@ -456,5 +843,7 @@ export type {
   BuildResponse,
   ColumnAnalysisResponse,
   UniqueValuesResponse,
+  CleanPreviewResponse,
+  CleanDoneResponse,
   ErrorResponse,
 }
