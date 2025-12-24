@@ -1,5 +1,6 @@
 
-import React, { useState, useMemo, useEffect } from 'react';
+import React, { useLayoutEffect, useMemo, useState, useEffect } from 'react';
+import { createPortal } from 'react-dom';
 import { Loader2, Search, X } from 'lucide-react';
 
 interface TableColumnFilterProps {
@@ -9,6 +10,7 @@ interface TableColumnFilterProps {
   activeFilters: string[] | null; // Current selected values (null means all)
   onApply: (selected: string[] | null) => void;
   onClose: () => void;
+  anchorRect?: Pick<DOMRect, 'left' | 'top' | 'right' | 'bottom'> | null;
 }
 
 const TableColumnFilter: React.FC<TableColumnFilterProps> = ({
@@ -17,11 +19,13 @@ const TableColumnFilter: React.FC<TableColumnFilterProps> = ({
   options,
   activeFilters,
   onApply,
-  onClose
+  onClose,
+  anchorRect
 }) => {
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedValues, setSelectedValues] = useState<Set<string>>(new Set());
   const [isDirty, setIsDirty] = useState(false);
+  const [portalPos, setPortalPos] = useState<{ left: number; top: number } | null>(null);
 
   // Extract unique values from data
   const uniqueValues = useMemo(() => {
@@ -55,6 +59,18 @@ const TableColumnFilter: React.FC<TableColumnFilterProps> = ({
     if (isDirty) return;
     setSelectedValues(new Set(uniqueValues));
   }, [activeFilters, isDirty, uniqueValues]);
+
+  useLayoutEffect(() => {
+    if (!anchorRect) {
+      setPortalPos(null);
+      return;
+    }
+    const POPOVER_WIDTH = 256; // w-64
+    const margin = 8;
+    const left = Math.max(margin, Math.min(anchorRect.left, window.innerWidth - POPOVER_WIDTH - margin));
+    const top = Math.max(margin, anchorRect.bottom + 6);
+    setPortalPos({ left, top });
+  }, [anchorRect]);
 
   const filteredOptions = uniqueValues.filter(v => 
     v.toLowerCase().includes(searchTerm.toLowerCase())
@@ -96,10 +112,10 @@ const TableColumnFilter: React.FC<TableColumnFilterProps> = ({
     onClose();
   };
 
-  return (
-    <div 
-      className="absolute top-full left-0 mt-1 w-64 bg-white border border-gray-300 shadow-xl rounded-lg z-50 flex flex-col text-gray-800 font-normal animate-in fade-in zoom-in duration-100"
-      onClick={(e) => e.stopPropagation()} // Prevent click from bubbling to header sort/select
+  const content = (
+    <div
+      className="w-64 bg-white border border-gray-300 shadow-xl rounded-lg flex flex-col text-gray-800 font-normal animate-in fade-in zoom-in duration-100"
+      onClick={(e) => e.stopPropagation()}
     >
       {/* Header */}
       <div className="p-3 border-b border-gray-100 flex items-center justify-between bg-gray-50 rounded-t-lg">
@@ -165,6 +181,24 @@ const TableColumnFilter: React.FC<TableColumnFilterProps> = ({
           Apply
         </button>
       </div>
+    </div>
+  )
+
+  if (anchorRect && portalPos) {
+    return createPortal(
+      <div style={{ position: 'fixed', left: portalPos.left, top: portalPos.top, zIndex: 1000 }}>
+        {content}
+      </div>,
+      document.body
+    );
+  }
+
+  return (
+    <div
+      className="absolute top-full left-0 mt-1 z-50"
+      onClick={(e) => e.stopPropagation()}
+    >
+      {content}
     </div>
   );
 };

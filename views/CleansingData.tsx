@@ -118,6 +118,7 @@ const CleansingData: React.FC<CleansingDataProps> = ({ project, onUpdateProject 
   const [targetCol, setTargetCol] = useState<string>('all');
   const [isSaving, setIsSaving] = useState(false);
   const [openFilterCol, setOpenFilterCol] = useState<string | null>(null);
+  const [filterAnchorRect, setFilterAnchorRect] = useState<Pick<DOMRect, 'left' | 'top' | 'right' | 'bottom'> | null>(null);
   const [filters, setFilters] = useState<Record<string, string[] | null>>({});
   const [filterOptions, setFilterOptions] = useState<Record<string, string[]>>({});
 
@@ -312,7 +313,15 @@ const CleansingData: React.FC<CleansingDataProps> = ({ project, onUpdateProject 
   useEffect(() => {
     setScrollLeft(0);
     if (scrollBarRef.current) scrollBarRef.current.scrollLeft = 0;
+    setOpenFilterCol(null);
+    setFilterAnchorRect(null);
   }, [selectedSource?.id]);
+
+  useEffect(() => {
+    if (!openFilterCol) return;
+    setOpenFilterCol(null);
+    setFilterAnchorRect(null);
+  }, [scrollLeft]);
 
   const handleItemsRendered = useCallback(
     (_visible: { startIndex: number; stopIndex: number }, all: { startIndex: number; stopIndex: number }) => {
@@ -648,26 +657,33 @@ const CleansingData: React.FC<CleansingDataProps> = ({ project, onUpdateProject 
                       style={{ width: COL_WIDTH }}
                     >
                       <span className="truncate">{col.key}</span>
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          setOpenFilterCol((prev) => (prev === col.key ? null : col.key));
-                        }}
-                        className={`p-1 rounded hover:bg-gray-100 ${
-                          Array.isArray(filters[col.key]) && (filters[col.key] || []).length > 0
-                            ? 'text-blue-600'
-                            : 'text-gray-400 hover:text-gray-600'
-                        }`}
-                        aria-label={`Filter ${col.key}`}
-                      >
-                        <Filter className="w-3.5 h-3.5" />
-                      </button>
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            const rect = (e.currentTarget as HTMLButtonElement).getBoundingClientRect();
+                            setFilterAnchorRect({ left: rect.left, top: rect.top, right: rect.right, bottom: rect.bottom });
+                            setOpenFilterCol((prev) => {
+                              const next = prev === col.key ? null : col.key;
+                              if (!next) setFilterAnchorRect(null);
+                              return next;
+                            });
+                          }}
+                          className={`p-1 rounded hover:bg-gray-100 ${
+                            Array.isArray(filters[col.key]) && (filters[col.key] || []).length > 0
+                              ? 'text-blue-600'
+                              : 'text-gray-400 hover:text-gray-600'
+                          }`}
+                          aria-label={`Filter ${col.key}`}
+                        >
+                          <Filter className="w-3.5 h-3.5" />
+                        </button>
                       {openFilterCol === col.key && (
                         <TableColumnFilter
                           column={col.key}
                           data={workingRows}
                           options={filterOptions[col.key]}
                           activeFilters={Array.isArray(filters[col.key]) ? (filters[col.key] as string[]) : null}
+                          anchorRect={filterAnchorRect}
                           onApply={(selected) => {
                             setFilters((prev) => {
                               const next = { ...prev } as typeof prev;
@@ -680,7 +696,10 @@ const CleansingData: React.FC<CleansingDataProps> = ({ project, onUpdateProject 
                             });
                             setQueryVersion((v) => v + 1);
                           }}
-                          onClose={() => setOpenFilterCol(null)}
+                          onClose={() => {
+                            setOpenFilterCol(null);
+                            setFilterAnchorRect(null);
+                          }}
                         />
                       )}
                     </div>
