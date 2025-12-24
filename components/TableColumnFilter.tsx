@@ -1,5 +1,5 @@
 
-import React, { useLayoutEffect, useMemo, useState, useEffect } from 'react';
+import React, { useLayoutEffect, useMemo, useState, useEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import { Loader2, Search, X } from 'lucide-react';
 
@@ -26,10 +26,12 @@ const TableColumnFilter: React.FC<TableColumnFilterProps> = ({
   const [selectedValues, setSelectedValues] = useState<Set<string>>(new Set());
   const [isDirty, setIsDirty] = useState(false);
   const [portalPos, setPortalPos] = useState<{ left: number; top: number } | null>(null);
+  const selectAllRef = useRef<HTMLInputElement | null>(null);
+  const [optionSort, setOptionSort] = useState<'asc' | 'desc'>('asc');
 
   // Extract unique values from data
-  const uniqueValues = useMemo(() => {
-    if (Array.isArray(options) && options.length > 0) {
+  const baseValues = useMemo(() => {
+    if (Array.isArray(options)) {
       return options;
     }
     const values = new Set<string>();
@@ -39,10 +41,19 @@ const TableColumnFilter: React.FC<TableColumnFilterProps> = ({
       const strVal = val === null || val === undefined || val === '' ? '(Blank)' : String(val);
       values.add(strVal);
     });
-    return Array.from(values).sort();
+    return Array.from(values);
   }, [data, column, options]);
 
   const isLoadingOptions = options === undefined && data.length === 0;
+
+  const uniqueValues = useMemo(() => {
+    const values = Array.from(baseValues);
+    const hasBlank = values.includes('(Blank)');
+    const rest = values.filter((v) => v !== '(Blank)');
+    rest.sort((a, b) => a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' }));
+    if (optionSort === 'desc') rest.reverse();
+    return hasBlank ? ['(Blank)', ...rest] : rest;
+  }, [baseValues, optionSort]);
 
   // Initialize selection
   useEffect(() => {
@@ -76,6 +87,16 @@ const TableColumnFilter: React.FC<TableColumnFilterProps> = ({
     v.toLowerCase().includes(searchTerm.toLowerCase())
   );
 
+  const allCount = uniqueValues.length;
+  const selectedCount = selectedValues.size;
+  const isAllSelected = allCount > 0 && selectedCount === allCount;
+  const isIndeterminate = selectedCount > 0 && selectedCount < allCount;
+
+  useEffect(() => {
+    if (!selectAllRef.current) return;
+    selectAllRef.current.indeterminate = isIndeterminate;
+  }, [isIndeterminate]);
+
   const toggleValue = (val: string) => {
     const newSet = new Set(selectedValues);
     if (newSet.has(val)) {
@@ -87,17 +108,11 @@ const TableColumnFilter: React.FC<TableColumnFilterProps> = ({
     setIsDirty(true);
   };
 
-  const handleSelectAll = () => {
-    if (selectedValues.size === filteredOptions.length) {
-      // Deselect visible
-      const newSet = new Set(selectedValues);
-      filteredOptions.forEach(v => newSet.delete(v));
-      setSelectedValues(newSet);
+  const handleToggleSelectAll = () => {
+    if (isAllSelected) {
+      setSelectedValues(new Set());
     } else {
-      // Select visible
-      const newSet = new Set(selectedValues);
-      filteredOptions.forEach(v => newSet.add(v));
-      setSelectedValues(newSet);
+      setSelectedValues(new Set(uniqueValues));
     }
     setIsDirty(true);
   };
@@ -126,6 +141,33 @@ const TableColumnFilter: React.FC<TableColumnFilterProps> = ({
       </div>
 
       {/* Search */}
+      <div className="p-2 border-b border-gray-100 bg-white">
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={() => setOptionSort('asc')}
+            className={`flex-1 px-2 py-1.5 text-xs rounded border ${
+              optionSort === 'asc'
+                ? 'bg-blue-50 border-blue-200 text-blue-700'
+                : 'bg-white border-gray-200 text-gray-700 hover:bg-gray-50'
+            }`}
+          >
+            Sort A to Z
+          </button>
+          <button
+            type="button"
+            onClick={() => setOptionSort('desc')}
+            className={`flex-1 px-2 py-1.5 text-xs rounded border ${
+              optionSort === 'desc'
+                ? 'bg-blue-50 border-blue-200 text-blue-700'
+                : 'bg-white border-gray-200 text-gray-700 hover:bg-gray-50'
+            }`}
+          >
+            Sort Z to A
+          </button>
+        </div>
+      </div>
+
       <div className="p-2 border-b border-gray-100">
         <div className="relative">
           <Search className="w-3.5 h-3.5 absolute left-2 top-1/2 transform -translate-y-1/2 text-gray-400" />
@@ -142,13 +184,17 @@ const TableColumnFilter: React.FC<TableColumnFilterProps> = ({
 
       {/* Options List */}
       <div className="flex-1 overflow-y-auto max-h-60 p-1 custom-scrollbar">
-        <button 
-          onClick={handleSelectAll}
-          disabled={isLoadingOptions}
-          className="flex items-center w-full px-2 py-1.5 hover:bg-blue-50 rounded text-xs text-blue-600 font-medium mb-1"
-        >
-           {selectedValues.size === filteredOptions.length ? 'Deselect Visible' : 'Select Visible'}
-        </button>
+        <label className="flex items-center w-full px-2 py-1.5 hover:bg-gray-50 rounded text-xs text-gray-700 font-medium mb-1 cursor-pointer select-none">
+          <input
+            ref={selectAllRef}
+            type="checkbox"
+            className="w-3.5 h-3.5 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+            checked={isAllSelected}
+            disabled={isLoadingOptions || allCount === 0}
+            onChange={handleToggleSelectAll}
+          />
+          <span className="ml-2 truncate">Select All</span>
+        </label>
         
         {isLoadingOptions ? (
           <div className="flex items-center justify-center gap-2 text-xs text-gray-400 text-center py-4">

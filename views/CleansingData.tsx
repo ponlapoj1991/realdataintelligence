@@ -165,7 +165,7 @@ const CleansingData: React.FC<CleansingDataProps> = ({ project, onUpdateProject 
     return () => clearTimeout(t);
   }, [searchQuery]);
 
-  const hasActiveFilters = Object.values(filters).some((v) => Array.isArray(v) && v.length > 0);
+  const hasActiveFilters = Object.values(filters).some((v) => Array.isArray(v));
 
   const [totalRows, setTotalRows] = useState(0);
   const [hasResultCount, setHasResultCount] = useState(false);
@@ -238,9 +238,22 @@ const CleansingData: React.FC<CleansingDataProps> = ({ project, onUpdateProject 
         }
 
         const q = String(debouncedSearch || '').trim().toLowerCase();
-        const activeFilters = Object.entries(filters).filter(([, v]) => Array.isArray(v) && v.length > 0) as Array<
-          [string, string[]]
-        >;
+        const activeFilters = Object.entries(filters).filter(([, v]) => Array.isArray(v)) as Array<[string, string[]]>;
+        const hasEmptyFilter = activeFilters.some(([, allowed]) => allowed.length === 0);
+        if (hasEmptyFilter) {
+          setTotalRows(0);
+          setHasResultCount(true);
+          if (page === 0) {
+            setIsQuerying(false);
+            setStalePageCache(null);
+            setStaleTotalRows(0);
+            setStaleHasResultCount(false);
+            setQueryError(null);
+            lastErrorReqRef.current = null;
+          }
+          setPageCache((prev) => ({ ...prev, [page]: { rows: [], rowIndices: [] } }));
+          return;
+        }
 
         const allRowIndices: number[] = [];
         for (let i = 0; i < workingRows.length; i++) {
@@ -302,50 +315,54 @@ const CleansingData: React.FC<CleansingDataProps> = ({ project, onUpdateProject 
     [selectedSource, transformWorker.isSupported, transformWorker.cleanQueryPage, normalizedProject.id, debouncedSearch, filters, workingRows, showToast]
   );
 
-  useEffect(() => {
-    queryReqRef.current += 1;
-    loadingPagesRef.current.clear();
-    setQueryError(null);
+	  useEffect(() => {
+	    queryReqRef.current += 1;
+	    loadingPagesRef.current.clear();
+	    pageCacheRef.current = {};
+	    setQueryError(null);
 
     const nextSourceId = selectedSource?.id ?? null;
     const prevSourceId = prevSourceIdRef.current;
     prevSourceIdRef.current = nextSourceId;
 
-    if (!selectedSource) {
-      setIsQuerying(false);
-      setStalePageCache(null);
-      setStaleTotalRows(0);
-      setStaleHasResultCount(false);
-      setPageCache({});
-      setTotalRows(0);
-      setHasResultCount(false);
-      return;
-    }
+	    if (!selectedSource) {
+	      setIsQuerying(false);
+	      setStalePageCache(null);
+	      setStaleTotalRows(0);
+	      setStaleHasResultCount(false);
+	      setPageCache({});
+	      pageCacheRef.current = {};
+	      setTotalRows(0);
+	      setHasResultCount(false);
+	      return;
+	    }
 
     const sourceChanged = prevSourceId !== nextSourceId;
-    if (sourceChanged) {
-      // Do not show stale rows from a different table (columns differ).
-      setIsQuerying(false);
-      setStalePageCache(null);
-      setStaleTotalRows(0);
-      setStaleHasResultCount(false);
-      setPageCache({});
-      setTotalRows(0);
-      setHasResultCount(false);
-      void loadPage(0);
-      return;
-    }
+	    if (sourceChanged) {
+	      // Do not show stale rows from a different table (columns differ).
+	      setIsQuerying(false);
+	      setStalePageCache(null);
+	      setStaleTotalRows(0);
+	      setStaleHasResultCount(false);
+	      setPageCache({});
+	      pageCacheRef.current = {};
+	      setTotalRows(0);
+	      setHasResultCount(false);
+	      void loadPage(0);
+	      return;
+	    }
 
-    setStalePageCache(pageCacheRef.current);
-    setStaleTotalRows(totalRowsRef.current);
-    setStaleHasResultCount(hasResultCountRef.current);
-    setIsQuerying(true);
-    setPageCache({});
-    setTotalRows(0);
-    // Keep the table visible; swap to the new result set when page 0 arrives.
-    setHasResultCount(hasResultCountRef.current);
-    void loadPage(0);
-  }, [queryKey, selectedSource?.id, loadPage]);
+	    setStalePageCache(pageCacheRef.current);
+	    setStaleTotalRows(totalRowsRef.current);
+	    setStaleHasResultCount(hasResultCountRef.current);
+	    setIsQuerying(true);
+	    setPageCache({});
+	    pageCacheRef.current = {};
+	    setTotalRows(0);
+	    // Keep the table visible; swap to the new result set when page 0 arrives.
+	    setHasResultCount(hasResultCountRef.current);
+	    void loadPage(0);
+	  }, [queryKey, selectedSource?.id, loadPage]);
 
   const tableWidth = useMemo(() => ROWNUM_WIDTH + workingColumns.length * COL_WIDTH + ACTION_WIDTH, [workingColumns.length]);
   const [listHeight, setListHeight] = useState(520);
@@ -798,34 +815,32 @@ const CleansingData: React.FC<CleansingDataProps> = ({ project, onUpdateProject 
                               return next;
                             });
                           }}
-                          className={`p-1 rounded hover:bg-gray-100 ${
-                            Array.isArray(filters[col.key]) && (filters[col.key] || []).length > 0
-                              ? 'text-blue-600'
-                              : 'text-gray-400 hover:text-gray-600'
-                          }`}
-                          aria-label={`Filter ${col.key}`}
-                        >
-                          <Filter className="w-3.5 h-3.5" />
-                        </button>
-                      {openFilterCol === col.key && (
-                        <TableColumnFilter
-                          column={col.key}
-                          data={workingRows}
-                          options={filterOptions[col.key]}
-                          activeFilters={Array.isArray(filters[col.key]) ? (filters[col.key] as string[]) : null}
-                          anchorRect={filterAnchorRect}
-                          onApply={(selected) => {
-                            setFilters((prev) => {
-                              const next = { ...prev } as typeof prev;
-                              if (!selected || selected.length === 0) {
-                                delete (next as any)[col.key];
-                                return next;
-                              }
-                              (next as any)[col.key] = selected;
-                              return next;
-                            });
-                            setQueryVersion((v) => v + 1);
-                          }}
+	                          className={`p-1 rounded hover:bg-gray-100 ${
+	                            Array.isArray(filters[col.key]) ? 'text-blue-600' : 'text-gray-400 hover:text-gray-600'
+	                          }`}
+	                          aria-label={`Filter ${col.key}`}
+	                        >
+	                          <Filter className="w-3.5 h-3.5" />
+	                        </button>
+	                      {openFilterCol === col.key && (
+	                        <TableColumnFilter
+	                          column={col.key}
+	                          data={[]}
+	                          options={filterOptions[col.key]}
+	                          activeFilters={Array.isArray(filters[col.key]) ? (filters[col.key] as string[]) : null}
+	                          anchorRect={filterAnchorRect}
+	                          onApply={(selected) => {
+	                            setFilters((prev) => {
+	                              const next = { ...prev } as typeof prev;
+	                              if (selected === null) {
+	                                delete (next as any)[col.key];
+	                                return next;
+	                              }
+	                              (next as any)[col.key] = selected;
+	                              return next;
+	                            });
+	                            setQueryVersion((v) => v + 1);
+	                          }}
                           onClose={() => {
                             setOpenFilterCol(null);
                             setFilterAnchorRect(null);
