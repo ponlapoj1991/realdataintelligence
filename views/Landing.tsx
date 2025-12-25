@@ -32,6 +32,7 @@ import {
   type ImportProgress
 } from '../utils/projectBackup';
 import { useToast } from '../components/ToastProvider';
+import { pickSaveFileHandle } from '../utils/fileSystemAccess';
 
 interface LandingProps {
   onSelectProject: (project: Project) => void;
@@ -142,11 +143,28 @@ const Landing: React.FC<LandingProps> = ({ onSelectProject, onOpenSettings }) =>
     setExportProgress({ phase: 'preparing', percent: 0, message: 'Preparing export...' });
 
     try {
-      const filename = await exportProject(project.id, (progress) => {
-        setExportProgress(progress);
+      const suggestedName = `${project.name}.zip`;
+      const savePick = await pickSaveFileHandle({
+        suggestedName,
+        description: 'Project Backup',
+        mime: 'application/zip',
+        extensions: ['.zip'],
       });
 
-      showToast('Export complete', filename, 'success');
+      if (savePick.kind === 'cancelled') {
+        setExportingProjectId(null);
+        setExportProgress(null);
+        return;
+      }
+
+      const result = await exportProject(project.id, (progress) => {
+        setExportProgress(progress);
+      }, {
+        saveHandle: savePick.kind === 'picked' ? savePick.handle : undefined,
+        fallbackFileName: suggestedName,
+      });
+
+      showToast('Export complete', result.filename, 'success');
 
       // Show success briefly before closing
       setTimeout(() => {
