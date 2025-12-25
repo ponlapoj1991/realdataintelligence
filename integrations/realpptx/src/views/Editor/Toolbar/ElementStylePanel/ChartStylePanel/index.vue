@@ -17,6 +17,9 @@
     <!-- Data -->
     <div v-if="activeTab === 'data'">
       <Button class="full-width-btn" @click="chartDataEditorVisible = true">
+        <IconEdit /> Edit Value
+      </Button>
+      <Button v-if="isCanvasWidget" class="full-width-btn mt-2" type="primary" @click="requestEditCanvasChart">
         <IconEdit /> Edit Chart
       </Button>
     </div>
@@ -400,7 +403,7 @@
 </template>
 
 <script lang="ts" setup>
-import { onUnmounted, ref, watch, type Ref } from 'vue'
+import { computed, onUnmounted, ref, watch, type Ref } from 'vue'
 import { storeToRefs } from 'pinia'
 import { useMainStore, useSlidesStore } from '@/store'
 import type { ChartData, ChartOptions, ChartType, PPTChartElement } from '@/types/slides'
@@ -440,6 +443,28 @@ const { handleElement, handleElementId } = storeToRefs(mainStore)
 const { theme } = storeToRefs(slidesStore)
 
 const handleChartElement = handleElement as Ref<PPTChartElement>
+
+const isCanvasWidget = computed(() => {
+  const el: any = handleChartElement.value as any
+  return !!el?.canvasWidgetId && !!el?.canvasTableId && !!el?.canvasWidgetConfig
+})
+
+const requestEditCanvasChart = () => {
+  const el: any = handleChartElement.value as any
+  if (!el?.id || !el?.canvasTableId || !el?.canvasWidgetConfig) return
+  window.parent?.postMessage(
+    {
+      source: 'realpptx',
+      type: 'open-canvas-widget-edit',
+      payload: {
+        elementId: el.id,
+        tableId: el.canvasTableId,
+        widget: el.canvasWidgetConfig,
+      },
+    },
+    '*',
+  )
+}
 
 const chartDataEditorVisible = ref(false)
 const themesVisible = ref(false)

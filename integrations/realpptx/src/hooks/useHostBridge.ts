@@ -191,6 +191,148 @@ export default () => {
       }
     }
 
+    if (event.data?.type === 'upsert-canvas-widget') {
+      const payload = event.data?.payload as
+        | {
+            elementId?: string
+            chart: DashboardChartMessage
+            canvas: { tableId: string; widget: any }
+          }
+        | undefined
+
+      const chart = payload?.chart
+      const tableId = payload?.canvas?.tableId
+      const widget = payload?.canvas?.widget
+      if (!chart?.chartType || !chart.data || !tableId || !widget) return
+
+      const canvasWidgetId = widget?.id || chart.meta?.widgetId || ''
+      const elementId = payload?.elementId
+
+      if (chart.chartType === 'kpi') {
+        const escapeHtml = (input: string) =>
+          input
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/\"/g, '&quot;')
+            .replace(/'/g, '&#39;')
+
+        const toNumber = (raw: unknown) => {
+          if (raw === null || raw === undefined) return 0
+          if (typeof raw === 'number') return Number.isFinite(raw) ? raw : 0
+          if (typeof raw === 'object' && (raw as any).value !== undefined) {
+            const n = Number((raw as any).value)
+            return Number.isFinite(n) ? n : 0
+          }
+          const n = Number(raw)
+          return Number.isFinite(n) ? n : 0
+        }
+
+        const formatKpiValue = (
+          value: number,
+          mode?: 'auto' | 'text' | 'number' | 'compact' | 'accounting',
+        ) => {
+          if (!Number.isFinite(value)) return '0'
+          switch (mode) {
+            case 'text':
+              return String(value)
+            case 'number':
+              return new Intl.NumberFormat(undefined, { maximumFractionDigits: 0 }).format(value)
+            case 'compact':
+              return new Intl.NumberFormat(undefined, { notation: 'compact', compactDisplay: 'short', maximumFractionDigits: 1 }).format(value)
+            case 'accounting':
+              return new Intl.NumberFormat(undefined, { useGrouping: true, minimumFractionDigits: 0, maximumFractionDigits: 2 }).format(value)
+            case 'auto':
+            default: {
+              const abs = Math.abs(value)
+              if (abs >= 1_000_000) {
+                return new Intl.NumberFormat(undefined, { notation: 'compact', compactDisplay: 'short', maximumFractionDigits: 1 }).format(value)
+              }
+              if (Number.isInteger(value)) {
+                return new Intl.NumberFormat(undefined, { maximumFractionDigits: 0 }).format(value)
+              }
+              return new Intl.NumberFormat(undefined, { useGrouping: true, minimumFractionDigits: 0, maximumFractionDigits: 2 }).format(value)
+            }
+          }
+        }
+
+        const raw = chart.data?.series?.[0]?.[0]
+        const value = toNumber(raw)
+        const valueFormat = chart.options?.dataLabelValueFormat
+        const text = formatKpiValue(value, valueFormat)
+        const fontSize = typeof chart.options?.dataLabelFontSize === 'number' ? chart.options.dataLabelFontSize : 72
+        const fontWeight = chart.options?.dataLabelFontWeight || 'bold'
+        const fontFamily = chart.options?.dataLabelFontFamily
+
+        const themeAccent = chart.theme?.colors?.[0] || chart.theme?.textColor || '#111827'
+        const color = chart.options?.dataLabelColor || themeAccent
+
+        const safeText = escapeHtml(text)
+        const content = `<p style="text-align:center;"><span style="font-weight:${fontWeight};${fontFamily ? ` font-family:${fontFamily};` : ''}">${safeText}</span></p>`
+
+        const nextProps: any = {
+          content,
+          autoResize: false,
+          padding: 0,
+          lineHeight: 1,
+          paragraphSpace: 0,
+          valign: 'middle',
+          defaultColor: color,
+          defaultFontSize: `${fontSize}px`,
+          dashboardKpiMaxFontSize: `${fontSize}px`,
+          ...(fontFamily ? { defaultFontName: fontFamily } : {}),
+          name: widget?.title || chart.meta?.widgetTitle,
+          canvasWidgetId,
+          canvasTableId: tableId,
+          canvasWidgetKind: 'kpi' as const,
+          canvasWidgetConfig: widget,
+        }
+
+        if (elementId) {
+          slidesStore.updateElement({ id: elementId, props: nextProps })
+          return
+        }
+
+        const slideW = slidesStore.viewportSize
+        const slideH = slidesStore.viewportSize * slidesStore.viewportRatio
+        const boxW = Math.min(700, Math.max(260, slideW * 0.7))
+        const boxH = Math.min(260, Math.max(140, slideH * 0.28))
+
+        const id = createTextElement(
+          {
+            left: (slideW - boxW) / 2,
+            top: (slideH - boxH) / 2,
+            width: boxW,
+            height: boxH,
+          },
+          { content, autoFocus: false },
+        )
+
+        slidesStore.updateElement({ id, props: nextProps })
+        return
+      }
+
+      const nextProps: any = {
+        data: chart.data,
+        optionRaw: undefined,
+      }
+      if (chart.options) nextProps.options = chart.options
+      if (chart.theme?.colors) nextProps.themeColors = chart.theme.colors
+      if (chart.theme?.textColor) nextProps.textColor = chart.theme.textColor
+      if (chart.theme?.lineColor) nextProps.lineColor = chart.theme.lineColor
+      nextProps.name = widget?.title || chart.meta?.widgetTitle
+      nextProps.canvasWidgetId = canvasWidgetId
+      nextProps.canvasTableId = tableId
+      nextProps.canvasWidgetConfig = widget
+
+      if (elementId) {
+        slidesStore.updateElement({ id: elementId, props: nextProps })
+        return
+      }
+
+      createChartElement(chart.chartType, nextProps)
+    }
+
     if (event.data?.type === 'request-presentation-export') {
       emitPresentationExportToHost({ slidesStore, hostSource: HOST_SOURCE })
     }

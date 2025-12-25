@@ -140,6 +140,12 @@ interface PPTBaseElement {
   widgetId?: string
   dashboardId?: string
   dashboardWidgetKind?: 'kpi'
+
+  // Canvas Stars: Canvas-local widgets (created inside RealPPTX)
+  canvasWidgetId?: string
+  canvasTableId?: string
+  canvasWidgetKind?: 'kpi'
+  canvasWidgetConfig?: any
 }
 
 
