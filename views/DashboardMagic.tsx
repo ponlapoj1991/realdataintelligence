@@ -275,7 +275,13 @@ const DashboardMagic: React.FC<DashboardMagicProps> = ({ project, onUpdateProjec
 	    const sampleRows = baseData.slice(0, SAMPLE_SIZE);
 	    const map: Record<string, FilterDataType> = {};
 	    availableColumns.forEach(col => {
-	      map[col] = sourceColumnTypeMap[col] || inferColumnType(col, sampleRows);
+	      const declared = sourceColumnTypeMap[col];
+	      if (declared === 'date' || declared === 'number') {
+	        map[col] = declared;
+	      } else {
+	        // Many ingestion/prep tables store dates as TEXT; infer from actual values for better Magic Filters UX.
+	        map[col] = inferColumnType(col, sampleRows);
+	      }
 	    });
 	    return map;
 	  }, [availableColumns, baseData, sourceColumnTypeMap]);
