@@ -160,9 +160,10 @@ const DashboardMagic: React.FC<DashboardMagicProps> = ({ project, onUpdateProjec
 	  const [interactionMode, setInteractionMode] = useState<'drill' | 'filter'>('drill');
 	  const [isExporting, setIsExporting] = useState(false);
 	  const [isSaving, setIsSaving] = useState(false);
-	  const [newFilterCol, setNewFilterCol] = useState('');
-	  const [drillDown, setDrillDown] = useState<DrillDownState | null>(null);
-	  const [filterValueOptions, setFilterValueOptions] = useState<Record<string, string[]>>({});
+  const [newFilterCol, setNewFilterCol] = useState('');
+  const [drillDown, setDrillDown] = useState<DrillDownState | null>(null);
+  const [filterValueOptions, setFilterValueOptions] = useState<Record<string, string[]>>({});
+  const [filterColumnTypeHints, setFilterColumnTypeHints] = useState<Record<string, FilterDataType>>({});
 	  const filterValueLoadingRef = useRef<Set<string>>(new Set());
 
   // Grid State
@@ -326,8 +327,14 @@ const DashboardMagic: React.FC<DashboardMagicProps> = ({ project, onUpdateProjec
 	  }, [availableColumns, baseData, sourceColumnTypeMap]);
 
   const getColumnType = useCallback(
-    (column: string): FilterDataType => columnTypeMap[column] || 'text',
-    [columnTypeMap]
+    (column: string): FilterDataType => {
+      const dashId = editingDashboard?.id || 'unknown';
+      const sourceId = workerSource.dataSourceId || 'unknown';
+      const dataVersion = workerSource.dataVersion || 0;
+      const key = `${dashId}:${sourceId}:${dataVersion}:${column}`;
+      return filterColumnTypeHints[key] || columnTypeMap[column] || 'text';
+    },
+    [columnTypeMap, editingDashboard?.id, filterColumnTypeHints, workerSource.dataSourceId, workerSource.dataVersion]
   );
 
   const filtersRef = useRef<DashboardFilter[]>([]);
@@ -433,12 +440,12 @@ const DashboardMagic: React.FC<DashboardMagicProps> = ({ project, onUpdateProjec
     return String(value ?? '').toLowerCase() === filter.value.toLowerCase();
   }, []);
 
-	  const filteredData = useMemo(() => {
-	    if (filters.length === 0) return baseData;
-	    return baseData.filter(row => filters.every(f => matchesFilterCondition(row, f)));
-	  }, [baseData, filters, matchesFilterCondition]);
+  const filteredData = useMemo(() => {
+    if (filters.length === 0) return baseData;
+    return baseData.filter(row => filters.every(f => matchesFilterCondition(row, f)));
+  }, [baseData, filters, matchesFilterCondition]);
 	
-	  const magicAggWorker = useMagicAggregationWorker(workerSource, REALPPTX_CHART_THEME);
+  const magicAggWorker = useMagicAggregationWorker(workerSource, REALPPTX_CHART_THEME);
 	
 	  const makeFilterValueKey = useCallback(
 	    (col: string) => {
@@ -449,11 +456,37 @@ const DashboardMagic: React.FC<DashboardMagicProps> = ({ project, onUpdateProjec
 	    },
 	    [editingDashboard?.id, workerSource.dataSourceId, workerSource.dataVersion]
 	  );
+
+    const looksLikeDate = useCallback((raw: string) => {
+      const s = String(raw || '').trim();
+      if (!s) return false;
+      if (s.length < 6) return false;
+      if (!/[-/]/.test(s) && !/^\d{8}$/.test(s)) return false;
+      return !!toDateValue(s);
+    }, []);
+
+    const maybeApplyTypeHintFromOptions = useCallback(
+      (key: string, values: string[]) => {
+        if (!values || values.length === 0) return;
+        if (filterColumnTypeHints[key] === 'date') return;
+
+        const samples = values.slice(0, 80);
+        const dateLikes = samples.filter(looksLikeDate).length;
+        const ratio = dateLikes / samples.length;
+        if (dateLikes >= 12 && ratio >= 0.7) {
+          setFilterColumnTypeHints((prev) => (prev[key] === 'date' ? prev : { ...prev, [key]: 'date' }));
+        }
+      },
+      [filterColumnTypeHints, looksLikeDate]
+    );
 	
 	  const prefetchFilterValues = useCallback(
 	    async (col: string) => {
 	      const key = makeFilterValueKey(col);
-	      if (filterValueOptions[key]) return;
+	      if (filterValueOptions[key]) {
+          maybeApplyTypeHintFromOptions(key, filterValueOptions[key]);
+          return;
+        }
 	      if (filterValueLoadingRef.current.has(key)) return;
 	      filterValueLoadingRef.current.add(key);
 	
@@ -465,19 +498,21 @@ const DashboardMagic: React.FC<DashboardMagicProps> = ({ project, onUpdateProjec
 	            limitValues: 500,
 	          });
 	          setFilterValueOptions((prev) => ({ ...prev, [key]: values }));
+            maybeApplyTypeHintFromOptions(key, values);
 	          return;
 	        }
 	
 	        const unique = new Set(baseData.map((row) => String((row as any)?.[col] || '')));
 	        const out = Array.from(unique).filter(Boolean).sort().slice(0, 100);
 	        setFilterValueOptions((prev) => ({ ...prev, [key]: out }));
+          maybeApplyTypeHintFromOptions(key, out);
 	      } catch (e) {
 	        console.error('[DashboardMagic] filter values failed:', e);
 	      } finally {
 	        filterValueLoadingRef.current.delete(key);
 	      }
 	    },
-	    [baseData, filterValueOptions, magicAggWorker, makeFilterValueKey]
+	    [baseData, filterValueOptions, magicAggWorker, makeFilterValueKey, maybeApplyTypeHintFromOptions]
 	  );
 
   const drilldownReqRef = useRef(0);
