@@ -58,10 +58,18 @@ const toDateValue = (value: any): Date | null => {
   return toDate(value);
 };
 
+const formatLocalDateInput = (date: Date): string => {
+  const yyyy = date.getFullYear();
+  const mm = String(date.getMonth() + 1).padStart(2, '0');
+  const dd = String(date.getDate()).padStart(2, '0');
+  return `${yyyy}-${mm}-${dd}`;
+};
+
 const normalizeDateInputValue = (value: string): string => {
   const date = toDateValue(value);
   if (!date) return '';
-  return date.toISOString().slice(0, 10);
+  // Use local date parts to avoid timezone shifting (prevents values "drifting" in a loop).
+  return formatLocalDateInput(date);
 };
 
 const normalizeRangeStart = (value?: string) => {
