@@ -43,7 +43,7 @@ import { REALPPTX_CHART_THEME } from '../constants/chartTheme';
 import { exportToExcel } from '../utils/excel';
 import { generatePowerPoint } from '../utils/report';
 import { useMagicAggregationWorker } from '../hooks/useMagicAggregationWorker';
-import { applyWidgetFilters, getTopNOverflowDimensionValues } from '../utils/widgetData';
+import { applyWidgetFilters, getTopNOverflowDimensionValues, toDate } from '../utils/widgetData';
 import { applyTransformation } from '../utils/transform';
 
 // --- Helper Functions (Ported from Analytics.tsx) ---
@@ -55,13 +55,7 @@ const normalizeDateOperator = (operator?: DateFilterOperator): DateFilterOperato
 };
 
 const toDateValue = (value: any): Date | null => {
-  if (value === null || value === undefined || value === '') return null;
-  if (value instanceof Date) {
-    return isNaN(value.getTime()) ? null : value;
-  }
-  const parsed = Date.parse(value);
-  if (Number.isNaN(parsed)) return null;
-  return new Date(parsed);
+  return toDate(value);
 };
 
 const normalizeDateInputValue = (value: string): string => {
@@ -97,18 +91,24 @@ const inferColumnType = (column: string, rows: RawRow[]): FilterDataType => {
 
   if (samples.length === 0) return 'text';
 
+  const looksLikeDateString = (raw: string) => {
+    const s = raw.trim();
+    if (!s) return false;
+    if (s.length < 6) return false;
+    // Require at least some date-like structure to avoid misclassifying plain numbers/ids.
+    if (!/[-/]/.test(s) && !/^\d{8}$/.test(s)) return false;
+    return !!toDateValue(s);
+  };
+
   const dateLikes = samples.filter((val) => {
     if (val instanceof Date) return !isNaN(val.getTime());
-    if (typeof val === 'string') {
-      const trimmed = val.trim();
-      if (trimmed.length < 6) return false;
-      const containsDateSep = /[-/]/.test(trimmed);
-      const parsed = Date.parse(trimmed);
-      return containsDateSep && !Number.isNaN(parsed);
-    }
+    if (typeof val === 'string') return looksLikeDateString(val);
     return false;
-  });
-  if (dateLikes.length / samples.length >= 0.6) return 'date';
+  }).length;
+
+  const dateRatio = dateLikes / samples.length;
+  if (dateRatio >= 0.6) return 'date';
+  if (dateLikes >= 10 && dateRatio >= 0.4) return 'date';
 
   const numberLikes = samples.filter((val) => {
     if (typeof val === 'number') return true;
@@ -290,17 +290,28 @@ const DashboardMagic: React.FC<DashboardMagicProps> = ({ project, onUpdateProjec
 
 	  const columnTypeMap = useMemo(() => {
 	    const targetSampleCount = 800;
-	    const sampleRows =
-	      baseData.length <= targetSampleCount
-	        ? baseData
-	        : (() => {
-	            const out: RawRow[] = [];
-	            const step = Math.max(1, Math.floor(baseData.length / targetSampleCount));
-	            for (let i = 0; i < baseData.length && out.length < targetSampleCount; i += step) {
-	              out.push(baseData[i]);
-	            }
-	            return out;
-	          })();
+      const sampleRows =
+        baseData.length <= targetSampleCount
+          ? baseData
+          : (() => {
+              const out: RawRow[] = [];
+              const n = baseData.length;
+              const headCount = 200;
+              const tailCount = 200;
+              const strideCount = 400;
+
+              out.push(...baseData.slice(0, Math.min(headCount, n)));
+              if (n > headCount) {
+                out.push(...baseData.slice(Math.max(0, n - tailCount)));
+              }
+
+              const step = Math.max(1, Math.floor(n / Math.max(1, strideCount)));
+              for (let i = 0; i < n && out.length < targetSampleCount; i += step) {
+                out.push(baseData[i]);
+              }
+
+              return out.slice(0, targetSampleCount);
+            })();
 	    const map: Record<string, FilterDataType> = {};
 	    availableColumns.forEach(col => {
 	      const declared = sourceColumnTypeMap[col];
