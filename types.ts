@@ -183,12 +183,15 @@ export type SortOrder =
 
 export type FilterDataType = 'text' | 'number' | 'date';
 
+export type DateFilterOperator = 'between' | 'on' | 'before' | 'after';
+
 export interface DashboardFilter {
   id: string;
   column: string;
   value: string;
   endValue?: string;
   dataType?: FilterDataType;
+  operator?: DateFilterOperator;
 }
 
 // Data Labels Configuration

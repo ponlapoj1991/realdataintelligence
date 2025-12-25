@@ -166,6 +166,7 @@ export default () => {
               valign: 'middle',
               defaultColor: color,
               defaultFontSize: `${fontSize}px`,
+              dashboardKpiMaxFontSize: `${fontSize}px`,
               ...(fontFamily ? { defaultFontName: fontFamily } : {}),
               name: payload.meta?.widgetTitle,
               widgetId: payload.meta?.widgetId,

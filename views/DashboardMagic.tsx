@@ -24,7 +24,7 @@ import EmptyState from '../components/EmptyState';
 import ChartBuilder from '../components/ChartBuilder';
 import MagicWidgetRenderer from '../components/MagicWidgetRenderer';
 import DataSourcePickerModal from '../components/DataSourcePickerModal';
-import { Project, ProjectDashboard, DashboardWidget, DashboardFilter, DrillDownState, RawRow, FilterDataType } from '../types';
+import { Project, ProjectDashboard, DashboardWidget, DashboardFilter, DrillDownState, RawRow, FilterDataType, DateFilterOperator } from '../types';
 import {
   ensureMagicDashboards,
   addMagicDashboard,
@@ -48,6 +48,11 @@ import { applyTransformation } from '../utils/transform';
 
 // --- Helper Functions (Ported from Analytics.tsx) ---
 const SAMPLE_SIZE = 50;
+
+const normalizeDateOperator = (operator?: DateFilterOperator): DateFilterOperator => {
+  if (operator === 'on' || operator === 'before' || operator === 'after' || operator === 'between') return operator;
+  return 'between';
+};
 
 const toDateValue = (value: any): Date | null => {
   if (value === null || value === undefined || value === '') return null;
@@ -286,12 +291,30 @@ const DashboardMagic: React.FC<DashboardMagicProps> = ({ project, onUpdateProjec
     if (filter.dataType === 'date') {
       const rowDate = toDateValue(value);
       if (!rowDate) return false;
+      const operator = normalizeDateOperator(filter.operator);
+      if (operator === 'between') {
+        const start = normalizeRangeStart(filter.value);
+        const end = normalizeRangeEnd(filter.endValue);
+        if (start && rowDate < start) return false;
+        if (end && rowDate > end) return false;
+        if (!start && !end) return true;
+        return true;
+      }
+
       const start = normalizeRangeStart(filter.value);
-      const end = normalizeRangeEnd(filter.endValue);
-      if (start && rowDate < start) return false;
-      if (end && rowDate > end) return false;
-      if (!start && !end) return true;
-      return true;
+      const end = normalizeRangeEnd(filter.value);
+      if (!start || !end) return true;
+
+      if (operator === 'on') {
+        return rowDate >= start && rowDate <= end;
+      }
+
+      if (operator === 'before') {
+        return rowDate < start;
+      }
+
+      // after
+      return rowDate > end;
     }
     if (!filter.value) return true;
     return String(value ?? '').toLowerCase() === filter.value.toLowerCase();
@@ -408,8 +431,10 @@ const DashboardMagic: React.FC<DashboardMagicProps> = ({ project, onUpdateProjec
     let dataType = getColumnType(column);
     let initialValue = value;
     let endValue: string | undefined;
+    let operator: DateFilterOperator | undefined;
 
     if (dataType === 'date') {
+      operator = 'between';
       if (value) {
         const normalized = normalizeDateInputValue(value);
         if (normalized) {
@@ -423,13 +448,14 @@ const DashboardMagic: React.FC<DashboardMagicProps> = ({ project, onUpdateProjec
       }
     }
 
-	    const newFilter: DashboardFilter = {
-	      id: crypto.randomUUID(),
-	      column,
-	      value: initialValue,
-	      endValue,
-	      dataType
-	    };
+    const newFilter: DashboardFilter = {
+      id: crypto.randomUUID(),
+      column,
+      value: initialValue,
+      endValue,
+      dataType,
+      operator,
+    };
 	    if (dataType !== 'date') {
 	      void prefetchFilterValues(column);
 	    }
@@ -449,11 +475,22 @@ const DashboardMagic: React.FC<DashboardMagicProps> = ({ project, onUpdateProjec
     });
   };
 
-  const updateFilterValue = (id: string, val: string, field: 'value' | 'endValue' = 'value') => {
+  const updateFilter = (id: string, patch: Partial<DashboardFilter>) => {
     setFilters((prev) => {
-      const next = prev.map(f => f.id === id ? { ...f, [field]: val } : f);
+      const next = prev.map(f => f.id === id ? { ...f, ...patch } : f);
       void persistGlobalFilters(next);
       return next;
+    });
+  };
+
+  const updateFilterValue = (id: string, val: string, field: 'value' | 'endValue' = 'value') => {
+    updateFilter(id, { [field]: val } as Partial<DashboardFilter>);
+  };
+
+  const updateDateFilterOperator = (id: string, operator: DateFilterOperator) => {
+    updateFilter(id, {
+      operator,
+      ...(operator === 'between' ? {} : { endValue: '' }),
     });
   };
 
@@ -1379,6 +1416,16 @@ const DashboardMagic: React.FC<DashboardMagicProps> = ({ project, onUpdateProjec
                   filter.dataType === 'date' ? (
                     <div key={filter.id} className="flex flex-wrap items-center bg-indigo-50 border border-indigo-100 rounded-lg px-3 py-2 animate-in fade-in zoom-in duration-200 gap-2">
                       <span className="text-[11px] font-bold text-indigo-800 uppercase">{filter.column}</span>
+                      <select
+                        className="bg-transparent text-[11px] font-semibold text-indigo-700 border border-indigo-200 rounded px-1.5 py-1 focus:ring-2 focus:ring-indigo-400 outline-none"
+                        value={normalizeDateOperator(filter.operator)}
+                        onChange={(e) => updateDateFilterOperator(filter.id, e.target.value as DateFilterOperator)}
+                      >
+                        <option value="between">Is between</option>
+                        <option value="on">Is on</option>
+                        <option value="before">Before</option>
+                        <option value="after">After</option>
+                      </select>
                       <div className="flex items-center gap-1">
                         <input
                           type="date"
@@ -1386,13 +1433,17 @@ const DashboardMagic: React.FC<DashboardMagicProps> = ({ project, onUpdateProjec
                           onChange={(e) => updateFilterValue(filter.id, e.target.value)}
                           className="text-xs border border-indigo-200 rounded px-2 py-1 bg-white focus:ring-2 focus:ring-indigo-400 outline-none"
                         />
-                        <span className="text-[10px] text-indigo-500">to</span>
-                        <input
-                          type="date"
-                          value={filter.endValue || ''}
-                          onChange={(e) => updateFilterValue(filter.id, e.target.value, 'endValue')}
-                          className="text-xs border border-indigo-200 rounded px-2 py-1 bg-white focus:ring-2 focus:ring-indigo-400 outline-none"
-                        />
+                        {normalizeDateOperator(filter.operator) === 'between' && (
+                          <>
+                            <span className="text-[10px] text-indigo-500">to</span>
+                            <input
+                              type="date"
+                              value={filter.endValue || ''}
+                              onChange={(e) => updateFilterValue(filter.id, e.target.value, 'endValue')}
+                              className="text-xs border border-indigo-200 rounded px-2 py-1 bg-white focus:ring-2 focus:ring-indigo-400 outline-none"
+                            />
+                          </>
+                        )}
                       </div>
                       <button onClick={() => removeFilter(filter.id)} className="text-indigo-400 hover:text-indigo-600">
                         <X className="w-3 h-3" />

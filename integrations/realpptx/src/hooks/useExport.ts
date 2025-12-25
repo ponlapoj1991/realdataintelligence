@@ -627,7 +627,12 @@ export default () => {
             margin: (el.padding ?? 10) / ratioPx2Pt.value,
             paraSpaceBefore: 5 / ratioPx2Pt.value,
             lineSpacingMultiple: 1.5 / 1.25,
-            autoFit: true,
+            autoFit: el.dashboardWidgetKind === 'kpi' ? false : true,
+          }
+
+          if (el.defaultFontSize) {
+            const px = toFiniteNumber(parseFloat(String(el.defaultFontSize).replace('px', '')))
+            if (px !== null && px > 0) options.fontSize = px / ratioPx2Pt.value
           }
           if (el.rotate) options.rotate = el.rotate
           if (el.wordSpace) {

@@ -208,6 +208,8 @@ const parsePx = (value?: string) => {
   return Number.isFinite(n) ? n : null
 }
 
+const roundPx = (value: number) => Math.round(value * 10) / 10
+
 const computeKpiAutoFontPx = () => {
   const padding = props.elementInfo.padding ?? 0
   const width = Math.max(1, (props.elementInfo.width || 0) - padding * 2)
@@ -220,39 +222,83 @@ const computeKpiAutoFontPx = () => {
   return Math.max(4, Math.min(size, 320))
 }
 
-const applyKpiAutoFit = () => {
+const applyKpiAutoFit = (mode: 'resize' | 'content') => {
   if (!isDashboardKpi.value) return
-  if (isScaling.value) return
 
-  const nextPx = Math.round(computeKpiAutoFontPx() * 10) / 10
+  if (mode === 'resize') {
+    if (handleElementId.value !== props.elementInfo.id) return
+  }
+
+  const fitPx = roundPx(computeKpiAutoFontPx())
   const currentPx = parsePx(props.elementInfo.defaultFontSize)
+  const maxPx = parsePx(props.elementInfo.dashboardKpiMaxFontSize) ?? currentPx
 
-  if (currentPx !== null && Math.abs(currentPx - nextPx) < 0.4) return
+  let nextPx: number | null = null
+  if (mode === 'resize') {
+    nextPx = fitPx
+  }
+  else {
+    const clampUpper = Math.min(maxPx ?? fitPx, fitPx)
+    if (currentPx !== null) {
+      nextPx = Math.min(currentPx, clampUpper)
+    }
+    else {
+      nextPx = clampUpper
+    }
+  }
+
+  if (nextPx === null) return
+  if (currentPx !== null && Math.abs(currentPx - nextPx) < 0.4) {
+    // Ensure legacy KPI has max font size persisted for lock behavior
+    if (!props.elementInfo.dashboardKpiMaxFontSize && currentPx !== null) {
+      slidesStore.updateElement({
+        id: props.elementInfo.id,
+        props: { dashboardKpiMaxFontSize: `${roundPx(currentPx)}px` },
+      })
+    }
+    return
+  }
 
   slidesStore.updateElement({
     id: props.elementInfo.id,
-    props: { defaultFontSize: `${nextPx}px` },
+    props: {
+      defaultFontSize: `${nextPx}px`,
+      ...(mode === 'resize' ? { dashboardKpiMaxFontSize: `${nextPx}px` } : {}),
+      ...(!props.elementInfo.dashboardKpiMaxFontSize && maxPx !== null ? { dashboardKpiMaxFontSize: `${roundPx(maxPx)}px` } : {}),
+    },
   })
 }
 
-const applyKpiAutoFitDebounced = debounce(applyKpiAutoFit, 80, { trailing: true })
+const applyKpiAutoFitFromResizeDebounced = debounce(() => applyKpiAutoFit('resize'), 60, { trailing: true })
+const applyKpiAutoFitFromContentDebounced = debounce(() => applyKpiAutoFit('content'), 80, { trailing: true })
 
 watch(isScaling, () => {
   if (handleElementId.value !== props.elementInfo.id) return
   if (!isScaling.value) {
-    applyKpiAutoFit()
+    applyKpiAutoFit('resize')
   }
 })
 
 watch(
   () => props.elementInfo.content,
   () => {
-    applyKpiAutoFitDebounced()
+    applyKpiAutoFitFromContentDebounced()
+  }
+)
+
+watch(
+  () => [props.elementInfo.width, props.elementInfo.height, isScaling.value, handleElementId.value],
+  () => {
+    if (!isDashboardKpi.value) return
+    if (!isScaling.value) return
+    if (handleElementId.value !== props.elementInfo.id) return
+    applyKpiAutoFitFromResizeDebounced()
   }
 )
 
 onUnmounted(() => {
-  applyKpiAutoFitDebounced.cancel()
+  applyKpiAutoFitFromResizeDebounced.cancel()
+  applyKpiAutoFitFromContentDebounced.cancel()
 })
 </script>
 

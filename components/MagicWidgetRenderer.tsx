@@ -56,7 +56,7 @@ const mergeDashboardFilters = (...lists: Array<DashboardFilter[] | undefined>) =
     if (!list || list.length === 0) continue;
     for (const f of list) {
       if (!f || !f.column) continue;
-      const key = `${f.column}|${f.dataType || ''}|${f.value || ''}|${f.endValue || ''}`;
+      const key = `${f.column}|${f.dataType || ''}|${f.operator || ''}|${f.value || ''}|${f.endValue || ''}`;
       if (seen.has(key)) continue;
       seen.add(key);
       merged.push(f);
