@@ -222,6 +222,23 @@ const DashboardMagic: React.FC<DashboardMagicProps> = ({ project, onUpdateProjec
     setFilters(editingDashboard?.globalFilters || []);
   }, [editingDashboard?.id]);
 
+  const persistProject = useCallback(
+    async (updated: Project) => {
+      onUpdateProject?.(updated);
+      await saveProject(updated);
+    },
+    [onUpdateProject]
+  );
+
+  const persistGlobalFilters = useCallback(
+    async (nextFilters: DashboardFilter[]) => {
+      if (!editingDashboard) return;
+      const updated = updateMagicDashboardGlobalFilters(normalizedProject, editingDashboard.id, nextFilters);
+      await persistProject(updated);
+    },
+    [editingDashboard, normalizedProject, persistProject]
+  );
+
   // --- Data Logic (Moved from Analytics.tsx) ---
   const { rows: baseData, availableColumns, dataSourceId: baseDataSourceId } = useMemo(() => {
     return resolveDashboardBaseData(normalizedProject, editingDashboard ?? null);
@@ -485,23 +502,6 @@ const DashboardMagic: React.FC<DashboardMagicProps> = ({ project, onUpdateProjec
       return transformed;
     },
     [normalizedProject.dataSources, normalizedProject.id, normalizedProject.lastModified, normalizedProject.transformRules]
-  );
-
-  const persistProject = useCallback(
-    async (updated: Project) => {
-      onUpdateProject?.(updated);
-      await saveProject(updated);
-    },
-    [onUpdateProject]
-  );
-
-  const persistGlobalFilters = useCallback(
-    async (nextFilters: DashboardFilter[]) => {
-      if (!editingDashboard) return;
-      const updated = updateMagicDashboardGlobalFilters(normalizedProject, editingDashboard.id, nextFilters);
-      await persistProject(updated);
-    },
-    [editingDashboard, normalizedProject, persistProject]
   );
 
   // --- Filter Actions ---
