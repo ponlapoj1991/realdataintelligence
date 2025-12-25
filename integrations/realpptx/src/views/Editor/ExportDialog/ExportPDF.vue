@@ -58,6 +58,8 @@
       <Button class="btn export" type="primary" @click="expPDF()"><IconDownload /> 打印 / 导出 PDF</Button>
       <Button class="btn close" @click="emit('close')">关闭</Button>
     </div>
+
+    <FullscreenSpin :loading="exporting" tip="正在导出..." />
   </div>
 </template>
 
@@ -65,7 +67,10 @@
 import { ref, useTemplateRef } from 'vue'
 import { storeToRefs } from 'pinia'
 import { useSlidesStore } from '@/store'
-import { print } from '@/utils/print'
+import { saveAs } from 'file-saver'
+import { toJpeg } from 'html-to-image'
+import message from '@/utils/message'
+import { pickSaveFileHandle, writeBlobToFileHandle } from '@/utils/fileSystemAccess'
 
 import ThumbnailSlide from '@/views/components/ThumbnailSlide/index.vue'
 import Switch from '@/components/Switch.vue'
@@ -73,26 +78,92 @@ import Button from '@/components/Button.vue'
 import RadioButton from '@/components/RadioButton.vue'
 import RadioGroup from '@/components/RadioGroup.vue'
 import Select from '@/components/Select.vue'
+import FullscreenSpin from '@/components/FullscreenSpin.vue'
 
 const emit = defineEmits<{
   (event: 'close'): void
 }>()
 
-const { slides, currentSlide, viewportRatio } = storeToRefs(useSlidesStore())
+const { slides, currentSlide, viewportRatio, title } = storeToRefs(useSlidesStore())
 
 const pdfThumbnailsRef = useTemplateRef<HTMLElement>('pdfThumbnailsRef')
 const rangeType = ref<'all' | 'current'>('all')
 const count = ref(1)
 const padding = ref(true)
 
-const expPDF = () => {
+const exporting = ref(false)
+
+const sanitizeFileName = (value: string, ext: string) => {
+  const raw = String(value || '').trim() || 'Canvas'
+  return `${raw.replace(/[\\/:*?"<>|]+/g, '_')}${ext}`
+}
+
+const expPDF = async () => {
   if (!pdfThumbnailsRef.value) return
-  const pageSize = {
-    width: 1600,
-    height: rangeType.value === 'all' ? 1600 * viewportRatio.value * count.value : 1600 * viewportRatio.value,
-    margin: padding.value ? 50 : 0,
+  if (exporting.value) return
+
+  exporting.value = true
+  try {
+    const fileName = sanitizeFileName(title.value, '.pdf')
+    const savePick = await pickSaveFileHandle({
+      suggestedName: fileName,
+      description: 'PDF',
+      mime: 'application/pdf',
+      extensions: ['.pdf'],
+    })
+    if (savePick.kind === 'cancelled') return
+
+    const { jsPDF } = await import('jspdf')
+
+    const slideWidth = 1600
+    const slideHeight = 1600 * viewportRatio.value
+    const margin = padding.value ? 50 : 0
+    const perPage = rangeType.value === 'all' ? Math.max(1, count.value) : 1
+
+    const pageWidth = slideWidth + margin * 2
+    const pageHeight = slideHeight * perPage + margin * 2
+
+    const pdf = new jsPDF({
+      unit: 'px',
+      format: [pageWidth, pageHeight],
+      compress: true,
+    })
+    const pdfAny = pdf as any
+
+    const slideNodes = Array.from(pdfThumbnailsRef.value.querySelectorAll('.thumbnail')) as HTMLElement[]
+    const totalPages = Math.ceil(slideNodes.length / perPage) || 1
+
+    const config = { quality: 0.95, width: slideWidth, fontEmbedCSS: '' }
+
+    for (let pageIndex = 0; pageIndex < totalPages; pageIndex++) {
+      if (pageIndex > 0) pdfAny.addPage([pageWidth, pageHeight])
+
+      const start = pageIndex * perPage
+      const end = Math.min(start + perPage, slideNodes.length)
+      for (let i = start; i < end; i++) {
+        const node = slideNodes[i]
+        const dataUrl = await toJpeg(node, config)
+
+        const offsetY = margin + (i - start) * slideHeight
+        pdfAny.addImage(dataUrl, 'JPEG', margin, offsetY, slideWidth, slideHeight, undefined, 'FAST')
+      }
+    }
+
+    const outBlob = pdf.output('blob') as Blob
+    if (savePick.kind === 'picked') {
+      await writeBlobToFileHandle(savePick.handle, outBlob)
+    }
+    else {
+      saveAs(outBlob, fileName)
+    }
   }
-  print(pdfThumbnailsRef.value, pageSize)
+  catch (err) {
+    console.error(err)
+    message.error('Export Failed')
+  }
+  finally {
+    exporting.value = false
+  }
 }
 </script>
 

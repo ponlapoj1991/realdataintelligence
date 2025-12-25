@@ -78,6 +78,7 @@ import { computed, ref, useTemplateRef } from 'vue'
 import { storeToRefs } from 'pinia'
 import { useSlidesStore } from '@/store'
 import useExport from '@/hooks/useExport'
+import { pickSaveFileHandle } from '@/utils/fileSystemAccess'
 
 import ThumbnailSlide from '@/views/components/ThumbnailSlide/index.vue'
 import FullscreenSpin from '@/components/FullscreenSpin.vue'
@@ -91,7 +92,7 @@ const emit = defineEmits<{
   (event: 'close'): void
 }>()
 
-const { slides, currentSlide } = storeToRefs(useSlidesStore())
+const { slides, currentSlide, title } = storeToRefs(useSlidesStore())
 
 const { exportPPTX, exportImagePPTX, exporting } = useExport()
 
@@ -116,13 +117,42 @@ const renderSlides = computed(() => {
   return selectedSlides.value
 })
 
-const execExport = () => {
+const sanitizeFileName = (value: string, ext: string) => {
+  const raw = String(value || '').trim() || 'Canvas'
+  return `${raw.replace(/[\\/:*?"<>|]+/g, '_')}${ext}`
+}
+
+const execExport = async () => {
   if (exportMode.value === 'standard') {
-    exportPPTX(selectedSlides.value, masterOverwrite.value, ignoreMedia.value)
+    const fileName = sanitizeFileName(title.value, '.pptx')
+    const savePick = await pickSaveFileHandle({
+      suggestedName: fileName,
+      description: 'PowerPoint',
+      mime: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+      extensions: ['.pptx'],
+    })
+    if (savePick.kind === 'cancelled') return
+
+    exportPPTX(selectedSlides.value, masterOverwrite.value, ignoreMedia.value, {
+      saveHandle: savePick.kind === 'picked' ? savePick.handle : undefined,
+      fallbackFileName: fileName,
+    })
   } 
   else {
     const slideRefs = imageThumbnailsRef.value!.querySelectorAll('.export-thumbnail')
-    exportImagePPTX(slideRefs)
+    const fileName = sanitizeFileName(title.value, '.pptx')
+    const savePick = await pickSaveFileHandle({
+      suggestedName: fileName,
+      description: 'PowerPoint',
+      mime: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+      extensions: ['.pptx'],
+    })
+    if (savePick.kind === 'cancelled') return
+
+    exportImagePPTX(slideRefs, {
+      saveHandle: savePick.kind === 'picked' ? savePick.handle : undefined,
+      fallbackFileName: fileName,
+    })
   }
 }
 </script>

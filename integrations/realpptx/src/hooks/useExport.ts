@@ -16,6 +16,7 @@ import { addChartElementToSlide } from '@/utils/pptxChartExport'
 import type { ChartPostprocessItem } from '@/utils/pptxChartPostprocess'
 import { postprocessPptxCharts } from '@/utils/pptxChartPostprocess'
 import message from '@/utils/message'
+import { writeBlobToFileHandle } from '@/utils/fileSystemAccess'
 
 interface ExportImageConfig {
   quality: number
@@ -65,7 +66,10 @@ export default () => {
   }
 
   // 导出图片版PPTX
-  const exportImagePPTX = (domRefs: NodeListOf<Element>) => {
+  const exportImagePPTX = (
+    domRefs: NodeListOf<Element>,
+    opts?: { saveHandle?: any; fallbackFileName?: string },
+  ) => {
     exporting.value = true
 
     setTimeout(() => {
@@ -98,9 +102,16 @@ export default () => {
         }
 
         try {
-          const fileName = `${title.value}.pptx`
+          const fileName = opts?.fallbackFileName || `${title.value}.pptx`
           const blob = await (pptx as any).write('blob')
-          saveAs(blob as Blob, fileName)
+          const outBlob = blob as Blob
+
+          if (opts?.saveHandle) {
+            await writeBlobToFileHandle(opts.saveHandle, outBlob)
+          }
+          else {
+            saveAs(outBlob, fileName)
+          }
         }
         catch (err) {
           console.error(err)
@@ -1021,13 +1032,18 @@ export default () => {
     return { pptx, chartItems }
   }
 
-  const exportPPTX = (_slides: Slide[], masterOverwrite: boolean, ignoreMedia: boolean) => {
+  const exportPPTX = (
+    _slides: Slide[],
+    masterOverwrite: boolean,
+    ignoreMedia: boolean,
+    opts?: { saveHandle?: any; fallbackFileName?: string },
+  ) => {
     exporting.value = true
 
     setTimeout(async () => {
       try {
         const { pptx, chartItems } = await buildPPTX(_slides, masterOverwrite, ignoreMedia)
-        const fileName = `${title.value}.pptx`
+        const fileName = opts?.fallbackFileName || `${title.value}.pptx`
         const blob = await (pptx as any).write('blob')
 
         let outBlob = blob as Blob
@@ -1038,7 +1054,12 @@ export default () => {
           console.error(postprocessErr)
         }
 
-        saveAs(outBlob, fileName)
+        if (opts?.saveHandle) {
+          await writeBlobToFileHandle(opts.saveHandle, outBlob)
+        }
+        else {
+          saveAs(outBlob, fileName)
+        }
       }
       catch (err) {
         console.error(err)
