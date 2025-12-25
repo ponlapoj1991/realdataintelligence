@@ -152,11 +152,13 @@ const DashboardMagic: React.FC<DashboardMagicProps> = ({ project, onUpdateProjec
   // --- New States for Filters & Interaction ---
   const [filters, setFilters] = useState<DashboardFilter[]>([]);
   const [isPresentationMode, setIsPresentationMode] = useState(false);
-  const [interactionMode, setInteractionMode] = useState<'drill' | 'filter'>('drill');
-  const [isExporting, setIsExporting] = useState(false);
-  const [isSaving, setIsSaving] = useState(false);
-  const [newFilterCol, setNewFilterCol] = useState('');
-  const [drillDown, setDrillDown] = useState<DrillDownState | null>(null);
+	  const [interactionMode, setInteractionMode] = useState<'drill' | 'filter'>('drill');
+	  const [isExporting, setIsExporting] = useState(false);
+	  const [isSaving, setIsSaving] = useState(false);
+	  const [newFilterCol, setNewFilterCol] = useState('');
+	  const [drillDown, setDrillDown] = useState<DrillDownState | null>(null);
+	  const [filterValueOptions, setFilterValueOptions] = useState<Record<string, string[]>>({});
+	  const filterValueLoadingRef = useRef<Set<string>>(new Set());
 
   // Grid State
   const [draggedWidget, setDraggedWidget] = useState<{ id: string; sectionIndex: number; colSpan: number; heightPx: number } | null>(null);
@@ -226,11 +228,11 @@ const DashboardMagic: React.FC<DashboardMagicProps> = ({ project, onUpdateProjec
     editingDashboard?.dataSourceId,
   ]);
 
-  const workerSource = useMemo(() => {
-    const resolvedSource =
-      (baseDataSourceId && normalizedProject.dataSources?.find((s) => s.id === baseDataSourceId)) ||
-      (normalizedProject.activeDataSourceId && normalizedProject.dataSources?.find((s) => s.id === normalizedProject.activeDataSourceId)) ||
-      normalizedProject.dataSources?.[0];
+	  const workerSource = useMemo(() => {
+	    const resolvedSource =
+	      (baseDataSourceId && normalizedProject.dataSources?.find((s) => s.id === baseDataSourceId)) ||
+	      (normalizedProject.activeDataSourceId && normalizedProject.dataSources?.find((s) => s.id === normalizedProject.activeDataSourceId)) ||
+	      normalizedProject.dataSources?.[0];
 
     return {
       mode: 'dataSource' as const,
@@ -238,17 +240,40 @@ const DashboardMagic: React.FC<DashboardMagicProps> = ({ project, onUpdateProjec
       dataSourceId: baseDataSourceId || resolvedSource?.id,
       dataVersion: resolvedSource?.updatedAt ?? normalizedProject.lastModified,
       transformRules: normalizedProject.transformRules,
-    };
-  }, [baseDataSourceId, normalizedProject.dataSources, normalizedProject.activeDataSourceId, normalizedProject.id, normalizedProject.lastModified, normalizedProject.transformRules]);
+	    };
+	  }, [baseDataSourceId, normalizedProject.dataSources, normalizedProject.activeDataSourceId, normalizedProject.id, normalizedProject.lastModified, normalizedProject.transformRules]);
+	
+	  const resolvedSourceForMagic = useMemo(() => {
+	    const desiredId = workerSource.dataSourceId;
+	    return (
+	      (desiredId && normalizedProject.dataSources?.find((s) => s.id === desiredId)) ||
+	      (normalizedProject.activeDataSourceId &&
+	        normalizedProject.dataSources?.find((s) => s.id === normalizedProject.activeDataSourceId)) ||
+	      normalizedProject.dataSources?.[0] ||
+	      null
+	    );
+	  }, [workerSource.dataSourceId, normalizedProject.dataSources, normalizedProject.activeDataSourceId]);
+	
+	  const sourceColumnTypeMap = useMemo(() => {
+	    const out: Record<string, FilterDataType> = {};
+	    const cols = resolvedSourceForMagic?.columns || [];
+	    for (const c of cols) {
+	      if (!c?.key) continue;
+	      if (c.type === 'date') out[c.key] = 'date';
+	      else if (c.type === 'number') out[c.key] = 'number';
+	      else out[c.key] = 'text';
+	    }
+	    return out;
+	  }, [resolvedSourceForMagic?.id, resolvedSourceForMagic?.columns]);
 
-  const columnTypeMap = useMemo(() => {
-    const sampleRows = baseData.slice(0, SAMPLE_SIZE);
-    const map: Record<string, FilterDataType> = {};
-    availableColumns.forEach(col => {
-      map[col] = inferColumnType(col, sampleRows);
-    });
-    return map;
-  }, [availableColumns, baseData]);
+	  const columnTypeMap = useMemo(() => {
+	    const sampleRows = baseData.slice(0, SAMPLE_SIZE);
+	    const map: Record<string, FilterDataType> = {};
+	    availableColumns.forEach(col => {
+	      map[col] = sourceColumnTypeMap[col] || inferColumnType(col, sampleRows);
+	    });
+	    return map;
+	  }, [availableColumns, baseData, sourceColumnTypeMap]);
 
   const getColumnType = useCallback(
     (column: string): FilterDataType => columnTypeMap[column] || 'text',
@@ -272,12 +297,52 @@ const DashboardMagic: React.FC<DashboardMagicProps> = ({ project, onUpdateProjec
     return String(value ?? '').toLowerCase() === filter.value.toLowerCase();
   }, []);
 
-  const filteredData = useMemo(() => {
-    if (filters.length === 0) return baseData;
-    return baseData.filter(row => filters.every(f => matchesFilterCondition(row, f)));
-  }, [baseData, filters, matchesFilterCondition]);
-
-  const magicAggWorker = useMagicAggregationWorker(workerSource, REALPPTX_CHART_THEME);
+	  const filteredData = useMemo(() => {
+	    if (filters.length === 0) return baseData;
+	    return baseData.filter(row => filters.every(f => matchesFilterCondition(row, f)));
+	  }, [baseData, filters, matchesFilterCondition]);
+	
+	  const magicAggWorker = useMagicAggregationWorker(workerSource, REALPPTX_CHART_THEME);
+	
+	  const makeFilterValueKey = useCallback(
+	    (col: string) => {
+	      const dashId = editingDashboard?.id || 'unknown';
+	      const sourceId = workerSource.dataSourceId || 'unknown';
+	      const dataVersion = workerSource.dataVersion || 0;
+	      return `${dashId}:${sourceId}:${dataVersion}:${col}`;
+	    },
+	    [editingDashboard?.id, workerSource.dataSourceId, workerSource.dataVersion]
+	  );
+	
+	  const prefetchFilterValues = useCallback(
+	    async (col: string) => {
+	      const key = makeFilterValueKey(col);
+	      if (filterValueOptions[key]) return;
+	      if (filterValueLoadingRef.current.has(key)) return;
+	      filterValueLoadingRef.current.add(key);
+	
+	      try {
+	        if (magicAggWorker.isSupported) {
+	          const values = await magicAggWorker.requestColumnOptions({
+	            columnKey: col,
+	            limitRows: 20000,
+	            limitValues: 500,
+	          });
+	          setFilterValueOptions((prev) => ({ ...prev, [key]: values }));
+	          return;
+	        }
+	
+	        const unique = new Set(baseData.map((row) => String((row as any)?.[col] || '')));
+	        const out = Array.from(unique).filter(Boolean).sort().slice(0, 100);
+	        setFilterValueOptions((prev) => ({ ...prev, [key]: out }));
+	      } catch (e) {
+	        console.error('[DashboardMagic] filter values failed:', e);
+	      } finally {
+	        filterValueLoadingRef.current.delete(key);
+	      }
+	    },
+	    [baseData, filterValueOptions, magicAggWorker, makeFilterValueKey]
+	  );
 
   const drilldownReqRef = useRef(0);
   const drilldownRowsCacheRef = useRef<Map<string, { version: number; rows: RawRow[] }>>(new Map());
@@ -332,13 +397,13 @@ const DashboardMagic: React.FC<DashboardMagicProps> = ({ project, onUpdateProjec
   );
 
   // --- Filter Actions ---
-  const addFilter = (column: string, value: string = '') => {
-    if (!column) return;
-    const exists = filters.find(f => f.column === column);
-    if (exists) {
-      if (value) updateFilterValue(exists.id, value);
-      return;
-    }
+	  const addFilter = (column: string, value: string = '') => {
+	    if (!column) return;
+	    const exists = filters.find(f => f.column === column);
+	    if (exists) {
+	      if (value) updateFilterValue(exists.id, value);
+	      return;
+	    }
 
     let dataType = getColumnType(column);
     let initialValue = value;
@@ -358,20 +423,23 @@ const DashboardMagic: React.FC<DashboardMagicProps> = ({ project, onUpdateProjec
       }
     }
 
-    const newFilter: DashboardFilter = {
-      id: crypto.randomUUID(),
-      column,
-      value: initialValue,
-      endValue,
-      dataType
-    };
-    setFilters((prev) => {
-      const next = [...prev, newFilter];
-      void persistGlobalFilters(next);
-      return next;
-    });
-    setNewFilterCol('');
-  };
+	    const newFilter: DashboardFilter = {
+	      id: crypto.randomUUID(),
+	      column,
+	      value: initialValue,
+	      endValue,
+	      dataType
+	    };
+	    if (dataType !== 'date') {
+	      void prefetchFilterValues(column);
+	    }
+	    setFilters((prev) => {
+	      const next = [...prev, newFilter];
+	      void persistGlobalFilters(next);
+	      return next;
+	    });
+	    setNewFilterCol('');
+	  };
 
   const removeFilter = (id: string) => {
     setFilters((prev) => {
@@ -389,10 +457,18 @@ const DashboardMagic: React.FC<DashboardMagicProps> = ({ project, onUpdateProjec
     });
   };
 
-  const getUniqueValues = (col: string) => {
-    const unique = new Set(baseData.map(row => String(row[col] || '')));
-    return Array.from(unique).filter(Boolean).sort().slice(0, 100);
-  };
+	  useEffect(() => {
+	    for (const f of filters) {
+	      if (!f?.column) continue;
+	      if (f.dataType === 'date') continue;
+	      void prefetchFilterValues(f.column);
+	    }
+	  }, [filters, prefetchFilterValues]);
+	
+	  const getUniqueValues = (col: string) => {
+	    const key = makeFilterValueKey(col);
+	    return filterValueOptions[key] || [];
+	  };
 
   // --- Dashboard Actions ---
   const handleCreateDashboard = async () => {

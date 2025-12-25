@@ -42,7 +42,16 @@ type BuildPptxPayloadMessage = {
   sourceDashboardId?: string
 }
 
-type WorkerMessage = SetRowsMessage | SetSourceMessage | BuildPayloadMessage | BuildPptxPayloadMessage
+type ColumnOptionsMessage = {
+  type: 'columnOptions'
+  requestId: string
+  rowsVersion: number
+  columnKey: string
+  limitRows: number
+  limitValues: number
+}
+
+type WorkerMessage = SetRowsMessage | SetSourceMessage | BuildPayloadMessage | BuildPptxPayloadMessage | ColumnOptionsMessage
 
 type PayloadResponse = {
   type: 'payload'
@@ -56,6 +65,13 @@ type PptxPayloadResponse = {
   requestId: string
   rowsVersion: number
   payload: DashboardChartInsertPayload | null
+}
+
+type ColumnOptionsResponse = {
+  type: 'columnOptions'
+  requestId: string
+  rowsVersion: number
+  values: string[]
 }
 
 type ErrorResponse = {
@@ -72,6 +88,11 @@ let currentDataSourceId: string | undefined
 let currentDataVersion = 0
 let currentTransformRules: TransformationRule[] | undefined
 let currentLoadPromise: Promise<void> | null = null
+
+const toComparableString = (raw: unknown) => {
+  if (raw === null || raw === undefined || raw === '') return '(Blank)'
+  return String(raw)
+}
 
 const loadRowsFromIndexedDB = async () => {
   const projectId = currentProjectId
@@ -283,7 +304,104 @@ self.onmessage = (event: MessageEvent<WorkerMessage>) => {
 
     void run()
   }
+
+  if (msg.type === 'columnOptions') {
+    const rowsVersion = msg.rowsVersion
+    const run = async () => {
+      try {
+        const loadPromise = currentLoadPromise
+        if (loadPromise) {
+          await loadPromise
+        }
+
+        if (currentRowsVersion !== rowsVersion) {
+          self.postMessage({
+            type: 'columnOptions',
+            requestId: msg.requestId,
+            rowsVersion,
+            values: [],
+          } satisfies ColumnOptionsResponse)
+          return
+        }
+
+        const columnKey = String(msg.columnKey || '').trim()
+        const limitRows = Math.max(0, Number(msg.limitRows || 0))
+        const limitValues = Math.max(0, Number(msg.limitValues || 0))
+
+        if (!columnKey || limitRows === 0 || limitValues === 0) {
+          self.postMessage({
+            type: 'columnOptions',
+            requestId: msg.requestId,
+            rowsVersion,
+            values: [],
+          } satisfies ColumnOptionsResponse)
+          return
+        }
+
+        const cacheKey = JSON.stringify({
+          kind: 'magicColumnOptions',
+          dataVersion: currentProjectId ? currentDataVersion : undefined,
+          rowsVersion: currentProjectId ? undefined : rowsVersion,
+          projectId: currentProjectId || undefined,
+          dataSourceId: currentDataSourceId,
+          transformRules: currentTransformRules && currentTransformRules.length ? currentTransformRules : undefined,
+          columnKey,
+          limitRows,
+          limitValues,
+        })
+
+        if (currentProjectId) {
+          const cached = await getCachedResult(currentProjectId, cacheKey)
+          if (cached && Array.isArray((cached as any).values)) {
+            self.postMessage({
+              type: 'columnOptions',
+              requestId: msg.requestId,
+              rowsVersion,
+              values: (cached as any).values as string[],
+            } satisfies ColumnOptionsResponse)
+            return
+          }
+        }
+
+        const values = new Set<string>()
+        let sawBlank = false
+
+        const scanLimit = Math.min(limitRows, currentRows.length)
+        for (let i = 0; i < scanLimit; i++) {
+          const str = toComparableString((currentRows[i] as any)?.[columnKey])
+          if (str === '(Blank)') sawBlank = true
+          else values.add(str)
+          if (values.size >= limitValues) break
+        }
+
+        const out = Array.from(values)
+        out.sort((a, b) => a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' }))
+        if (sawBlank) out.unshift('(Blank)')
+        const finalValues = out.slice(0, sawBlank ? limitValues + 1 : limitValues)
+
+        if (currentProjectId) {
+          await setCachedResult(currentProjectId, cacheKey, { values: finalValues })
+        }
+
+        self.postMessage({
+          type: 'columnOptions',
+          requestId: msg.requestId,
+          rowsVersion,
+          values: finalValues,
+        } satisfies ColumnOptionsResponse)
+      } catch (e: any) {
+        self.postMessage({
+          type: 'error',
+          requestId: msg.requestId,
+          rowsVersion,
+          error: e?.message || 'Worker failed',
+        } satisfies ErrorResponse)
+      }
+    }
+
+    void run()
+  }
 }
 
-export type { WorkerMessage, PayloadResponse, PptxPayloadResponse, ErrorResponse }
+export type { WorkerMessage, PayloadResponse, PptxPayloadResponse, ColumnOptionsResponse, ErrorResponse }
 

@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState, useCallback } from 'react';
+import React, { useEffect, useLayoutEffect, useMemo, useRef, useState, useCallback } from 'react';
 import * as echarts from 'echarts/core';
 import {
   BarChart,
@@ -363,10 +363,14 @@ const MagicWidgetRenderer: React.FC<MagicWidgetRendererProps> = ({
   workerClient,
 }) => {
   const containerRef = useRef<HTMLDivElement>(null);
-  const chartRef = useRef<echarts.ECharts | null>(null);
-  const resizeObserverRef = useRef<ResizeObserver | null>(null);
-  const disposeTimerRef = useRef<number | null>(null);
-  const activeTheme = theme ?? CLASSIC_ANALYTICS_THEME;
+	const chartRef = useRef<echarts.ECharts | null>(null);
+	const resizeObserverRef = useRef<ResizeObserver | null>(null);
+	const disposeTimerRef = useRef<number | null>(null);
+	const kpiResizeObserverRef = useRef<ResizeObserver | null>(null);
+	const kpiBoxRef = useRef<HTMLDivElement | null>(null);
+	const kpiValueRef = useRef<HTMLDivElement | null>(null);
+	const [kpiFittedFontSize, setKpiFittedFontSize] = useState<number | null>(null);
+	const activeTheme = theme ?? CLASSIC_ANALYTICS_THEME;
 
   const [isInView, setIsInView] = useState(false);
   const [payload, setPayload] = useState<MagicChartPayload | null>(null);
@@ -566,17 +570,76 @@ const MagicWidgetRenderer: React.FC<MagicWidgetRendererProps> = ({
     };
   }, [onValueClick, widget, payload, isInView]);
 
-  // Final cleanup
-  useEffect(() => {
-    return () => {
-      cancelDispose();
-      if (resizeObserverRef.current) resizeObserverRef.current.disconnect();
-      if (chartRef.current) {
-        chartRef.current.dispose();
-        chartRef.current = null;
-      }
-    };
-  }, [cancelDispose]);
+	// Final cleanup
+	useEffect(() => {
+		return () => {
+			cancelDispose();
+			if (resizeObserverRef.current) resizeObserverRef.current.disconnect();
+			if (kpiResizeObserverRef.current) kpiResizeObserverRef.current.disconnect();
+			if (chartRef.current) {
+				chartRef.current.dispose();
+				chartRef.current = null;
+			}
+		};
+	}, [cancelDispose]);
+
+	// Auto-fit KPI value text to avoid overflow
+	useLayoutEffect(() => {
+		if (payload?.type !== 'kpi') {
+			setKpiFittedFontSize(null);
+			if (kpiResizeObserverRef.current) {
+				kpiResizeObserverRef.current.disconnect();
+				kpiResizeObserverRef.current = null;
+			}
+			return;
+		}
+
+		const box = kpiBoxRef.current;
+		const valueEl = kpiValueRef.current;
+		if (!box || !valueEl) return;
+
+		const rawFontSize = payload.options?.dataLabelFontSize ?? widget.dataLabels?.fontSize;
+		const maxFont =
+			typeof rawFontSize === 'number'
+				? Math.max(12, rawFontSize)
+				: (widget.colSpan || 2) <= 1
+					? 72
+					: 96;
+		const minFont = 18;
+
+		const fit = () => {
+			let lo = minFont;
+			let hi = maxFont;
+			let best = minFont;
+
+			for (let i = 0; i < 10; i++) {
+				const mid = Math.floor((lo + hi) / 2);
+				valueEl.style.fontSize = `${mid}px`;
+
+				const overflowX = valueEl.scrollWidth > valueEl.clientWidth + 1;
+				if (!overflowX) {
+					best = mid;
+					lo = mid + 1;
+				} else {
+					hi = mid - 1;
+				}
+			}
+
+			setKpiFittedFontSize(best);
+		};
+
+		fit();
+		if (kpiResizeObserverRef.current) kpiResizeObserverRef.current.disconnect();
+		kpiResizeObserverRef.current = new ResizeObserver(() => fit());
+		kpiResizeObserverRef.current.observe(box);
+
+		return () => {
+			if (kpiResizeObserverRef.current) {
+				kpiResizeObserverRef.current.disconnect();
+				kpiResizeObserverRef.current = null;
+			}
+		};
+	}, [payload, widget.colSpan, widget.dataLabels?.fontSize]);
 
   if (didCompute && !payload) {
     return (
@@ -586,7 +649,7 @@ const MagicWidgetRenderer: React.FC<MagicWidgetRendererProps> = ({
     );
   }
 
-  if (payload?.type === 'kpi') {
+	  if (payload?.type === 'kpi') {
     const getNumericValue = (raw: any) => {
       if (raw === null || raw === undefined) return 0;
       if (typeof raw === 'number') return Number.isFinite(raw) ? raw : 0;
@@ -639,26 +702,28 @@ const MagicWidgetRenderer: React.FC<MagicWidgetRendererProps> = ({
     const titleText = widget.chartTitle || widget.title || 'Number';
     const valueText = formatKpiValue(value, valueFormat);
 
-    return (
-      <div className="w-full h-full flex items-center justify-center">
-        <div
-          className="w-full h-full rounded-xl border bg-white flex flex-col items-center justify-center px-6 text-center"
-          style={{ borderColor: lineColor }}
-        >
-          <div className="text-xs font-semibold tracking-wide uppercase" style={{ color: textColor, opacity: 0.7 }}>
-            {titleText}
-          </div>
-          <div
-            className="mt-2 tabular-nums leading-none"
-            style={{
-              color: valueColor,
-              fontSize: typeof fontSize === 'number' ? `${fontSize}px` : 'clamp(36px, 7vw, 88px)',
-              fontWeight,
-              ...(fontFamily ? { fontFamily } : {}),
-            }}
-          >
-            {valueText}
-          </div>
+	    return (
+	      <div className="w-full h-full flex items-center justify-center">
+	        <div
+	          ref={kpiBoxRef}
+	          className="w-full h-full rounded-xl border bg-white flex flex-col items-center justify-center px-6 text-center overflow-hidden"
+	          style={{ borderColor: lineColor }}
+	        >
+	          <div className="text-xs font-semibold tracking-wide uppercase" style={{ color: textColor, opacity: 0.7 }}>
+	            {titleText}
+	          </div>
+	          <div
+	            ref={kpiValueRef}
+	            className="mt-2 w-full tabular-nums leading-none whitespace-nowrap overflow-hidden"
+	            style={{
+	              color: valueColor,
+	              fontSize: `${kpiFittedFontSize ?? (typeof fontSize === 'number' ? fontSize : 64)}px`,
+	              fontWeight,
+	              ...(fontFamily ? { fontFamily } : {}),
+	            }}
+	          >
+	            {valueText}
+	          </div>
           {widget.subtitle ? (
             <div className="mt-1 text-xs" style={{ color: textColor, opacity: 0.65 }}>
               {widget.subtitle}
@@ -669,13 +734,13 @@ const MagicWidgetRenderer: React.FC<MagicWidgetRendererProps> = ({
     );
   }
 
-  return (
-    <div className="w-full h-full relative">
-      <div
-        ref={containerRef}
-        className="w-full h-full"
-        aria-busy={!didCompute && isInView}
-      />
+	  return (
+	    <div className="w-full h-full relative overflow-hidden">
+	      <div
+	        ref={containerRef}
+	        className="w-full h-full"
+	        aria-busy={!didCompute && isInView}
+	      />
       {isEditing && isInView && !didCompute ? (
         <div className="absolute inset-0 flex items-center justify-center text-xs text-gray-400 pointer-events-none">
           Updating…
