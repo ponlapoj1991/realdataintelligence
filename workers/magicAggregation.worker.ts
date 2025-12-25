@@ -3,6 +3,7 @@
 import type { DashboardFilter, DashboardWidget, RawRow, TransformationRule } from '../types'
 import type { ChartTheme } from '../constants/chartTheme'
 import { buildMagicChartPayload, type MagicChartPayload } from '../utils/magicChartPayload'
+import { buildDashboardChartPayload, type DashboardChartInsertPayload } from '../utils/dashboardChartPayload'
 import { getAllDataChunks, getAllDataSourceChunks, getCachedResult, setCachedResult } from '../utils/storage-v2'
 import { applyTransformation } from '../utils/transform'
 
@@ -31,13 +32,30 @@ type BuildPayloadMessage = {
   isEditing?: boolean
 }
 
-type WorkerMessage = SetRowsMessage | SetSourceMessage | BuildPayloadMessage
+type BuildPptxPayloadMessage = {
+  type: 'buildPptxPayload'
+  requestId: string
+  rowsVersion: number
+  widget: DashboardWidget
+  filters?: DashboardFilter[]
+  theme?: ChartTheme
+  sourceDashboardId?: string
+}
+
+type WorkerMessage = SetRowsMessage | SetSourceMessage | BuildPayloadMessage | BuildPptxPayloadMessage
 
 type PayloadResponse = {
   type: 'payload'
   requestId: string
   rowsVersion: number
   payload: MagicChartPayload | null
+}
+
+type PptxPayloadResponse = {
+  type: 'pptxPayload'
+  requestId: string
+  rowsVersion: number
+  payload: DashboardChartInsertPayload | null
 }
 
 type ErrorResponse = {
@@ -62,18 +80,13 @@ const loadRowsFromIndexedDB = async () => {
     return
   }
 
-  let rows: RawRow[] = []
-
-  if (currentDataSourceId) {
-    rows = await getAllDataSourceChunks(projectId, currentDataSourceId)
-  }
-
-  if (rows.length === 0) {
-    rows = await getAllDataChunks(projectId)
-  }
+  const rows: RawRow[] = currentDataSourceId
+    ? await getAllDataSourceChunks(projectId, currentDataSourceId)
+    : await getAllDataChunks(projectId)
 
   if (currentTransformRules && currentTransformRules.length > 0) {
-    rows = applyTransformation(rows, currentTransformRules)
+    currentRows = applyTransformation(rows, currentTransformRules)
+    return
   }
 
   currentRows = rows
@@ -194,7 +207,83 @@ self.onmessage = (event: MessageEvent<WorkerMessage>) => {
 
     void run()
   }
+
+  if (msg.type === 'buildPptxPayload') {
+    const rowsVersion = msg.rowsVersion
+    const run = async () => {
+      try {
+        const loadPromise = currentLoadPromise
+        if (loadPromise) {
+          await loadPromise
+        }
+
+        if (currentRowsVersion !== rowsVersion) {
+          self.postMessage({
+            type: 'pptxPayload',
+            requestId: msg.requestId,
+            rowsVersion,
+            payload: null,
+          } satisfies PptxPayloadResponse)
+          return
+        }
+
+        const mergedFilters = mergeDashboardFilters(msg.widget.filters, msg.filters)
+        const mergedWidget = mergedFilters ? { ...msg.widget, filters: mergedFilters } : msg.widget
+
+        const themeId = msg.theme?.id || 'default'
+        const cacheKey = JSON.stringify({
+          kind: 'pptxPayload',
+          dataVersion: currentProjectId ? currentDataVersion : undefined,
+          rowsVersion: currentProjectId ? undefined : rowsVersion,
+          projectId: currentProjectId || undefined,
+          dataSourceId: currentDataSourceId,
+          transformRules: currentTransformRules && currentTransformRules.length ? currentTransformRules : undefined,
+          themeId,
+          sourceDashboardId: msg.sourceDashboardId,
+          widget: mergedWidget,
+        })
+
+        if (currentProjectId) {
+          const cached = await getCachedResult(currentProjectId, cacheKey)
+          if (cached) {
+            self.postMessage({
+              type: 'pptxPayload',
+              requestId: msg.requestId,
+              rowsVersion,
+              payload: cached as DashboardChartInsertPayload,
+            } satisfies PptxPayloadResponse)
+            return
+          }
+        }
+
+        const payload = buildDashboardChartPayload(mergedWidget, currentRows, {
+          theme: msg.theme,
+          sourceDashboardId: msg.sourceDashboardId,
+        })
+
+        if (currentProjectId && payload) {
+          await setCachedResult(currentProjectId, cacheKey, payload)
+        }
+
+        self.postMessage({
+          type: 'pptxPayload',
+          requestId: msg.requestId,
+          rowsVersion,
+          payload,
+        } satisfies PptxPayloadResponse)
+      } catch (e: any) {
+        self.postMessage({
+          type: 'error',
+          requestId: msg.requestId,
+          rowsVersion,
+          error: e?.message || 'Worker failed',
+        } satisfies ErrorResponse)
+      }
+    }
+
+    void run()
+  }
 }
 
-export type { WorkerMessage, PayloadResponse, ErrorResponse }
+export type { WorkerMessage, PayloadResponse, PptxPayloadResponse, ErrorResponse }
 

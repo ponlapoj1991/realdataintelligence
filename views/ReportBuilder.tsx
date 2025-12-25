@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Plus, Edit3, Trash2, ArrowLeft, Loader2, Save, X, LayoutDashboard } from 'lucide-react';
-import { Project, DashboardWidget, ReportSlide } from '../types';
+import { Project, DashboardWidget, ProjectDashboard, ReportSlide } from '../types';
 import { useToast } from '../components/ToastProvider';
 import { useGlobalSettings } from '../components/GlobalSettingsProvider';
 import {
@@ -12,12 +12,11 @@ import {
   updatePresentationSlides,
 } from '../utils/reportPresentations';
 import { ensureMagicDashboards } from '../utils/dashboards';
-import { resolveDashboardBaseData } from '../utils/dashboardData';
 import { saveProject } from '../utils/storage-compat';
 import BuildReports from './BuildReports';
 import { REALPPTX_CHART_THEME } from '../constants/chartTheme';
-import { buildDashboardChartPayload } from '../utils/dashboardChartPayload';
-import { applyWidgetFilters } from '../utils/widgetData';
+import type { DashboardChartInsertPayload } from '../utils/dashboardChartPayload';
+import { ensureDataSources } from '../utils/dataSources';
 
 const hashString = (input: string) => {
   let hash = 5381;
@@ -78,10 +77,74 @@ const ReportBuilder: React.FC<ReportBuilderProps> = ({ project, onUpdateProject 
   const [selectedDashboardId, setSelectedDashboardId] = useState<string | null>(
     activeMagicDashboard?.id || project.activeDashboardId || project.dashboards?.[0]?.id || null
   );
-  const [iframeWindow, setIframeWindow] = useState<Window | null>(null);
-  const [isEditorReady, setIsEditorReady] = useState(false);
-  const { showToast } = useToast();
-  const dashboardsForInsert = (magicDashboards && magicDashboards.length > 0) ? magicDashboards : (project.dashboards || []);
+	  const [iframeWindow, setIframeWindow] = useState<Window | null>(null);
+	  const [isEditorReady, setIsEditorReady] = useState(false);
+	  const { showToast } = useToast();
+	  const dashboardsForInsert = (magicDashboards && magicDashboards.length > 0) ? magicDashboards : (project.dashboards || []);
+
+	  type PptxWorkerResponse =
+	    | { type: 'pptxPayload'; requestId: string; rowsVersion: number; payload: DashboardChartInsertPayload | null }
+	    | { type: 'error'; requestId?: string; rowsVersion?: number; error: string };
+
+	  const pptxWorkerRef = useRef<Worker | null>(null);
+	  const pptxRowsVersionRef = useRef(0);
+	  const pptxSourceKeyRef = useRef<string>('');
+	  const pptxPendingRef = useRef(
+	    new Map<
+	      string,
+	      {
+	        rowsVersion: number;
+	        resolve: (payload: DashboardChartInsertPayload | null) => void;
+	        reject: (err: Error) => void;
+	      }
+	    >()
+	  );
+
+	  useEffect(() => {
+	    if (typeof Worker === 'undefined') return;
+
+	    const worker = new Worker(new URL('../workers/magicAggregation.worker.ts', import.meta.url), { type: 'module' });
+	    pptxWorkerRef.current = worker;
+
+	    worker.onmessage = (event: MessageEvent<PptxWorkerResponse>) => {
+	      const msg = event.data as PptxWorkerResponse;
+	      if (!msg || typeof msg !== 'object') return;
+
+	      if (msg.type === 'pptxPayload') {
+	        const pending = pptxPendingRef.current.get(msg.requestId);
+	        if (!pending) return;
+	        pptxPendingRef.current.delete(msg.requestId);
+	        if (pending.rowsVersion !== msg.rowsVersion) {
+	          pending.resolve(null);
+	          return;
+	        }
+	        pending.resolve(msg.payload ?? null);
+	        return;
+	      }
+
+	      if (msg.type === 'error') {
+	        const requestId = msg.requestId;
+	        if (!requestId) return;
+	        const pending = pptxPendingRef.current.get(requestId);
+	        if (!pending) return;
+	        pptxPendingRef.current.delete(requestId);
+	        pending.reject(new Error(msg.error || 'Worker failed'));
+	      }
+	    };
+
+	    worker.onerror = (event) => {
+	      console.error('[ReportBuilder] Worker error:', event);
+	    };
+
+	    return () => {
+	      for (const [, pending] of pptxPendingRef.current) {
+	        pending.reject(new Error('Worker terminated'));
+	      }
+	      pptxPendingRef.current.clear();
+	      worker.terminate();
+	      pptxWorkerRef.current = null;
+	    };
+	  }, []);
 
   useEffect(() => {
     if (presentationsChanged || magicChanged) {
@@ -115,9 +178,12 @@ const ReportBuilder: React.FC<ReportBuilderProps> = ({ project, onUpdateProject 
   const autosaveTimerRef = useRef<number | null>(null);
   const lastSentLoadRef = useRef<{ presentationId: string; slidesHash: string } | null>(null);
 
-  const editingPresentation =
-    presentations.find((p) => p.id === (selectedPresentationId || normalizedProject.activePresentationId)) ||
-    activePresentation;
+	  const editingPresentation =
+	    presentations.find((p) => p.id === (selectedPresentationId || normalizedProject.activePresentationId)) ||
+	    activePresentation;
+
+	  const { project: projectWithSources } = useMemo(() => ensureDataSources(normalizedProject), [normalizedProject]);
+	  const transformRulesHash = useMemo(() => hashJson(projectWithSources.transformRules || null), [projectWithSources.transformRules]);
 
   const queueAutosave = useCallback(
     (presentationId: string, slides: ReportSlide[], name?: string) => {
@@ -143,8 +209,79 @@ const ReportBuilder: React.FC<ReportBuilderProps> = ({ project, onUpdateProject 
     [editingPresentation, normalizedProject, persistProject]
   );
 
-  const selectedDashboard =
-    dashboardsForInsert.find((dash) => dash.id === selectedDashboardId) || dashboardsForInsert[0];
+	  const selectedDashboard =
+	    dashboardsForInsert.find((dash) => dash.id === selectedDashboardId) || dashboardsForInsert[0];
+
+	  const ensurePptxWorkerSource = useCallback(
+	    (dashboard: ProjectDashboard | null | undefined) => {
+	      const worker = pptxWorkerRef.current;
+	      if (!worker) return null;
+
+	      const desiredSourceId =
+	        dashboard?.dataSourceId ||
+	        projectWithSources.activeDataSourceId ||
+	        projectWithSources.dataSources?.[0]?.id;
+
+	      const sourceMeta =
+	        (desiredSourceId && projectWithSources.dataSources?.find((s) => s.id === desiredSourceId)) ||
+	        (projectWithSources.activeDataSourceId &&
+	          projectWithSources.dataSources?.find((s) => s.id === projectWithSources.activeDataSourceId)) ||
+	        projectWithSources.dataSources?.[0];
+
+	      const dataVersion = sourceMeta?.updatedAt ?? projectWithSources.lastModified;
+	      const key = `${projectWithSources.id}:${desiredSourceId || ''}:${dataVersion || 0}:${transformRulesHash}`;
+
+	      if (pptxSourceKeyRef.current !== key) {
+	        pptxSourceKeyRef.current = key;
+	        pptxRowsVersionRef.current += 1;
+	        const rowsVersion = pptxRowsVersionRef.current;
+	        worker.postMessage({
+	          type: 'setSource',
+	          projectId: projectWithSources.id,
+	          dataSourceId: desiredSourceId,
+	          dataVersion,
+	          transformRules: projectWithSources.transformRules,
+	          rowsVersion,
+	        });
+	        return rowsVersion;
+	      }
+
+	      return pptxRowsVersionRef.current;
+	    },
+	    [
+	      projectWithSources.activeDataSourceId,
+	      projectWithSources.dataSources,
+	      projectWithSources.id,
+	      projectWithSources.lastModified,
+	      projectWithSources.transformRules,
+	      transformRulesHash,
+	    ]
+	  );
+
+	  const requestPptxPayload = useCallback(
+	    async (dashboard: ProjectDashboard, widget: DashboardWidget) => {
+	      const worker = pptxWorkerRef.current;
+	      if (!worker) return null;
+
+	      const rowsVersion = ensurePptxWorkerSource(dashboard);
+	      if (!rowsVersion) return null;
+
+	      const requestId = crypto.randomUUID();
+	      return await new Promise<DashboardChartInsertPayload | null>((resolve, reject) => {
+	        pptxPendingRef.current.set(requestId, { rowsVersion, resolve, reject });
+	        worker.postMessage({
+	          type: 'buildPptxPayload',
+	          requestId,
+	          rowsVersion,
+	          widget,
+	          filters: dashboard.globalFilters,
+	          theme: REALPPTX_CHART_THEME,
+	          sourceDashboardId: dashboard.id,
+	        });
+	      });
+	    },
+	    [ensurePptxWorkerSource]
+	  );
 
   const persistSlidesFromExport = useCallback(
     async (slides: ReportSlide[], exitAfter?: boolean) => {
@@ -252,28 +389,22 @@ const ReportBuilder: React.FC<ReportBuilderProps> = ({ project, onUpdateProject 
     showToast('Presentation renamed', nextName.trim(), 'success');
   };
 
-  const handleInsertChart = useCallback(
-    async (widget: DashboardWidget) => {
-      if (!iframeWindow) {
-        showToast('Editor not ready', 'Waiting for RealPPTX to finish loading.', 'warning');
-        return;
-      }
-      setInsertingWidgetId(widget.id);
-      try {
-        const dashboard =
-          dashboardsForInsert.find((dash) => dash.id === selectedDashboardId) || dashboardsForInsert[0];
+	  const handleInsertChart = useCallback(
+	    async (widget: DashboardWidget) => {
+	      if (!iframeWindow) {
+	        showToast('Editor not ready', 'Waiting for RealPPTX to finish loading.', 'warning');
+	        return;
+	      }
+	      setInsertingWidgetId(widget.id);
+	      try {
+	        const dashboard = dashboardsForInsert.find((dash) => dash.id === selectedDashboardId) || dashboardsForInsert[0];
+	        if (!dashboard) return;
 
-        const { rows: baseRows } = resolveDashboardBaseData(normalizedProject, dashboard ?? null);
-        const rows = applyWidgetFilters(baseRows, dashboard?.globalFilters);
-
-        const payload = buildDashboardChartPayload(widget, rows, {
-          theme: REALPPTX_CHART_THEME,
-          sourceDashboardId: dashboard?.id,
-        });
-        if (!payload) {
-          showToast('Nothing to insert', 'This chart has no data after filters.', 'warning');
-          return;
-        }
+	        const payload = await requestPptxPayload(dashboard, widget);
+	        if (!payload) {
+	          showToast('Nothing to insert', 'This chart has no data after filters.', 'warning');
+	          return;
+	        }
         iframeWindow.postMessage(
           {
             source: 'realdata-host',
@@ -287,12 +418,12 @@ const ReportBuilder: React.FC<ReportBuilderProps> = ({ project, onUpdateProject 
       } catch (error) {
         console.error('Failed to prepare dashboard chart payload', error);
         showToast('Insert failed', 'Unable to serialize chart data.', 'error');
-      } finally {
-        setInsertingWidgetId(null);
-      }
-    },
-    [dashboardsForInsert, iframeWindow, normalizedProject, selectedDashboardId, showToast]
-  );
+	      } finally {
+	        setInsertingWidgetId(null);
+	      }
+	    },
+	    [dashboardsForInsert, iframeWindow, requestPptxPayload, selectedDashboardId, showToast]
+	  );
 
   const handleIframeLoad = useCallback((iframe: HTMLIFrameElement | null) => {
     setIframeWindow(iframe?.contentWindow ?? null);
@@ -335,145 +466,149 @@ const ReportBuilder: React.FC<ReportBuilderProps> = ({ project, onUpdateProject 
       }
 
       // Automation Report: Handle update request for linked charts
-      if (event.data.type === 'request-chart-updates') {
-        const linkedCharts = event.data.payload?.linkedCharts as Array<{
-          elementId: string;
-          widgetId: string;
-          dashboardId: string;
-          kind?: 'chart' | 'kpi';
-        }> | undefined;
+	      if (event.data.type === 'request-chart-updates') {
+	        const linkedCharts = event.data.payload?.linkedCharts as Array<{
+	          elementId: string;
+	          widgetId: string;
+	          dashboardId: string;
+	          kind?: 'chart' | 'kpi';
+	        }> | undefined;
 
         if (!linkedCharts || linkedCharts.length === 0) {
           showToast('No linked charts', 'No charts are linked to Dashboard widgets.', 'info');
           return;
         }
 
-        let updatedCount = 0;
-        linkedCharts.forEach((linked) => {
-          // Find the dashboard and widget
-          const dashboard = dashboardsForInsert.find((d) => d.id === linked.dashboardId);
-          if (!dashboard) return;
+	        void (async () => {
+	          let updatedCount = 0;
 
-          const widget = dashboard.widgets?.find((w) => w.id === linked.widgetId);
-          if (!widget) return;
+	          const byDashboard = new Map<string, typeof linkedCharts>();
+	          for (const linked of linkedCharts) {
+	            if (!linked?.dashboardId) continue;
+	            const list = byDashboard.get(linked.dashboardId) || [];
+	            list.push(linked);
+	            byDashboard.set(linked.dashboardId, list);
+	          }
 
-          // Build fresh payload for this widget
-          const { rows: baseRows } = resolveDashboardBaseData(normalizedProject, dashboard);
-          const rows = applyWidgetFilters(baseRows, dashboard.globalFilters);
+	          for (const [dashboardId, links] of byDashboard) {
+	            const dashboard = dashboardsForInsert.find((d) => d.id === dashboardId);
+	            if (!dashboard) continue;
 
-          const payload = buildDashboardChartPayload(widget, rows, {
-            theme: REALPPTX_CHART_THEME,
-            sourceDashboardId: dashboard.id,
-          });
+	            for (const linked of links) {
+	              const widget = dashboard.widgets?.find((w) => w.id === linked.widgetId);
+	              if (!widget) continue;
 
-          if (!payload) return;
+	              const payload = await requestPptxPayload(dashboard, widget);
+	              if (!payload) continue;
 
-          if (linked.kind === 'kpi' || payload.chartType === 'kpi') {
-            const escapeHtml = (input: string) =>
-              input
-                .replace(/&/g, '&amp;')
-                .replace(/</g, '&lt;')
-                .replace(/>/g, '&gt;')
-                .replace(/\"/g, '&quot;')
-                .replace(/'/g, '&#39;');
+	              if (linked.kind === 'kpi' || payload.chartType === 'kpi') {
+	                const escapeHtml = (input: string) =>
+	                  input
+	                    .replace(/&/g, '&amp;')
+	                    .replace(/</g, '&lt;')
+	                    .replace(/>/g, '&gt;')
+	                    .replace(/\"/g, '&quot;')
+	                    .replace(/'/g, '&#39;');
 
-            const toNumber = (raw: unknown) => {
-              if (raw === null || raw === undefined) return 0;
-              if (typeof raw === 'number') return Number.isFinite(raw) ? raw : 0;
-              if (typeof raw === 'object' && (raw as any).value !== undefined) {
-                const n = Number((raw as any).value);
-                return Number.isFinite(n) ? n : 0;
-              }
-              const n = Number(raw);
-              return Number.isFinite(n) ? n : 0;
-            };
+	                const toNumber = (raw: unknown) => {
+	                  if (raw === null || raw === undefined) return 0;
+	                  if (typeof raw === 'number') return Number.isFinite(raw) ? raw : 0;
+	                  if (typeof raw === 'object' && (raw as any).value !== undefined) {
+	                    const n = Number((raw as any).value);
+	                    return Number.isFinite(n) ? n : 0;
+	                  }
+	                  const n = Number(raw);
+	                  return Number.isFinite(n) ? n : 0;
+	                };
 
-            const formatKpiValue = (
-              value: number,
-              mode?: 'auto' | 'text' | 'number' | 'compact' | 'accounting'
-            ) => {
-              if (!Number.isFinite(value)) return '0';
-              switch (mode) {
-                case 'text':
-                  return String(value);
-                case 'number':
-                  return new Intl.NumberFormat(undefined, { maximumFractionDigits: 0 }).format(value);
-                case 'compact':
-                  return new Intl.NumberFormat(undefined, { notation: 'compact', compactDisplay: 'short', maximumFractionDigits: 1 }).format(value);
-                case 'accounting':
-                  return new Intl.NumberFormat(undefined, { useGrouping: true, minimumFractionDigits: 0, maximumFractionDigits: 2 }).format(value);
-                case 'auto':
-                default: {
-                  const abs = Math.abs(value);
-                  if (abs >= 1_000_000) {
-                    return new Intl.NumberFormat(undefined, { notation: 'compact', compactDisplay: 'short', maximumFractionDigits: 1 }).format(value);
-                  }
-                  if (Number.isInteger(value)) {
-                    return new Intl.NumberFormat(undefined, { maximumFractionDigits: 0 }).format(value);
-                  }
-                  return new Intl.NumberFormat(undefined, { useGrouping: true, minimumFractionDigits: 0, maximumFractionDigits: 2 }).format(value);
-                }
-              }
-            };
+	                const formatKpiValue = (
+	                  value: number,
+	                  mode?: 'auto' | 'text' | 'number' | 'compact' | 'accounting'
+	                ) => {
+	                  if (!Number.isFinite(value)) return '0';
+	                  switch (mode) {
+	                    case 'text':
+	                      return String(value);
+	                    case 'number':
+	                      return new Intl.NumberFormat(undefined, { maximumFractionDigits: 0 }).format(value);
+	                    case 'compact':
+	                      return new Intl.NumberFormat(undefined, { notation: 'compact', compactDisplay: 'short', maximumFractionDigits: 1 }).format(value);
+	                    case 'accounting':
+	                      return new Intl.NumberFormat(undefined, { useGrouping: true, minimumFractionDigits: 0, maximumFractionDigits: 2 }).format(value);
+	                    case 'auto':
+	                    default: {
+	                      const abs = Math.abs(value);
+	                      if (abs >= 1_000_000) {
+	                        return new Intl.NumberFormat(undefined, { notation: 'compact', compactDisplay: 'short', maximumFractionDigits: 1 }).format(value);
+	                      }
+	                      if (Number.isInteger(value)) {
+	                        return new Intl.NumberFormat(undefined, { maximumFractionDigits: 0 }).format(value);
+	                      }
+	                      return new Intl.NumberFormat(undefined, { useGrouping: true, minimumFractionDigits: 0, maximumFractionDigits: 2 }).format(value);
+	                    }
+	                  }
+	                };
 
-            const raw = payload.data?.series?.[0]?.[0];
-            const value = toNumber(raw);
-            const valueFormat = payload.options?.dataLabelValueFormat;
-            const text = formatKpiValue(value, valueFormat);
-            const themeAccent = payload.theme?.colors?.[0] || payload.theme?.textColor || '#111827';
-            const color = payload.options?.dataLabelColor || themeAccent;
-            const fontFamily = payload.options?.dataLabelFontFamily;
-            const fontWeight = payload.options?.dataLabelFontWeight || 'bold';
+	                const raw = payload.data?.series?.[0]?.[0];
+	                const value = toNumber(raw);
+	                const valueFormat = payload.options?.dataLabelValueFormat;
+	                const text = formatKpiValue(value, valueFormat);
+	                const themeAccent = payload.theme?.colors?.[0] || payload.theme?.textColor || '#111827';
+	                const color = payload.options?.dataLabelColor || themeAccent;
+	                const fontFamily = payload.options?.dataLabelFontFamily;
+	                const fontWeight = payload.options?.dataLabelFontWeight || 'bold';
 
-            const safeText = escapeHtml(text);
-            const content = `<p style="text-align:center;"><span style="font-weight:${fontWeight};${fontFamily ? ` font-family:${fontFamily};` : ''}">${safeText}</span></p>`;
+	                const safeText = escapeHtml(text);
+	                const content = `<p style="text-align:center;"><span style="font-weight:${fontWeight};${fontFamily ? ` font-family:${fontFamily};` : ''}">${safeText}</span></p>`;
 
-            iframeWindow?.postMessage(
-              {
-                source: 'realdata-host',
-                type: 'update-kpi-text',
-                payload: {
-                  elementId: linked.elementId,
-                  content,
-                  defaultColor: color,
-                  ...(fontFamily ? { defaultFontName: fontFamily } : {}),
-                },
-              },
-              '*'
-            );
-          } else {
-            // Send update to RealPPTX
-            iframeWindow?.postMessage(
-              {
-                source: 'realdata-host',
-                type: 'update-chart-data',
-                payload: {
-                  elementId: linked.elementId,
-                  data: payload.data,
-                  options: payload.options,
-                  theme: payload.theme,
-                },
-              },
-              '*'
-            );
-          }
-          updatedCount++;
-        });
+	                iframeWindow?.postMessage(
+	                  {
+	                    source: 'realdata-host',
+	                    type: 'update-kpi-text',
+	                    payload: {
+	                      elementId: linked.elementId,
+	                      content,
+	                      defaultColor: color,
+	                      ...(fontFamily ? { defaultFontName: fontFamily } : {}),
+	                    },
+	                  },
+	                  '*'
+	                );
+	              } else {
+	                iframeWindow?.postMessage(
+	                  {
+	                    source: 'realdata-host',
+	                    type: 'update-chart-data',
+	                    payload: {
+	                      elementId: linked.elementId,
+	                      data: payload.data,
+	                      options: payload.options,
+	                      theme: payload.theme,
+	                    },
+	                  },
+	                  '*'
+	                );
+	              }
 
-        if (updatedCount > 0) {
-          showToast('Charts updated', `${updatedCount} element(s) refreshed with latest data.`, 'success');
-        } else {
-          showToast('No updates', 'Could not find matching widgets for linked charts.', 'warning');
-        }
-      }
+	              updatedCount++;
+	            }
+	          }
+
+	          if (updatedCount > 0) {
+	            showToast('Charts updated', `${updatedCount} element(s) refreshed with latest data.`, 'success');
+	          } else {
+	            showToast('No updates', 'Could not find matching widgets for linked charts.', 'warning');
+	          }
+	        })();
+	      }
 
       // Automation Report: No linked charts message
       if (event.data.type === 'no-linked-charts') {
         showToast('No linked charts', 'Insert charts from Dashboard first to enable updates.', 'info');
       }
-    },
-    [dashboardsForInsert, iframeWindow, normalizedProject, pendingSaveIntent, persistSlidesFromExport, queueAutosave, requestPresentationExport, showToast]
-  );
+	    },
+	    [dashboardsForInsert, iframeWindow, pendingSaveIntent, persistSlidesFromExport, queueAutosave, requestPresentationExport, requestPptxPayload, showToast]
+	  );
 
   useEffect(() => {
     window.addEventListener('message', handlePptistMessage);
