@@ -36,11 +36,11 @@ const { dialogForExport } = storeToRefs(mainStore)
 const setDialogForExport = mainStore.setDialogForExport
 
 const tabs: TabItem[] = [
-  { key: 'realpptx', label: '导出 RealPPTX 文件' },
-  { key: 'pptx', label: '导出 PPTX' },
-  { key: 'image', label: '导出图片' },
-  { key: 'json', label: '导出 JSON' },
-  { key: 'pdf', label: '打印 / 导出 PDF' },
+  { key: 'realpptx', label: 'Export RealPPTX' },
+  { key: 'pptx', label: 'Export PPTX' },
+  { key: 'image', label: 'Export Image' },
+  { key: 'json', label: 'Export JSON' },
+  { key: 'pdf', label: 'Export PDF' },
 ]
 
 const currentDialogComponent = computed<unknown>(() => {

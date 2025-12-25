@@ -22,18 +22,18 @@
     </div>
     <div class="configs">
       <div class="row">
-        <div class="title">导出范围：</div>
+        <div class="title">Export Range</div>
         <RadioGroup
           class="config-item"
           v-model:value="rangeType"
         >
-          <RadioButton style="width: 33.33%;" value="all">全部</RadioButton>
-          <RadioButton style="width: 33.33%;" value="current">当前页</RadioButton>
-          <RadioButton style="width: 33.33%;" value="custom">自定义</RadioButton>
+          <RadioButton style="width: 33.33%;" value="all">All</RadioButton>
+          <RadioButton style="width: 33.33%;" value="current">Current</RadioButton>
+          <RadioButton style="width: 33.33%;" value="custom">Custom</RadioButton>
         </RadioGroup>
       </div>
       <div class="row" v-if="rangeType === 'custom'">
-        <div class="title" :data-range="`（${range[0]} ~ ${range[1]}）`">自定义范围：</div>
+        <div class="title" :data-range="`(${range[0]} ~ ${range[1]})`">Page Range</div>
         <Slider
           class="config-item"
           range
@@ -44,7 +44,7 @@
         />
       </div>
       <div class="row">
-        <div class="title">方向：</div>
+        <div class="title">Orientation</div>
         <Select
           class="config-item"
           v-model:value="orientation"
@@ -56,7 +56,7 @@
         />
       </div>
       <div class="row">
-        <div class="title">页面尺寸：</div>
+        <div class="title">Page Size</div>
         <Select
           class="config-item"
           v-model:value="pageSize"
@@ -67,7 +67,7 @@
         />
       </div>
       <div class="row">
-        <div class="title">每页数量：</div>
+        <div class="title">Per Page</div>
         <Select 
           class="config-item"
           v-model:value="count"
@@ -79,22 +79,19 @@
         />
       </div>
       <div class="row">
-        <div class="title">边缘留白：</div>
+        <div class="title">Padding</div>
         <div class="config-item">
           <Switch v-model:value="padding" />
         </div>
       </div>
-      <div class="tip">
-        提示：若打印预览与实际样式不一致，请在弹出的打印窗口中勾选【背景图形】选项。
-      </div>
     </div>
 
     <div class="btns">
-      <Button class="btn export" type="primary" @click="expPDF()"><IconDownload /> 打印 / 导出 PDF</Button>
-      <Button class="btn close" @click="emit('close')">关闭</Button>
+      <Button class="btn export" type="primary" @click="expPDF()"><IconDownload /> Export PDF</Button>
+      <Button class="btn close" @click="emit('close')">Close</Button>
     </div>
 
-    <FullscreenSpin :loading="exporting" tip="正在导出..." />
+    <FullscreenSpin :loading="exporting" tip="Exporting..." />
   </div>
 </template>
 
@@ -183,16 +180,26 @@ const expPDF = async () => {
       ? (orient === 'landscape' ? a4.w : a4.h)
       : (orient === 'landscape' ? slideHeight : slideWidth)
 
-    const pageWidth = baseW + margin * 2
-    const pageHeight = baseH * perPage + margin * 2
+    const formatWidth = baseW + margin * 2
+    const formatHeight = baseH * perPage + margin * 2
+
+    const orientationValue = orient === 'landscape' ? 'landscape' : 'portrait'
 
     const pdf = new jsPDF({
+      orientation: orientationValue,
       unit: 'px',
-      format: [pageWidth, pageHeight],
+      format: [formatWidth, formatHeight],
       compress: true,
       hotfixes: ['px_scaling'],
     })
     const pdfAny = pdf as any
+
+    const getPageSize = () => {
+      const internal = (pdfAny && pdfAny.internal && pdfAny.internal.pageSize) ? pdfAny.internal.pageSize : null
+      const w = internal?.getWidth ? internal.getWidth() : formatWidth
+      const h = internal?.getHeight ? internal.getHeight() : formatHeight
+      return { w, h }
+    }
 
     await new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve())))
     await new Promise((r) => setTimeout(r, 250))
@@ -208,6 +215,8 @@ const expPDF = async () => {
       backgroundColor: '#ffffff',
     }
 
+    const { w: pageWidth, h: pageHeight } = getPageSize()
+
     const availableWidth = pageWidth - margin * 2
     const blockHeight = (pageHeight - margin * 2) / perPage
     const scale = Math.min(availableWidth / slideWidth, blockHeight / slideHeight)
@@ -217,7 +226,9 @@ const expPDF = async () => {
     const offsetYInBlock = (blockHeight - drawHeight) / 2
 
     for (let pageIndex = 0; pageIndex < totalPages; pageIndex++) {
-      if (pageIndex > 0) pdfAny.addPage([pageWidth, pageHeight])
+      if (pageIndex > 0) {
+        pdfAny.addPage([formatWidth, formatHeight], orientationValue)
+      }
 
       const start = pageIndex * perPage
       const end = Math.min(start + perPage, slideNodes.length)
