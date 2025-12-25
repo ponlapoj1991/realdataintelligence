@@ -8,6 +8,23 @@ body {
   background-color: #f8f9fa;
 }
 
+/* Sonner toast styling (Enterprise default) */
+.rdi-toast [data-title] {
+  font-size: 1rem;
+  font-weight: 600;
+  line-height: 1.25;
+}
+
+.rdi-toast [data-description] {
+  margin-top: 0.25rem;
+  font-size: 0.875rem;
+  line-height: 1.25;
+}
+
+.rdi-toast-action {
+  border: 0;
+}
+
 /* Custom scrollbar for tables */
 ::-webkit-scrollbar {
   width: 8px;

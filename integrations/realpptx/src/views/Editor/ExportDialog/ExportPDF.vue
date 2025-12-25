@@ -115,16 +115,17 @@ const expPDF = async () => {
 
     const { jsPDF } = await import('jspdf')
 
+    const pxToPt = 72 / 96
     const slideWidth = 1600
     const slideHeight = 1600 * viewportRatio.value
     const margin = padding.value ? 50 : 0
     const perPage = rangeType.value === 'all' ? Math.max(1, count.value) : 1
 
-    const pageWidth = slideWidth + margin * 2
-    const pageHeight = slideHeight * perPage + margin * 2
+    const pageWidth = (slideWidth + margin * 2) * pxToPt
+    const pageHeight = (slideHeight * perPage + margin * 2) * pxToPt
 
     const pdf = new jsPDF({
-      unit: 'px',
+      unit: 'pt',
       format: [pageWidth, pageHeight],
       compress: true,
     })
@@ -144,8 +145,11 @@ const expPDF = async () => {
         const node = slideNodes[i]
         const dataUrl = await toJpeg(node, config)
 
-        const offsetY = margin + (i - start) * slideHeight
-        pdfAny.addImage(dataUrl, 'JPEG', margin, offsetY, slideWidth, slideHeight, undefined, 'FAST')
+        const x = margin * pxToPt
+        const y = (margin + (i - start) * slideHeight) * pxToPt
+        const w = slideWidth * pxToPt
+        const h = slideHeight * pxToPt
+        pdfAny.addImage(dataUrl, 'JPEG', x, y, w, h, undefined, 'FAST')
       }
     }
 

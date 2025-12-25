@@ -32,6 +32,7 @@ import {
   type ImportProgress
 } from '../utils/projectBackup';
 import { pickSaveFileHandle } from '../utils/fileSystemAccess';
+import { useToast } from '../components/ToastProvider';
 
 interface LandingProps {
   onSelectProject: (project: Project) => void;
@@ -39,6 +40,7 @@ interface LandingProps {
 }
 
 const Landing: React.FC<LandingProps> = ({ onSelectProject, onOpenSettings }) => {
+  const { showToast } = useToast();
   const [projects, setProjects] = useState<Project[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isCreating, setIsCreating] = useState(false);
@@ -166,6 +168,8 @@ const Landing: React.FC<LandingProps> = ({ onSelectProject, onOpenSettings }) =>
         }
       );
 
+      showToast('Export complete', suggestedName, 'success');
+
       // Show success briefly before closing
       setTimeout(() => {
         setExportingProjectId(null);
@@ -173,7 +177,7 @@ const Landing: React.FC<LandingProps> = ({ onSelectProject, onOpenSettings }) =>
       }, 1500);
     } catch (error) {
       console.error('Export failed:', error);
-      alert(`Export failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
+      showToast('Export failed', error instanceof Error ? error.message : 'Unknown error', 'error');
       setExportingProjectId(null);
       setExportProgress(null);
     }
