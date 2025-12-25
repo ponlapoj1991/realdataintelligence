@@ -272,7 +272,18 @@ const DashboardMagic: React.FC<DashboardMagicProps> = ({ project, onUpdateProjec
 	  }, [resolvedSourceForMagic?.id, resolvedSourceForMagic?.columns]);
 
 	  const columnTypeMap = useMemo(() => {
-	    const sampleRows = baseData.slice(0, SAMPLE_SIZE);
+	    const targetSampleCount = 800;
+	    const sampleRows =
+	      baseData.length <= targetSampleCount
+	        ? baseData
+	        : (() => {
+	            const out: RawRow[] = [];
+	            const step = Math.max(1, Math.floor(baseData.length / targetSampleCount));
+	            for (let i = 0; i < baseData.length && out.length < targetSampleCount; i += step) {
+	              out.push(baseData[i]);
+	            }
+	            return out;
+	          })();
 	    const map: Record<string, FilterDataType> = {};
 	    availableColumns.forEach(col => {
 	      const declared = sourceColumnTypeMap[col];
@@ -290,6 +301,74 @@ const DashboardMagic: React.FC<DashboardMagicProps> = ({ project, onUpdateProjec
     (column: string): FilterDataType => columnTypeMap[column] || 'text',
     [columnTypeMap]
   );
+
+  const filtersRef = useRef<DashboardFilter[]>([]);
+  useEffect(() => {
+    filtersRef.current = filters;
+  }, [filters]);
+
+  const normalizeFiltersForDetectedTypes = useCallback(
+    (input: DashboardFilter[]) => {
+      let changed = false;
+      const next = input.map((f) => {
+        if (!f?.column) return f;
+        const detected = getColumnType(f.column);
+        if (detected !== 'date') return f;
+
+        const normalizedValue = f.value ? normalizeDateInputValue(String(f.value)) : '';
+        const normalizedEndValue = f.endValue ? normalizeDateInputValue(String(f.endValue)) : '';
+        if (f.value && !normalizedValue) return f;
+        if (f.endValue && !normalizedEndValue) return f;
+
+        const nextOperator =
+          f.dataType === 'date' ? normalizeDateOperator(f.operator) : ('between' as DateFilterOperator);
+
+        let out = f;
+        if (out.dataType !== 'date') {
+          out = { ...out, dataType: 'date' };
+          changed = true;
+        }
+        if ((out.operator || '') !== nextOperator) {
+          out = { ...out, operator: nextOperator };
+          changed = true;
+        }
+        if ((out.value || '') !== normalizedValue) {
+          out = { ...out, value: normalizedValue };
+          changed = true;
+        }
+
+        if (nextOperator === 'between') {
+          const endToSet = normalizedEndValue || (normalizedValue ? normalizedValue : '');
+          if ((out.endValue || '') !== endToSet) {
+            out = { ...out, endValue: endToSet };
+            changed = true;
+          }
+        } else {
+          if ((out.endValue || '') !== '') {
+            out = { ...out, endValue: '' };
+            changed = true;
+          }
+        }
+
+        return out;
+      });
+
+      return { next, changed };
+    },
+    [getColumnType]
+  );
+
+  useEffect(() => {
+    if (!editingDashboard) return;
+    const current = filtersRef.current || [];
+    if (current.length === 0) return;
+
+    const { next, changed } = normalizeFiltersForDetectedTypes(current);
+    if (!changed) return;
+
+    setFilters(next);
+    void persistGlobalFilters(next);
+  }, [editingDashboard?.id, normalizeFiltersForDetectedTypes, persistGlobalFilters]);
 
   const matchesFilterCondition = useCallback((row: RawRow, filter: DashboardFilter) => {
     if (!filter.column) return true;
