@@ -75,6 +75,7 @@ export const ToastProvider: React.FC<ToastProviderProps> = ({ children }) => {
         position="bottom-right"
         richColors={false}
         closeButton={false}
+        style={{ zIndex: 10000 }}
         toastOptions={{
           className:
             'rdi-toast bg-white border border-gray-200 shadow-lg rounded-xl px-4 py-3 min-w-[360px]',

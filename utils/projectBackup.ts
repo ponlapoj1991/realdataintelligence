@@ -14,7 +14,6 @@
 
 import JSZip from 'jszip';
 import { saveAs } from 'file-saver';
-import { writeBlobToFileHandle } from './fileSystemAccess';
 import {
   getProjectMetadata,
   saveProjectMetadata,
@@ -70,24 +69,13 @@ const sanitizeFileNamePart = (name: string) => {
   return name.replace(/[^a-z0-9]/gi, '_');
 };
 
-const sanitizeZipFileName = (fileName: string) => {
-  const base = String(fileName || '').trim();
-  if (!base) return `project_backup_${new Date().toISOString().slice(0, 10).replace(/-/g, '')}.zip`;
-  const cleaned = base.replace(/\.zip$/i, '');
-  return `${sanitizeFileNamePart(cleaned)}.zip`;
-};
-
 /**
  * Export a project to a downloadable .zip file
  */
 export const exportProject = async (
   projectId: string,
   onProgress?: (progress: ExportProgress) => void,
-  opts?: {
-    saveHandle?: any;
-    fallbackFileName?: string;
-  }
-): Promise<void> => {
+): Promise<string> => {
   const report = (phase: ExportProgress['phase'], percent: number, message: string) => {
     onProgress?.({ phase, percent, message });
   };
@@ -201,17 +189,11 @@ export const exportProject = async (
     report('compressing', 95, 'Preparing download...');
 
     // Trigger download / save to disk
-    const fallbackFileName = opts?.fallbackFileName
-      ? sanitizeZipFileName(opts.fallbackFileName)
-      : `${sanitizeFileNamePart(metadata.name)}_backup_${formatDate(new Date())}.zip`;
-
-    if (opts?.saveHandle) {
-      await writeBlobToFileHandle(opts.saveHandle, blob);
-    } else {
-      saveAs(blob, fallbackFileName);
-    }
+    const filename = `${sanitizeFileNamePart(metadata.name)}_backup_${formatDate(new Date())}.zip`;
+    saveAs(blob, filename);
 
     report('done', 100, 'Export complete!');
+    return filename;
   } catch (error) {
     console.error('Export failed:', error);
     throw error;

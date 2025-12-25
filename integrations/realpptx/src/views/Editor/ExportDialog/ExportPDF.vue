@@ -70,7 +70,6 @@ import { useSlidesStore } from '@/store'
 import { saveAs } from 'file-saver'
 import { toJpeg } from 'html-to-image'
 import message from '@/utils/message'
-import { pickSaveFileHandle, writeBlobToFileHandle } from '@/utils/fileSystemAccess'
 
 import ThumbnailSlide from '@/views/components/ThumbnailSlide/index.vue'
 import Switch from '@/components/Switch.vue'
@@ -105,14 +104,6 @@ const expPDF = async () => {
   exporting.value = true
   try {
     const fileName = sanitizeFileName(title.value, '.pdf')
-    const savePick = await pickSaveFileHandle({
-      suggestedName: fileName,
-      description: 'PDF',
-      mime: 'application/pdf',
-      extensions: ['.pdf'],
-    })
-    if (savePick.kind === 'cancelled') return
-
     const { jsPDF } = await import('jspdf')
 
     const pxToPt = 72 / 96
@@ -134,7 +125,13 @@ const expPDF = async () => {
     const slideNodes = Array.from(pdfThumbnailsRef.value.querySelectorAll('.thumbnail')) as HTMLElement[]
     const totalPages = Math.ceil(slideNodes.length / perPage) || 1
 
-    const config = { quality: 0.95, width: slideWidth, fontEmbedCSS: '' }
+    const config = {
+      quality: 0.95,
+      width: slideWidth,
+      height: slideHeight,
+      fontEmbedCSS: '',
+      backgroundColor: '#ffffff',
+    }
 
     for (let pageIndex = 0; pageIndex < totalPages; pageIndex++) {
       if (pageIndex > 0) pdfAny.addPage([pageWidth, pageHeight])
@@ -143,6 +140,10 @@ const expPDF = async () => {
       const end = Math.min(start + perPage, slideNodes.length)
       for (let i = start; i < end; i++) {
         const node = slideNodes[i]
+
+        const foreignObjectSpans = node.querySelectorAll('foreignObject [xmlns]') as NodeListOf<HTMLElement>
+        foreignObjectSpans.forEach(spanRef => spanRef.removeAttribute('xmlns'))
+
         const dataUrl = await toJpeg(node, config)
 
         const x = margin * pxToPt
@@ -154,12 +155,7 @@ const expPDF = async () => {
     }
 
     const outBlob = pdf.output('blob') as Blob
-    if (savePick.kind === 'picked') {
-      await writeBlobToFileHandle(savePick.handle, outBlob)
-    }
-    else {
-      saveAs(outBlob, fileName)
-    }
+    saveAs(outBlob, fileName)
   }
   catch (err) {
     console.error(err)
@@ -194,6 +190,14 @@ const expPDF = async () => {
   &.break-page {
     break-after: page;
   }
+}
+
+:deep(.thumbnail-slide) {
+  position: relative;
+}
+
+:deep(.thumbnail-slide .elements) {
+  position: relative;
 }
 .configs {
   width: 300px;
