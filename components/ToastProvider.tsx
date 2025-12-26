@@ -80,8 +80,6 @@ export const ToastProvider: React.FC<ToastProviderProps> = ({ children }) => {
           className:
             'rdi-toast bg-white border border-gray-200 shadow-lg rounded-xl px-4 py-3 min-w-[360px]',
           descriptionClassName: 'rdi-toast-desc text-gray-600',
-          actionButtonClassName:
-            'rdi-toast-action bg-transparent text-gray-700 hover:text-gray-900 font-medium px-2 py-1',
         }}
       />
     </ToastContext.Provider>

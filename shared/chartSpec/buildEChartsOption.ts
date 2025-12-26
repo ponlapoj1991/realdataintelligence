@@ -25,10 +25,10 @@ export const buildEChartsOption = (payload: SharedChartPayload | null, colSpan: 
 
   type AxisLabelConfig = {
     color?: string;
-    fontSize: number;
+    fontSize?: number;
     fontFamily?: string;
     rotate?: number;
-    overflow: 'truncate';
+    overflow?: 'truncate';
     width?: number;
     formatter?: (value: any) => string;
   };

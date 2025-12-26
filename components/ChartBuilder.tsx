@@ -410,7 +410,7 @@ const ChartBuilder: React.FC<ChartBuilderProps> = ({
   chartTheme = CLASSIC_ANALYTICS_THEME,
   workerSource
 }) => {
-  const previewWorker = useMagicAggregationWorker(workerSource ?? data, chartTheme);
+  const previewWorker = useMagicAggregationWorker(workerSource ?? { mode: 'rows', rows: data }, chartTheme);
   const transformWorker = useTransformPipelineWorker();
   const [profileRows, setProfileRows] = useState<RawRow[]>([]);
   const profileReqRef = useRef(0);

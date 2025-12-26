@@ -19,7 +19,7 @@ const normalizeAiSummaryContexts = (contexts: AISummaryContext[] | undefined): A
   return src.map((c) => {
     const sort =
       c.sort && typeof c.sort === 'object' && typeof (c.sort as any).column === 'string'
-        ? { column: String((c.sort as any).column), direction: (c.sort as any).direction === 'asc' ? 'asc' : 'desc' }
+        ? { column: String((c.sort as any).column), direction: ((c.sort as any).direction === 'asc' ? 'asc' : 'desc') as 'asc' | 'desc' }
         : null;
 
     const limit = typeof c.limit === 'number' && Number.isFinite(c.limit) && c.limit > 0 ? Math.floor(c.limit) : 200;

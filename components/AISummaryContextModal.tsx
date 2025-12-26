@@ -33,7 +33,7 @@ const getColumnsForSource = (src: DataSource | undefined | null, transformRules:
 
 const buildVisibleColumns = (allColumns: string[], hiddenColumns: string[] | undefined): ColumnConfig[] => {
   const hidden = new Set(Array.isArray(hiddenColumns) ? hiddenColumns : []);
-  return allColumns.map((key) => ({ key, label: key, visible: !hidden.has(key) }));
+  return allColumns.map((key) => ({ key, label: key, type: 'string' as const, visible: !hidden.has(key) }));
 };
 
 const isAnalyzeReady = (draft: AISummaryContext) => {

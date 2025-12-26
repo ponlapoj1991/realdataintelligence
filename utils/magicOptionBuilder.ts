@@ -32,7 +32,15 @@ export const buildMagicEchartsOption = (payload: MagicChartPayload | null, colSp
 
   const buildAxisLine = (color?: string) => (color ? { lineStyle: { color } } : undefined);
 
-  const buildAxisLabel = (cfg: { fontSize?: number; fontFamily?: string; color?: string; rotate?: number }) => ({
+  const buildAxisLabel = (cfg: { fontSize?: number; fontFamily?: string; color?: string; rotate?: number }): {
+    color?: string;
+    fontSize?: number;
+    fontFamily?: string;
+    rotate?: number;
+    overflow?: string;
+    width?: number;
+    formatter?: (value: any) => string;
+  } => ({
     ...(cfg.color || textColor ? { color: cfg.color ?? textColor } : {}),
     // Scale font size if not explicit, or if explicit but we are compact mode (maybe reduce slightly?)
     // For now, if user set explicit size, respect it. If default, use scaled.
@@ -250,11 +258,11 @@ export const buildMagicEchartsOption = (payload: MagicChartPayload | null, colSp
       };
     }
 
-    const seriesTotals = data.series.map((s) => s.reduce((sum, v) => sum + getNumericValue(v), 0));
+    const seriesTotals = data.series.map((s) => s.reduce<number>((sum, v) => sum + getNumericValue(v), 0));
     const stackedIndexTotals =
       options?.stack || options?.percentStack
         ? data.labels.map((_, i) =>
-            data.series.reduce((sum, s) => sum + getNumericValue(s[i]), 0)
+            data.series.reduce<number>((sum, s) => sum + getNumericValue(s[i]), 0)
           )
         : [];
 
@@ -348,11 +356,11 @@ export const buildMagicEchartsOption = (payload: MagicChartPayload | null, colSp
   }
 
   if (type === 'line') {
-    const seriesTotals = data.series.map((s) => s.reduce((sum, v) => sum + getNumericValue(v), 0));
+    const seriesTotals = data.series.map((s) => s.reduce<number>((sum, v) => sum + getNumericValue(v), 0));
     const stackedIndexTotals =
       options?.stack || options?.percentStack
         ? data.labels.map((_, i) =>
-            data.series.reduce((sum, s) => sum + getNumericValue(s[i]), 0)
+            data.series.reduce<number>((sum, s) => sum + getNumericValue(s[i]), 0)
           )
         : [];
 
@@ -479,11 +487,11 @@ export const buildMagicEchartsOption = (payload: MagicChartPayload | null, colSp
   }
 
   if (type === 'area') {
-    const seriesTotals = data.series.map((s) => s.reduce((sum, v) => sum + getNumericValue(v), 0));
+    const seriesTotals = data.series.map((s) => s.reduce<number>((sum, v) => sum + getNumericValue(v), 0));
     const stackedIndexTotals =
       options?.stack || options?.percentStack
         ? data.labels.map((_, i) =>
-            data.series.reduce((sum, s) => sum + getNumericValue(s[i]), 0)
+            data.series.reduce<number>((sum, s) => sum + getNumericValue(s[i]), 0)
           )
         : [];
 
@@ -793,11 +801,11 @@ export const buildMagicEchartsOption = (payload: MagicChartPayload | null, colSp
     const usePointColorsForSingleBarSeries =
       !!(data.dataColors?.length) && resolvedTypes.filter((t) => t === 'bar').length === 1;
 
-    const seriesTotals = data.series.map((s) => s.reduce((sum, v) => sum + getNumericValue(v), 0));
+    const seriesTotals = data.series.map((s) => s.reduce<number>((sum, v) => sum + getNumericValue(v), 0));
     const stackedIndexTotals =
       options?.stack || options?.percentStack
         ? data.labels.map((_, i) =>
-            data.series.reduce((sum, s) => sum + getNumericValue(s[i]), 0)
+            data.series.reduce<number>((sum, s) => sum + getNumericValue(s[i]), 0)
           )
         : [];
 
