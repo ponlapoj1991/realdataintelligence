@@ -1,4 +1,4 @@
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, markRaw, onBeforeUnmount, onMounted, ref, toRaw, watch } from 'vue'
 import type { ChartData, ChartOptions, ChartType } from '@/types/slides'
 import useCreateElement from './useCreateElement'
 import useSlideHandler from './useSlideHandler'
@@ -20,6 +20,14 @@ interface DashboardChartMessage {
     widgetTitle?: string
     widgetId?: string
     sourceDashboardId?: string
+  }
+}
+
+const cloneForPostMessage = (value: any) => {
+  try {
+    return JSON.parse(JSON.stringify(toRaw(value)))
+  } catch {
+    return toRaw(value)
   }
 }
 
@@ -81,7 +89,7 @@ export default () => {
                 elementId: el.id,
                 tableId: el.canvasTableId,
                 kind: 'chart' as const,
-                widget: el.canvasWidgetConfig,
+                widget: cloneForPostMessage(el.canvasWidgetConfig),
               }
             }
             if (el.type === 'text' && el.canvasWidgetKind === 'kpi') {
@@ -89,7 +97,7 @@ export default () => {
                 elementId: el.id,
                 tableId: el.canvasTableId,
                 kind: 'kpi' as const,
-                widget: el.canvasWidgetConfig,
+                widget: cloneForPostMessage(el.canvasWidgetConfig),
               }
             }
             return null
@@ -321,7 +329,7 @@ export default () => {
           canvasWidgetId,
           canvasTableId: tableId,
           canvasWidgetKind: 'kpi' as const,
-          canvasWidgetConfig: widget,
+          canvasWidgetConfig: markRaw(widget),
           dashboardWidgetKind: 'kpi' as const,
         }
 
@@ -367,7 +375,7 @@ export default () => {
       nextProps.name = widget?.title || chart.meta?.widgetTitle
       nextProps.canvasWidgetId = canvasWidgetId
       nextProps.canvasTableId = tableId
-      nextProps.canvasWidgetConfig = widget
+      nextProps.canvasWidgetConfig = markRaw(widget)
 
       if (elementId) {
         slidesStore.updateElement({ id: elementId, props: nextProps })

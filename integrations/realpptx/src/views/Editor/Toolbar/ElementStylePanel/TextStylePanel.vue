@@ -86,7 +86,7 @@
 </template>
 
 <script lang="ts" setup>
-import { computed, ref, watch } from 'vue'
+ import { computed, ref, toRaw, watch } from 'vue'
 import { storeToRefs } from 'pinia'
 import { useMainStore, useSlidesStore } from '@/store'
 import type { PPTTextElement } from '@/types/slides'
@@ -198,6 +198,12 @@ const isCanvasWidgetKpi = computed(() => {
 const requestEditCanvasWidget = () => {
   const el: any = handleElement.value as any
   if (!el?.id || !el?.canvasTableId || !el?.canvasWidgetConfig) return
+  let safeWidget: any = el.canvasWidgetConfig
+  try {
+    safeWidget = JSON.parse(JSON.stringify(toRaw(el.canvasWidgetConfig)))
+  } catch {
+    safeWidget = toRaw(el.canvasWidgetConfig)
+  }
   window.parent?.postMessage(
     {
       source: 'realpptx',
@@ -205,7 +211,7 @@ const requestEditCanvasWidget = () => {
       payload: {
         elementId: el.id,
         tableId: el.canvasTableId,
-        widget: el.canvasWidgetConfig,
+        widget: safeWidget,
       },
     },
     '*',

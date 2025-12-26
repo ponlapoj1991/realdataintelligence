@@ -19,7 +19,7 @@
       <Button class="full-width-btn" @click="chartDataEditorVisible = true">
         <IconEdit /> Edit Value
       </Button>
-      <Button v-if="isCanvasWidget" class="full-width-btn mt-2" type="primary" @click="requestEditCanvasChart">
+      <Button v-if="isCanvasWidget" class="full-width-btn mt-3" type="primary" @click="requestEditCanvasChart">
         <IconEdit /> Edit Chart
       </Button>
     </div>
@@ -403,7 +403,7 @@
 </template>
 
 <script lang="ts" setup>
-import { computed, onUnmounted, ref, watch, type Ref } from 'vue'
+ import { computed, onUnmounted, ref, toRaw, watch, type Ref } from 'vue'
 import { storeToRefs } from 'pinia'
 import { useMainStore, useSlidesStore } from '@/store'
 import type { ChartData, ChartOptions, ChartType, PPTChartElement } from '@/types/slides'
@@ -452,6 +452,12 @@ const isCanvasWidget = computed(() => {
 const requestEditCanvasChart = () => {
   const el: any = handleChartElement.value as any
   if (!el?.id || !el?.canvasTableId || !el?.canvasWidgetConfig) return
+  let safeWidget: any = el.canvasWidgetConfig
+  try {
+    safeWidget = JSON.parse(JSON.stringify(toRaw(el.canvasWidgetConfig)))
+  } catch {
+    safeWidget = toRaw(el.canvasWidgetConfig)
+  }
   window.parent?.postMessage(
     {
       source: 'realpptx',
@@ -459,7 +465,7 @@ const requestEditCanvasChart = () => {
       payload: {
         elementId: el.id,
         tableId: el.canvasTableId,
-        widget: el.canvasWidgetConfig,
+        widget: safeWidget,
       },
     },
     '*',
