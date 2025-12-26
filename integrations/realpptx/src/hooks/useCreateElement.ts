@@ -112,7 +112,7 @@ export default () => {
    * 创建图表元素
    * @param chartType 图表类型
    */
-  const createChartElement = (type: ChartType, overrides?: ChartElementOverrides) => {
+  const createChartElement = (type: ChartType, overrides?: ChartElementOverrides & Record<string, any>) => {
     createElement({
       type: 'chart',
       id: nanoid(10),
@@ -133,6 +133,7 @@ export default () => {
       // Automation Report: Link to Dashboard widget for updates
       widgetId: overrides?.widgetId,
       dashboardId: overrides?.dashboardId,
+      ...(overrides || {}),
     })
   }
   

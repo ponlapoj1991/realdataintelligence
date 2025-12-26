@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Plus, Edit3, Trash2, ArrowLeft, Loader2, Save, X, LayoutDashboard, Filter } from 'lucide-react';
+import { Plus, Edit3, Trash2, ArrowLeft, Loader2, Save, X, LayoutDashboard, Filter, RefreshCcw } from 'lucide-react';
 import { CanvasWidgetTable, DashboardFilter, DashboardWidget, Project, ProjectDashboard, RawRow, ReportSlide } from '../types';
 import { useToast } from '../components/ToastProvider';
 import { useGlobalSettings } from '../components/GlobalSettingsProvider';
@@ -201,7 +201,8 @@ const ReportBuilder: React.FC<ReportBuilderProps> = ({ project, onUpdateProject 
 
   const autosaveTimerRef = useRef<number | null>(null);
   const lastSentLoadRef = useRef<{ presentationId: string; slidesHash: string } | null>(null);
-  const requestCanvasElementsRef = useRef<(() => void) | null>(null);
+  const requestCanvasElementsRef = useRef<((tableId?: string) => void) | null>(null);
+  const canvasElementsTargetTableIdRef = useRef<string | null>(null);
 
 	  const editingPresentation =
 	    presentations.find((p) => p.id === (selectedPresentationId || normalizedProject.activePresentationId)) ||
@@ -306,7 +307,7 @@ const ReportBuilder: React.FC<ReportBuilderProps> = ({ project, onUpdateProject 
         const updatedProject = updatePresentationCanvasTables(normalizedProject, editingPresentation.id, nextTables);
         await persistProject(updatedProject);
         sendCanvasContextToIframe(updatedProject);
-        requestCanvasElementsRef.current?.();
+        requestCanvasElementsRef.current?.(tableId);
       },
       [editingPresentation, normalizedProject, persistProject, sendCanvasContextToIframe]
     );
@@ -561,9 +562,10 @@ const ReportBuilder: React.FC<ReportBuilderProps> = ({ project, onUpdateProject 
 
     const canvasElementsRequestIdRef = useRef<string>('');
 
-    const requestCanvasElements = useCallback(() => {
+    const requestCanvasElements = useCallback((tableId?: string) => {
       if (!iframeWindow) return;
       if (!isEditorReady) return;
+      canvasElementsTargetTableIdRef.current = tableId || null;
       const requestId = crypto.randomUUID();
       canvasElementsRequestIdRef.current = requestId;
       iframeWindow.postMessage(
@@ -1027,7 +1029,9 @@ const ReportBuilder: React.FC<ReportBuilderProps> = ({ project, onUpdateProject 
           widget: DashboardWidget;
         }>;
         if (!elements.length) return;
-        void refreshCanvasWidgetsFromElements(elements);
+        const targetTableId = canvasElementsTargetTableIdRef.current;
+        canvasElementsTargetTableIdRef.current = null;
+        void refreshCanvasWidgetsFromElements(targetTableId ? elements.filter((el) => el.tableId === targetTableId) : elements);
       }
 
       // Automation Report: Handle update request for linked charts
@@ -1628,7 +1632,16 @@ const ReportBuilder: React.FC<ReportBuilderProps> = ({ project, onUpdateProject 
                 return (
                   <div key={table.id} className="border border-gray-200 rounded-lg p-3 bg-white">
                     <div className="flex flex-wrap items-center justify-between gap-3 mb-2">
-                      <div className="text-xs font-bold text-gray-600 uppercase tracking-wide">{table.name}</div>
+                      <div className="flex items-center gap-2">
+                        <div className="text-xs font-bold text-gray-600 uppercase tracking-wide">{table.name}</div>
+                        <button
+                          onClick={() => requestCanvasElements(table.id)}
+                          className="inline-flex items-center gap-1 text-xs font-semibold text-gray-600 hover:text-gray-900 border border-gray-200 rounded-md px-2 py-1 bg-white"
+                        >
+                          <RefreshCcw className="w-3 h-3" />
+                          Update
+                        </button>
+                      </div>
                       <div className="flex items-center">
                         <select
                           className="text-xs border border-gray-300 rounded-l-lg px-2.5 py-1.5 focus:ring-2 focus:ring-blue-500 outline-none bg-white"
