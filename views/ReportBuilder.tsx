@@ -101,8 +101,9 @@ const ReportBuilder: React.FC<ReportBuilderProps> = ({ project, onUpdateProject 
     const [canvasBuilderWorkerSource, setCanvasBuilderWorkerSource] = useState<MagicAggregationWorkerSource | undefined>(undefined);
     const [canvasBuilderLoading, setCanvasBuilderLoading] = useState(false);
 
-    const [canvasNewFilterCol, setCanvasNewFilterCol] = useState('');
-    const [canvasFilterRows, setCanvasFilterRows] = useState<RawRow[]>([]);
+    const [canvasNewFilterCols, setCanvasNewFilterCols] = useState<Record<string, string>>({});
+    const canvasPreviewRowsRef = useRef<Map<string, RawRow[]>>(new Map());
+    const [canvasPreviewTick, setCanvasPreviewTick] = useState(0);
 	  const dashboardsForInsert = (magicDashboards && magicDashboards.length > 0) ? magicDashboards : (project.dashboards || []);
 
 	  type PptxWorkerResponse =
@@ -294,43 +295,6 @@ const ReportBuilder: React.FC<ReportBuilderProps> = ({ project, onUpdateProject 
       [buildCanvasContextPayload, iframeWindow, normalizedProject]
     );
 
-    const activeCanvasTable = useMemo(() => {
-      if (!canvasActiveTableId) return null;
-      return canvasTables.find((t) => t.id === canvasActiveTableId) || null;
-    }, [canvasActiveTableId, canvasTables]);
-
-    const activeCanvasSource = useMemo(() => {
-      if (!activeCanvasTable) return null;
-      return (projectWithSources.dataSources || []).find((s) => s.id === activeCanvasTable.dataSourceId) || null;
-    }, [activeCanvasTable, projectWithSources.dataSources]);
-
-    const activeCanvasColumns = useMemo(() => {
-      if (!activeCanvasTable) return [];
-      if (projectWithSources.transformRules && projectWithSources.transformRules.length > 0) {
-        return projectWithSources.transformRules.map((r) => r.targetName);
-      }
-      if (activeCanvasSource?.columns?.length) return activeCanvasSource.columns.map((c) => c.key);
-      return [];
-    }, [activeCanvasSource?.columns, activeCanvasTable, projectWithSources.transformRules]);
-
-    const activeCanvasFilters = useMemo(() => {
-      const f = activeCanvasTable?.filters || [];
-      return Array.isArray(f) ? f : [];
-    }, [activeCanvasTable?.filters]);
-
-    const getCanvasFilterDataType = useCallback(
-      (column: string): DashboardFilter['dataType'] => {
-        const col = activeCanvasSource?.columns?.find((c) => c.key === column);
-        if (col?.type === 'date') return 'date';
-        if (col?.type === 'number') return 'number';
-        const samples = canvasFilterRows.slice(0, 80).map((r) => String((r as any)?.[column] ?? '')).filter(Boolean);
-        const dateLikes = samples.filter((s) => !!toDate(s)).length;
-        if (samples.length >= 12 && dateLikes / samples.length >= 0.7) return 'date';
-        return 'text';
-      },
-      [activeCanvasSource?.columns, canvasFilterRows]
-    );
-
     const persistCanvasTableFilters = useCallback(
       async (tableId: string, nextFilters: DashboardFilter[]) => {
         if (!editingPresentation) return;
@@ -345,20 +309,70 @@ const ReportBuilder: React.FC<ReportBuilderProps> = ({ project, onUpdateProject 
       [editingPresentation, normalizedProject, persistProject, sendCanvasContextToIframe]
     );
 
-    const persistCanvasActiveTable = useCallback(
-      async (tableId: string) => {
-        if (!editingPresentation) return;
-        const updatedProject = updatePresentationCanvasActiveTable(normalizedProject, editingPresentation.id, tableId);
-        await persistProject(updatedProject);
-        sendCanvasContextToIframe(updatedProject);
+    const ensureCanvasPreviewRows = useCallback(
+      async (dataSourceId: string) => {
+        if (!dataSourceId) return;
+        if (canvasPreviewRowsRef.current.has(dataSourceId)) return;
+        try {
+          const rows = await loadRowsForDataSource(dataSourceId);
+          canvasPreviewRowsRef.current.set(dataSourceId, rows.slice(0, 20000));
+          setCanvasPreviewTick((t) => t + 1);
+        } catch (e) {
+          console.error('[ReportBuilder] canvas preview rows failed:', e);
+          canvasPreviewRowsRef.current.set(dataSourceId, []);
+          setCanvasPreviewTick((t) => t + 1);
+        }
       },
-      [editingPresentation, normalizedProject, persistProject, sendCanvasContextToIframe]
+      [loadRowsForDataSource]
+    );
+
+    useEffect(() => {
+      const ids = Array.from(new Set(canvasTables.map((t) => t.dataSourceId).filter(Boolean)));
+      ids.forEach((id) => void ensureCanvasPreviewRows(id));
+    }, [canvasTables, ensureCanvasPreviewRows, canvasPreviewTick]);
+
+    const getCanvasTableSource = useCallback(
+      (table: CanvasWidgetTable) => {
+        return (projectWithSources.dataSources || []).find((s) => s.id === table.dataSourceId) || null;
+      },
+      [projectWithSources.dataSources]
+    );
+
+    const getCanvasTableColumns = useCallback(
+      (table: CanvasWidgetTable) => {
+        if (projectWithSources.transformRules && projectWithSources.transformRules.length > 0) {
+          return projectWithSources.transformRules.map((r) => r.targetName);
+        }
+        const src = getCanvasTableSource(table);
+        if (src?.columns?.length) return src.columns.map((c) => c.key);
+        return [];
+      },
+      [getCanvasTableSource, projectWithSources.transformRules]
+    );
+
+    const getCanvasFilterDataType = useCallback(
+      (table: CanvasWidgetTable, column: string): DashboardFilter['dataType'] => {
+        const src = getCanvasTableSource(table);
+        const col = src?.columns?.find((c) => c.key === column);
+        if (col?.type === 'date') return 'date';
+        if (col?.type === 'number') return 'number';
+
+        const rows = canvasPreviewRowsRef.current.get(table.dataSourceId) || [];
+        const samples = rows.slice(0, 80).map((r) => String((r as any)?.[column] ?? '')).filter(Boolean);
+        const dateLikes = samples.filter((s) => !!toDate(s)).length;
+        if (samples.length >= 12 && dateLikes / samples.length >= 0.7) return 'date';
+        return 'text';
+      },
+      [getCanvasTableSource]
     );
 
     const addCanvasFilter = useCallback(
-      async (column: string) => {
-        if (!activeCanvasTable) return;
-        const dataType = getCanvasFilterDataType(column);
+      async (tableId: string, column: string) => {
+        if (!column) return;
+        const table = canvasTables.find((t) => t.id === tableId);
+        if (!table) return;
+        const filters = Array.isArray(table.filters) ? table.filters : [];
+        const dataType = getCanvasFilterDataType(table, column);
         const next: DashboardFilter = {
           id: crypto.randomUUID(),
           column,
@@ -366,95 +380,60 @@ const ReportBuilder: React.FC<ReportBuilderProps> = ({ project, onUpdateProject 
           dataType,
           ...(dataType === 'date' ? { operator: 'between', endValue: '' } : {}),
         };
-        const nextFilters = [...activeCanvasFilters, next];
-        await persistCanvasTableFilters(activeCanvasTable.id, nextFilters);
-        setCanvasNewFilterCol('');
+        await persistCanvasTableFilters(tableId, [...filters, next]);
+        setCanvasNewFilterCols((prev) => ({ ...prev, [tableId]: '' }));
       },
-      [activeCanvasFilters, activeCanvasTable, getCanvasFilterDataType, persistCanvasTableFilters]
+      [canvasTables, getCanvasFilterDataType, persistCanvasTableFilters]
     );
 
     const removeCanvasFilter = useCallback(
-      async (filterId: string) => {
-        if (!activeCanvasTable) return;
-        const nextFilters = activeCanvasFilters.filter((f) => f.id !== filterId);
-        await persistCanvasTableFilters(activeCanvasTable.id, nextFilters);
+      async (tableId: string, filterId: string) => {
+        const table = canvasTables.find((t) => t.id === tableId);
+        if (!table) return;
+        const filters = Array.isArray(table.filters) ? table.filters : [];
+        await persistCanvasTableFilters(tableId, filters.filter((f) => f.id !== filterId));
       },
-      [activeCanvasFilters, activeCanvasTable, persistCanvasTableFilters]
+      [canvasTables, persistCanvasTableFilters]
     );
 
     const updateCanvasFilterValue = useCallback(
-      async (filterId: string, value: string, key: 'value' | 'endValue' = 'value') => {
-        if (!activeCanvasTable) return;
-        const nextFilters = activeCanvasFilters.map((f) => (f.id === filterId ? { ...f, [key]: value } : f));
-        await persistCanvasTableFilters(activeCanvasTable.id, nextFilters);
+      async (tableId: string, filterId: string, value: string, key: 'value' | 'endValue' = 'value') => {
+        const table = canvasTables.find((t) => t.id === tableId);
+        if (!table) return;
+        const filters = Array.isArray(table.filters) ? table.filters : [];
+        await persistCanvasTableFilters(
+          tableId,
+          filters.map((f) => (f.id === filterId ? { ...f, [key]: value } : f))
+        );
       },
-      [activeCanvasFilters, activeCanvasTable, persistCanvasTableFilters]
+      [canvasTables, persistCanvasTableFilters]
     );
 
     const updateCanvasDateFilterOperator = useCallback(
-      async (filterId: string, operator: DashboardFilter['operator']) => {
-        if (!activeCanvasTable) return;
-        const nextFilters = activeCanvasFilters.map((f) => (f.id === filterId ? { ...f, operator } : f));
-        await persistCanvasTableFilters(activeCanvasTable.id, nextFilters);
+      async (tableId: string, filterId: string, operator: DashboardFilter['operator']) => {
+        const table = canvasTables.find((t) => t.id === tableId);
+        if (!table) return;
+        const filters = Array.isArray(table.filters) ? table.filters : [];
+        await persistCanvasTableFilters(
+          tableId,
+          filters.map((f) => (f.id === filterId ? { ...f, operator } : f))
+        );
       },
-      [activeCanvasFilters, activeCanvasTable, persistCanvasTableFilters]
+      [canvasTables, persistCanvasTableFilters]
     );
 
-    const getUniqueValues = useCallback(
-      (column: string) => {
-        const unique = new Set<string>();
-        for (const row of canvasFilterRows) {
-          const raw = (row as any)?.[column];
-          const s = String(raw ?? '').trim();
-          if (!s) continue;
-          unique.add(s);
-          if (unique.size >= 500) break;
-        }
-        return Array.from(unique).sort();
-      },
-      [canvasFilterRows]
-    );
-
-    useEffect(() => {
-      if (!activeCanvasTable) {
-        setCanvasFilterRows([]);
-        setCanvasNewFilterCol('');
-        return;
+    const getUniqueValues = useCallback((table: CanvasWidgetTable, column: string) => {
+      const rows = canvasPreviewRowsRef.current.get(table.dataSourceId) || [];
+      const unique = new Set<string>();
+      for (const row of rows) {
+        const raw = (row as any)?.[column];
+        const s = String(raw ?? '').trim();
+        if (!s) continue;
+        unique.add(s);
+        if (unique.size >= 500) break;
       }
-
-      let cancelled = false;
-      void (async () => {
-        try {
-          const rows = await loadRowsForDataSource(activeCanvasTable.dataSourceId);
-          if (cancelled) return;
-          setCanvasFilterRows(rows.slice(0, 20000));
-        } catch (e) {
-          console.error('[ReportBuilder] canvas filter rows failed:', e);
-          if (!cancelled) setCanvasFilterRows([]);
-        }
-      })();
-
-      return () => {
-        cancelled = true;
-      };
-    }, [activeCanvasTable?.id, activeCanvasTable?.dataSourceId, loadRowsForDataSource]);
-
-    const canvasRefreshTimerRef = useRef<number | null>(null);
-    useEffect(() => {
-      if (!iframeWindow) return;
-      if (!activeCanvasTable) return;
-      if (!isEditorReady) return;
-
-      if (canvasRefreshTimerRef.current) window.clearTimeout(canvasRefreshTimerRef.current);
-      canvasRefreshTimerRef.current = window.setTimeout(() => {
-        iframeWindow.postMessage({ source: 'realdata-host', type: 'request-canvas-refresh' }, '*');
-      }, 350);
-
-      return () => {
-        if (canvasRefreshTimerRef.current) window.clearTimeout(canvasRefreshTimerRef.current);
-        canvasRefreshTimerRef.current = null;
-      };
-    }, [activeCanvasTable?.filters, iframeWindow, isEditorReady]);
+      return Array.from(unique).sort();
+    }, []);
 
   const queueAutosave = useCallback(
     (presentationId: string, slides: ReportSlide[], name?: string) => {
@@ -577,6 +556,81 @@ const ReportBuilder: React.FC<ReportBuilderProps> = ({ project, onUpdateProject 
       },
       [ensurePptxWorkerSource]
     );
+
+    const canvasElementsRequestIdRef = useRef<string>('');
+
+    const requestCanvasElements = useCallback(() => {
+      if (!iframeWindow) return;
+      if (!isEditorReady) return;
+      const requestId = crypto.randomUUID();
+      canvasElementsRequestIdRef.current = requestId;
+      iframeWindow.postMessage(
+        { source: 'realdata-host', type: 'request-canvas-elements', payload: { requestId } },
+        '*'
+      );
+    }, [iframeWindow, isEditorReady]);
+
+    const refreshCanvasWidgetsFromElements = useCallback(
+      async (
+        elements: Array<{ elementId: string; tableId: string; kind: 'chart' | 'kpi'; widget: DashboardWidget }>
+      ) => {
+        if (!iframeWindow) return;
+        if (!editingPresentation) return;
+        if (!elements || elements.length === 0) return;
+
+        const tables = (editingPresentation.canvasTables || []) as CanvasWidgetTable[];
+        const byId = new Map<string, CanvasWidgetTable>();
+        for (const t of tables) byId.set(t.id, t);
+
+        for (const el of elements) {
+          const table = byId.get(el.tableId);
+          if (!table) continue;
+          const payload = await requestCanvasPptxPayload(table.dataSourceId, el.widget, table.filters || []);
+          if (!payload) continue;
+
+          iframeWindow.postMessage(
+            {
+              source: 'realdata-host',
+              type: 'upsert-canvas-widget',
+              payload: {
+                elementId: el.elementId,
+                updateMode: 'data',
+                chart: payload,
+                canvas: { tableId: table.id, widget: el.widget },
+              },
+            },
+            '*'
+          );
+        }
+      },
+      [editingPresentation, iframeWindow, requestCanvasPptxPayload]
+    );
+
+    const canvasFiltersHash = useMemo(() => {
+      return hashJson(
+        canvasTables.map((t) => ({
+          id: t.id,
+          filters: Array.isArray(t.filters) ? t.filters : [],
+        }))
+      );
+    }, [canvasTables]);
+
+    const canvasAutoRefreshTimerRef = useRef<number | null>(null);
+    useEffect(() => {
+      if (mode !== 'editor') return;
+      if (!iframeWindow || !isEditorReady) return;
+      if (canvasTables.length === 0) return;
+
+      if (canvasAutoRefreshTimerRef.current) window.clearTimeout(canvasAutoRefreshTimerRef.current);
+      canvasAutoRefreshTimerRef.current = window.setTimeout(() => {
+        requestCanvasElements();
+      }, 220);
+
+      return () => {
+        if (canvasAutoRefreshTimerRef.current) window.clearTimeout(canvasAutoRefreshTimerRef.current);
+        canvasAutoRefreshTimerRef.current = null;
+      };
+    }, [canvasFiltersHash, canvasTables.length, iframeWindow, isEditorReady, mode, requestCanvasElements]);
 
   const persistSlidesFromExport = useCallback(
     async (slides: ReportSlide[], exitAfter?: boolean) => {
@@ -870,61 +924,22 @@ const ReportBuilder: React.FC<ReportBuilderProps> = ({ project, onUpdateProject 
         queueAutosave(payload.presentationId, payload.slides, payload.title);
       }
 
-      // Automation Report: Handle update request for linked charts / canvas widgets
+      if (event.data.type === 'canvas-elements') {
+        const payload = event.data.payload as { requestId?: string; elements?: any[] } | undefined;
+        const requestId = String(payload?.requestId || '');
+        if (!requestId || requestId !== canvasElementsRequestIdRef.current) return;
+        const elements = (payload?.elements || []) as Array<{
+          elementId: string;
+          tableId: string;
+          kind: 'chart' | 'kpi';
+          widget: DashboardWidget;
+        }>;
+        if (!elements.length) return;
+        void refreshCanvasWidgetsFromElements(elements);
+      }
+
+      // Automation Report: Handle update request for linked charts
 	      if (event.data.type === 'request-chart-updates') {
-          const mode = (event.data.payload?.mode as 'dashboard' | 'canvas' | undefined) || 'dashboard';
-
-          if (mode === 'canvas') {
-            const canvasElements = event.data.payload?.canvasElements as Array<{
-              elementId: string;
-              canvasTableId: string;
-              widget?: DashboardWidget;
-            }> | undefined;
-
-            if (!iframeWindow) return;
-            if (!editingPresentation) return;
-            if (!canvasElements || canvasElements.length === 0) {
-              showToast('No widgets', 'No canvas widgets found.', 'info');
-              return;
-            }
-
-            void (async () => {
-              let updatedCount = 0;
-              for (const item of canvasElements) {
-                const table = (editingPresentation.canvasTables || []).find((t) => t.id === item.canvasTableId);
-                if (!table) continue;
-                const widget = item.widget;
-                if (!widget) continue;
-
-                const payload = await requestCanvasPptxPayload(table.dataSourceId, widget, table.filters || []);
-                if (!payload) continue;
-
-                iframeWindow.postMessage(
-                  {
-                    source: 'realdata-host',
-                    type: 'upsert-canvas-widget',
-                    payload: {
-                      elementId: item.elementId,
-                      chart: payload,
-                      canvas: { tableId: table.id, widget },
-                    },
-                  },
-                  '*'
-                );
-
-                updatedCount++;
-              }
-
-              if (updatedCount > 0) {
-                showToast('Widgets updated', `${updatedCount} element(s) refreshed.`, 'success');
-              } else {
-                showToast('No updates', 'No matching widgets to update.', 'warning');
-              }
-            })();
-
-            return;
-          }
-
 	        const linkedCharts = event.data.payload?.linkedCharts as Array<{
 	          elementId: string;
 	          widgetId: string;
@@ -1065,11 +1080,8 @@ const ReportBuilder: React.FC<ReportBuilderProps> = ({ project, onUpdateProject 
         showToast('No linked charts', 'Insert charts from Dashboard first to enable updates.', 'info');
       }
 
-      if (event.data.type === 'no-canvas-widgets') {
-        showToast('No widgets', 'No canvas widgets found.', 'info');
-      }
 	    },
-	    [dashboardsForInsert, editingPresentation, iframeWindow, normalizedProject, pendingSaveIntent, persistProject, persistSlidesFromExport, queueAutosave, requestCanvasPptxPayload, requestPresentationExport, requestPptxPayload, sendCanvasContextToIframe, showToast]
+	    [dashboardsForInsert, editingPresentation, iframeWindow, normalizedProject, pendingSaveIntent, persistProject, persistSlidesFromExport, queueAutosave, refreshCanvasWidgetsFromElements, requestPresentationExport, requestPptxPayload, sendCanvasContextToIframe, showToast]
 	  );
 
   useEffect(() => {
@@ -1508,119 +1520,127 @@ const ReportBuilder: React.FC<ReportBuilderProps> = ({ project, onUpdateProject 
           </div>
         </header>
 
-        {activeCanvasTable && (
+        {canvasTables.length > 0 && (
           <div className="bg-white border-b border-gray-200 px-4 py-3">
-            <div className="flex flex-wrap items-center gap-3">
-              <div className="flex items-center space-x-2">
-                <Filter className="w-4 h-4 text-gray-500" />
-                <span className="text-sm font-bold text-gray-700">Magic Filters</span>
-              </div>
+            <div className="flex items-center space-x-2 mb-3">
+              <Filter className="w-4 h-4 text-gray-500" />
+              <span className="text-sm font-bold text-gray-700">Magic Filters</span>
+            </div>
 
-              {canvasTables.length > 1 && (
-                <select
-                  className="text-xs border border-gray-300 rounded-lg px-2.5 py-1.5 focus:ring-2 focus:ring-blue-500 outline-none bg-white"
-                  value={canvasActiveTableId || ''}
-                  onChange={(e) => void persistCanvasActiveTable(e.target.value)}
-                >
-                  {canvasTables.map((t) => (
-                    <option key={t.id} value={t.id}>
-                      {t.name}
-                    </option>
-                  ))}
-                </select>
-              )}
+            <div className="space-y-3">
+              {canvasTables.map((table) => {
+                const filters = Array.isArray(table.filters) ? table.filters : [];
+                const columns = getCanvasTableColumns(table);
+                const newCol = canvasNewFilterCols[table.id] || '';
 
-              <div className="flex flex-wrap items-center gap-3">
-                {activeCanvasFilters.map((filter) =>
-                  filter.dataType === 'date' ? (
-                    <div
-                      key={filter.id}
-                      className="flex flex-wrap items-center bg-indigo-50 border border-indigo-100 rounded-lg px-3 py-2 gap-2"
-                    >
-                      <span className="text-[11px] font-bold text-indigo-800 uppercase">{filter.column}</span>
-                      <select
-                        className="bg-transparent text-[11px] font-semibold text-indigo-700 border border-indigo-200 rounded px-1.5 py-1 focus:ring-2 focus:ring-indigo-400 outline-none"
-                        value={normalizeDateOperator(filter.operator)}
-                        onChange={(e) => void updateCanvasDateFilterOperator(filter.id, e.target.value as any)}
-                      >
-                        <option value="between">Is between</option>
-                        <option value="on">Is on</option>
-                        <option value="before">Before</option>
-                        <option value="after">After</option>
-                      </select>
-                      <div className="flex items-center gap-1">
-                        <input
-                          type="date"
-                          value={filter.value || ''}
-                          onChange={(e) => void updateCanvasFilterValue(filter.id, e.target.value)}
-                          className="text-xs border border-indigo-200 rounded px-2 py-1 bg-white focus:ring-2 focus:ring-indigo-400 outline-none"
-                        />
-                        {normalizeDateOperator(filter.operator) === 'between' && (
-                          <>
-                            <span className="text-[10px] text-indigo-500">to</span>
-                            <input
-                              type="date"
-                              value={filter.endValue || ''}
-                              onChange={(e) => void updateCanvasFilterValue(filter.id, e.target.value, 'endValue')}
-                              className="text-xs border border-indigo-200 rounded px-2 py-1 bg-white focus:ring-2 focus:ring-indigo-400 outline-none"
-                            />
-                          </>
-                        )}
+                return (
+                  <div key={table.id} className="border border-gray-200 rounded-lg p-3 bg-white">
+                    <div className="flex flex-wrap items-center justify-between gap-3 mb-2">
+                      <div className="text-xs font-bold text-gray-600 uppercase tracking-wide">{table.name}</div>
+                      <div className="flex items-center">
+                        <select
+                          className="text-xs border border-gray-300 rounded-l-lg px-2.5 py-1.5 focus:ring-2 focus:ring-blue-500 outline-none bg-white"
+                          value={newCol}
+                          onChange={(e) =>
+                            setCanvasNewFilterCols((prev) => ({ ...prev, [table.id]: e.target.value }))
+                          }
+                        >
+                          <option value="">+ Add Filter</option>
+                          {columns.filter((c) => !filters.find((f) => f.column === c)).map((col) => (
+                            <option key={col} value={col}>
+                              {col}
+                            </option>
+                          ))}
+                        </select>
+                        <button
+                          disabled={!newCol}
+                          onClick={() => void addCanvasFilter(table.id, newCol)}
+                          className="bg-gray-100 border border-l-0 border-gray-300 rounded-r-lg px-2.5 py-1.5 hover:bg-gray-200 disabled:opacity-50 text-xs font-semibold uppercase"
+                        >
+                          Add
+                        </button>
                       </div>
-                      <button
-                        onClick={() => void removeCanvasFilter(filter.id)}
-                        className="text-indigo-400 hover:text-indigo-600"
-                      >
-                        <X className="w-3 h-3" />
-                      </button>
                     </div>
-                  ) : (
-                    <div
-                      key={filter.id}
-                      className="flex items-center bg-blue-50 border border-blue-100 rounded-lg px-2 py-1"
-                    >
-                      <span className="text-[11px] font-bold text-blue-800 mr-2 uppercase">{filter.column}:</span>
-                      <select
-                        className="bg-transparent text-xs text-blue-900 border-none focus:ring-0 p-0 pr-5 cursor-pointer font-medium outline-none"
-                        value={filter.value || ''}
-                        onChange={(e) => void updateCanvasFilterValue(filter.id, e.target.value)}
-                      >
-                        <option value="">All</option>
-                        {getUniqueValues(filter.column).map((val) => (
-                          <option key={val} value={val}>
-                            {val}
-                          </option>
-                        ))}
-                      </select>
-                      <button onClick={() => void removeCanvasFilter(filter.id)} className="ml-2 text-blue-400 hover:text-blue-600">
-                        <X className="w-3 h-3" />
-                      </button>
-                    </div>
-                  )
-                )}
 
-                <div className="flex items-center">
-                  <select
-                    className="text-xs border border-gray-300 rounded-l-lg px-2.5 py-1.5 focus:ring-2 focus:ring-blue-500 outline-none bg-white"
-                    value={canvasNewFilterCol}
-                    onChange={(e) => setCanvasNewFilterCol(e.target.value)}
-                  >
-                    <option value="">+ Add Filter</option>
-                    {activeCanvasColumns.filter((c) => !activeCanvasFilters.find((f) => f.column === c)).map((col) => (
-                      <option key={col} value={col}>
-                        {col}
-                      </option>
-                    ))}
-                  </select>
-                  <button
-                    disabled={!canvasNewFilterCol}
-                    onClick={() => void addCanvasFilter(canvasNewFilterCol)}
-                    className="bg-gray-100 border border-l-0 border-gray-300 rounded-r-lg px-2.5 py-1.5 hover:bg-gray-200 disabled:opacity-50 text-xs font-semibold uppercase"
-                  >
-                    Add
-                  </button>
-                </div>
-              </div>
+                    <div className="flex flex-wrap items-center gap-3">
+                      {filters.map((filter) =>
+                        filter.dataType === 'date' ? (
+                          <div
+                            key={filter.id}
+                            className="flex flex-wrap items-center bg-indigo-50 border border-indigo-100 rounded-lg px-3 py-2 gap-2"
+                          >
+                            <span className="text-[11px] font-bold text-indigo-800 uppercase">{filter.column}</span>
+                            <select
+                              className="bg-transparent text-[11px] font-semibold text-indigo-700 border border-indigo-200 rounded px-1.5 py-1 focus:ring-2 focus:ring-indigo-400 outline-none"
+                              value={normalizeDateOperator(filter.operator)}
+                              onChange={(e) =>
+                                void updateCanvasDateFilterOperator(table.id, filter.id, e.target.value as any)
+                              }
+                            >
+                              <option value="between">Is between</option>
+                              <option value="on">Is on</option>
+                              <option value="before">Before</option>
+                              <option value="after">After</option>
+                            </select>
+                            <div className="flex items-center gap-1">
+                              <input
+                                type="date"
+                                value={filter.value || ''}
+                                onChange={(e) => void updateCanvasFilterValue(table.id, filter.id, e.target.value)}
+                                className="text-xs border border-indigo-200 rounded px-2 py-1 bg-white focus:ring-2 focus:ring-indigo-400 outline-none"
+                              />
+                              {normalizeDateOperator(filter.operator) === 'between' && (
+                                <>
+                                  <span className="text-[10px] text-indigo-500">to</span>
+                                  <input
+                                    type="date"
+                                    value={filter.endValue || ''}
+                                    onChange={(e) =>
+                                      void updateCanvasFilterValue(table.id, filter.id, e.target.value, 'endValue')
+                                    }
+                                    className="text-xs border border-indigo-200 rounded px-2 py-1 bg-white focus:ring-2 focus:ring-indigo-400 outline-none"
+                                  />
+                                </>
+                              )}
+                            </div>
+                            <button
+                              onClick={() => void removeCanvasFilter(table.id, filter.id)}
+                              className="text-indigo-400 hover:text-indigo-600"
+                            >
+                              <X className="w-3 h-3" />
+                            </button>
+                          </div>
+                        ) : (
+                          <div
+                            key={filter.id}
+                            className="flex items-center bg-blue-50 border border-blue-100 rounded-lg px-2 py-1"
+                          >
+                            <span className="text-[11px] font-bold text-blue-800 mr-2 uppercase">{filter.column}:</span>
+                            <select
+                              className="bg-transparent text-xs text-blue-900 border-none focus:ring-0 p-0 pr-5 cursor-pointer font-medium outline-none"
+                              value={filter.value || ''}
+                              onChange={(e) => void updateCanvasFilterValue(table.id, filter.id, e.target.value)}
+                            >
+                              <option value="">All</option>
+                              {getUniqueValues(table, filter.column).map((val) => (
+                                <option key={val} value={val}>
+                                  {val}
+                                </option>
+                              ))}
+                            </select>
+                            <button
+                              onClick={() => void removeCanvasFilter(table.id, filter.id)}
+                              className="ml-2 text-blue-400 hover:text-blue-600"
+                            >
+                              <X className="w-3 h-3" />
+                            </button>
+                          </div>
+                        )
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
             </div>
           </div>
         )}

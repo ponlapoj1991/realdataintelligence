@@ -195,6 +195,17 @@ const isDashboardKpi = computed(() => {
   )
 })
 
+const isCanvasKpi = computed(() => {
+  return (
+    props.elementInfo.autoResize === false &&
+    (props.elementInfo as any).canvasWidgetKind === 'kpi' &&
+    !!(props.elementInfo as any).canvasWidgetId &&
+    !!(props.elementInfo as any).canvasTableId
+  )
+})
+
+const isKpiAutoFit = computed(() => isDashboardKpi.value || isCanvasKpi.value)
+
 const extractPlainText = (html: string) => {
   return String(html || '')
     .replace(/<br\s*\/?>/gi, '\n')
@@ -223,7 +234,7 @@ const computeKpiAutoFontPx = () => {
 }
 
 const applyKpiAutoFit = (mode: 'resize' | 'content') => {
-  if (!isDashboardKpi.value) return
+  if (!isKpiAutoFit.value) return
 
   if (mode === 'resize') {
     if (handleElementId.value !== props.elementInfo.id) return
@@ -289,7 +300,7 @@ watch(
 watch(
   () => [props.elementInfo.width, props.elementInfo.height, isScaling.value, handleElementId.value],
   () => {
-    if (!isDashboardKpi.value) return
+    if (!isKpiAutoFit.value) return
     if (!isScaling.value) return
     if (handleElementId.value !== props.elementInfo.id) return
     applyKpiAutoFitFromResizeDebounced()

@@ -69,6 +69,44 @@ export default () => {
       }, 0)
     }
 
+    if (event.data?.type === 'request-canvas-elements') {
+      const requestId = String(event.data?.payload?.requestId || '')
+      const elements = (slidesStore.slides || []).flatMap((slide) => {
+        const slideElements = Array.isArray((slide as any)?.elements) ? (slide as any).elements : []
+        return slideElements
+          .map((el: any) => {
+            if (!el?.id || !el?.canvasWidgetId || !el?.canvasTableId || !el?.canvasWidgetConfig) return null
+            if (el.type === 'chart') {
+              return {
+                elementId: el.id,
+                tableId: el.canvasTableId,
+                kind: 'chart' as const,
+                widget: el.canvasWidgetConfig,
+              }
+            }
+            if (el.type === 'text' && el.canvasWidgetKind === 'kpi') {
+              return {
+                elementId: el.id,
+                tableId: el.canvasTableId,
+                kind: 'kpi' as const,
+                widget: el.canvasWidgetConfig,
+              }
+            }
+            return null
+          })
+          .filter(Boolean)
+      })
+
+      window.parent?.postMessage(
+        {
+          source: HOST_SOURCE,
+          type: 'canvas-elements',
+          payload: { requestId, elements },
+        },
+        '*',
+      )
+    }
+
     if (event.data?.type === 'insert-dashboard-image') {
       const dataUrl = event.data?.payload?.dataUrl
       if (typeof dataUrl === 'string' && dataUrl.startsWith('data:image')) {
@@ -195,6 +233,7 @@ export default () => {
       const payload = event.data?.payload as
         | {
             elementId?: string
+            updateMode?: 'data' | 'full'
             chart: DashboardChartMessage
             canvas: { tableId: string; widget: any }
           }
@@ -207,6 +246,7 @@ export default () => {
 
       const canvasWidgetId = widget?.id || chart.meta?.widgetId || ''
       const elementId = payload?.elementId
+      const updateMode = payload?.updateMode || 'full'
 
       if (chart.chartType === 'kpi') {
         const escapeHtml = (input: string) =>
@@ -278,17 +318,31 @@ export default () => {
           paragraphSpace: 0,
           valign: 'middle',
           defaultColor: color,
-          defaultFontSize: `${fontSize}px`,
-          dashboardKpiMaxFontSize: `${fontSize}px`,
           ...(fontFamily ? { defaultFontName: fontFamily } : {}),
           name: widget?.title || chart.meta?.widgetTitle,
           canvasWidgetId,
           canvasTableId: tableId,
           canvasWidgetKind: 'kpi' as const,
           canvasWidgetConfig: widget,
+          dashboardWidgetKind: 'kpi' as const,
         }
 
         if (elementId) {
+          if (updateMode === 'data') {
+            slidesStore.updateElement({
+              id: elementId,
+              props: {
+                content,
+                name: widget?.title || chart.meta?.widgetTitle,
+                canvasWidgetConfig: widget,
+                canvasWidgetId,
+                canvasTableId: tableId,
+                canvasWidgetKind: 'kpi' as const,
+                dashboardWidgetKind: 'kpi' as const,
+              },
+            })
+            return
+          }
           slidesStore.updateElement({ id: elementId, props: nextProps })
           return
         }
@@ -308,7 +362,14 @@ export default () => {
           { content, autoFocus: false },
         )
 
-        slidesStore.updateElement({ id, props: nextProps })
+        slidesStore.updateElement({
+          id,
+          props: {
+            ...nextProps,
+            defaultFontSize: `${fontSize}px`,
+            dashboardKpiMaxFontSize: `${fontSize}px`,
+          },
+        })
         return
       }
 

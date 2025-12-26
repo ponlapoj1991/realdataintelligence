@@ -13,9 +13,6 @@
         <Button class="action" @click="requestUpdateFromDashboard()">
           Update from Dashboard
         </Button>
-        <Button class="action" @click="requestUpdateInCanvas()">
-          Update in Canvas
-        </Button>
       </div>
     </template>
 
@@ -201,33 +198,6 @@ const collectDashboardLinks = () => {
   return linkedCharts
 }
 
-const collectCanvasLinks = () => {
-  const canvasElements: Array<{
-    elementId: string
-    canvasWidgetId: string
-    canvasTableId: string
-    kind: 'chart' | 'kpi'
-    widget?: any
-  }> = []
-
-  slidesStore.slides.forEach(slide => {
-    slide.elements.forEach(element => {
-      const canvasWidgetId = (element as any).canvasWidgetId
-      const canvasTableId = (element as any).canvasTableId
-      const widget = (element as any).canvasWidgetConfig
-      if (!canvasWidgetId || !canvasTableId) return
-      if (element.type === 'chart') {
-        canvasElements.push({ elementId: element.id, canvasWidgetId, canvasTableId, kind: 'chart', widget })
-      }
-      if (element.type === 'text' && (element as any).canvasWidgetKind === 'kpi') {
-        canvasElements.push({ elementId: element.id, canvasWidgetId, canvasTableId, kind: 'kpi', widget })
-      }
-    })
-  })
-
-  return canvasElements
-}
-
 const requestUpdateFromDashboard = () => {
   const linkedCharts = collectDashboardLinks()
   if (linkedCharts.length === 0) {
@@ -239,20 +209,6 @@ const requestUpdateFromDashboard = () => {
     source: 'realpptx',
     type: 'request-chart-updates',
     payload: { mode: 'dashboard', linkedCharts },
-  }, '*')
-}
-
-const requestUpdateInCanvas = () => {
-  const canvasElements = collectCanvasLinks()
-  if (canvasElements.length === 0) {
-    window.parent?.postMessage({ source: 'realpptx', type: 'no-canvas-widgets' }, '*')
-    return
-  }
-
-  window.parent?.postMessage({
-    source: 'realpptx',
-    type: 'request-chart-updates',
-    payload: { mode: 'canvas', canvasElements },
   }, '*')
 }
 
@@ -282,10 +238,6 @@ const handleMessage = (event: MessageEvent) => {
       // keep the form; host will show toast with details
       return
     }
-  }
-
-  if (event.data.type === 'request-canvas-refresh') {
-    requestUpdateInCanvas()
   }
 }
 

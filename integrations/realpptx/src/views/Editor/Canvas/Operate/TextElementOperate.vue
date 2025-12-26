@@ -56,6 +56,18 @@ const { canvasScale } = storeToRefs(useMainStore())
 const scaleWidth = computed(() => props.elementInfo.width * canvasScale.value)
 const scaleHeight = computed(() => props.elementInfo.height * canvasScale.value)
 
-const { textElementResizeHandlers, verticalTextElementResizeHandlers, borderLines } = useCommonOperate(scaleWidth, scaleHeight)
-const resizeHandlers = computed(() => props.elementInfo.vertical ? verticalTextElementResizeHandlers.value : textElementResizeHandlers.value)
+const { resizeHandlers: fullResizeHandlers, textElementResizeHandlers, verticalTextElementResizeHandlers, borderLines } = useCommonOperate(scaleWidth, scaleHeight)
+
+const isKpiText = computed(() => {
+  const el: any = props.elementInfo as any
+  return (
+    props.elementInfo.autoResize === false &&
+    (el.dashboardWidgetKind === 'kpi' || el.canvasWidgetKind === 'kpi')
+  )
+})
+
+const resizeHandlers = computed(() => {
+  if (props.elementInfo.vertical) return verticalTextElementResizeHandlers.value
+  return isKpiText.value ? fullResizeHandlers.value : textElementResizeHandlers.value
+})
 </script>
