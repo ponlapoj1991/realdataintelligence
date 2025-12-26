@@ -31,6 +31,41 @@ const cloneForPostMessage = (value: any) => {
   }
 }
 
+const escapeHtml = (input: string) =>
+  input
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/\"/g, '&quot;')
+    .replace(/'/g, '&#39;')
+
+const extractTextStyles = (html: string): { pStyle: string; spanStyle: string } => {
+  try {
+    const doc = new DOMParser().parseFromString(String(html || ''), 'text/html')
+    const p = doc.querySelector('p')
+    const span = doc.querySelector('span')
+    const pStyle = p?.getAttribute('style') || ''
+    const spanStyle = span?.getAttribute('style') || ''
+    return { pStyle, spanStyle }
+  } catch {
+    return { pStyle: '', spanStyle: '' }
+  }
+}
+
+const buildTextHtml = (text: string, styles?: { pStyle?: string; spanStyle?: string }) => {
+  const lines = String(text || '').replace(/\r/g, '').split('\n')
+  const pAttr = styles?.pStyle ? ` style="${styles.pStyle}"` : ''
+  const spanAttr = styles?.spanStyle ? ` style="${styles.spanStyle}"` : ''
+
+  return lines
+    .map((line) => {
+      const safe = escapeHtml(line)
+      const inner = safe ? safe : '&nbsp;'
+      return `<p${pAttr}><span${spanAttr}>${inner}</span></p>`
+    })
+    .join('')
+}
+
 export default () => {
   const { createImageElement, createChartElement, createTextElement } = useCreateElement()
   const mainStore = useMainStore()
@@ -508,6 +543,70 @@ export default () => {
             dashboardWidgetKind: 'kpi' as const,
           } as any,
         })
+      }
+    }
+
+    if (event.data?.type === 'ai-summary-create-or-update-text') {
+      const payload = event.data?.payload as { contextId?: string; elementId?: string; text?: string } | undefined
+      const contextId = String(payload?.contextId || '').trim()
+      const elementId = String(payload?.elementId || '').trim()
+      const text = String(payload?.text || '')
+      if (!contextId) return
+
+      const findTextElement = (id: string) => {
+        if (!id) return null
+        for (const slide of slidesStore.slides || []) {
+          const els = Array.isArray((slide as any)?.elements) ? ((slide as any).elements as any[]) : []
+          const found = els.find((el) => el?.id === id)
+          if (found && found.type === 'text') return found as any
+        }
+        return null
+      }
+
+      let nextElementId = elementId
+      const existing = findTextElement(elementId)
+
+      if (existing) {
+        const styles = extractTextStyles(existing.content || '')
+        const content = buildTextHtml(text, styles)
+        slidesStore.updateElement({ id: existing.id, props: { content } as any })
+        nextElementId = existing.id
+      } else {
+        const slideW = slidesStore.viewportSize
+        const slideH = slidesStore.viewportSize * slidesStore.viewportRatio
+        const boxW = Math.min(820, Math.max(340, slideW * 0.76))
+        const boxH = Math.min(520, Math.max(200, slideH * 0.38))
+
+        const content = buildTextHtml(text)
+        const id = createTextElement(
+          {
+            left: (slideW - boxW) / 2,
+            top: (slideH - boxH) / 2,
+            width: boxW,
+            height: boxH,
+          },
+          { content, autoFocus: false },
+        )
+
+        slidesStore.updateElement({
+          id,
+          props: {
+            autoResize: false,
+            padding: 0,
+            lineHeight: 1.3,
+            paragraphSpace: 6,
+            valign: 'top',
+            name: `AI Summary ${contextId}`,
+          } as any,
+        })
+        nextElementId = id
+      }
+
+      if (nextElementId) {
+        window.parent?.postMessage(
+          { source: HOST_SOURCE, type: 'ai-summary-text-linked', payload: { contextId, elementId: nextElementId } },
+          '*',
+        )
       }
     }
   }

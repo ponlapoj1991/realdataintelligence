@@ -72,6 +72,11 @@ const generateAIContent = async (settings: AISettings | undefined, prompt: strin
 
 // --- EXPORTED FUNCTIONS ---
 
+export const generateAIText = async (prompt: string, settings?: AISettings): Promise<string> => {
+  const text = await generateAIContent(settings, prompt, false)
+  return text || ''
+}
+
 export const analyzeProjectData = async (summary: DataSummary, settings?: AISettings): Promise<string> => {
   try {
     const prompt = `

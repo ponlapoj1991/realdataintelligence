@@ -1,4 +1,4 @@
-import { CanvasWidgetTable, Project, ReportPresentation, ReportSlide } from '../types';
+import { AISummaryContext, CanvasWidgetTable, Project, ReportPresentation, ReportSlide } from '../types';
 
 const now = () => Date.now();
 
@@ -14,6 +14,33 @@ const normalizeCanvasTables = (tables: CanvasWidgetTable[] | undefined): CanvasW
   }));
 };
 
+const normalizeAiSummaryContexts = (contexts: AISummaryContext[] | undefined): AISummaryContext[] => {
+  const src = Array.isArray(contexts) ? contexts : [];
+  return src.map((c) => {
+    const sort =
+      c.sort && typeof c.sort === 'object' && typeof (c.sort as any).column === 'string'
+        ? { column: String((c.sort as any).column), direction: (c.sort as any).direction === 'asc' ? 'asc' : 'desc' }
+        : null;
+
+    const limit = typeof c.limit === 'number' && Number.isFinite(c.limit) && c.limit > 0 ? Math.floor(c.limit) : 200;
+
+    return {
+      ...c,
+      name: c.name?.trim() || 'Untitled Context',
+      dataSourceId: typeof c.dataSourceId === 'string' ? c.dataSourceId : '',
+      prompt: typeof c.prompt === 'string' ? c.prompt : '',
+      dateColumn: typeof c.dateColumn === 'string' ? c.dateColumn : undefined,
+      periodStart: typeof c.periodStart === 'string' ? c.periodStart : undefined,
+      periodEnd: typeof c.periodEnd === 'string' ? c.periodEnd : undefined,
+      hiddenColumns: Array.isArray(c.hiddenColumns) ? c.hiddenColumns.filter(Boolean) : [],
+      sort,
+      limit,
+      createdAt: c.createdAt || now(),
+      updatedAt: c.updatedAt || now(),
+    };
+  });
+};
+
 const normalizePresentation = (presentation: ReportPresentation): ReportPresentation => {
   const canvasTables = normalizeCanvasTables(presentation.canvasTables);
   const canvasActiveTableId =
@@ -23,14 +50,17 @@ const normalizePresentation = (presentation: ReportPresentation): ReportPresenta
         ? presentation.canvasActiveTableId
         : canvasTables[0].id;
 
+  const aiSummaryContexts = normalizeAiSummaryContexts(presentation.aiSummaryContexts);
+
   return {
-  ...presentation,
-  name: presentation.name?.trim() || 'Untitled Presentation',
-  slides: presentation.slides || [],
-  createdAt: presentation.createdAt || now(),
-  updatedAt: presentation.updatedAt || now(),
-  canvasTables,
-  canvasActiveTableId,
+    ...presentation,
+    name: presentation.name?.trim() || 'Untitled Presentation',
+    slides: presentation.slides || [],
+    createdAt: presentation.createdAt || now(),
+    updatedAt: presentation.updatedAt || now(),
+    canvasTables,
+    canvasActiveTableId,
+    aiSummaryContexts,
   };
 };
 
@@ -42,6 +72,7 @@ const createPresentation = (name: string, slides: ReportSlide[] = []): ReportPre
   updatedAt: now(),
   canvasTables: [],
   canvasActiveTableId: undefined,
+  aiSummaryContexts: [],
 });
 
 const syncLegacySlides = (project: Project, active?: ReportPresentation): Project => {
@@ -195,6 +226,29 @@ export const updatePresentationCanvasActiveTable = (
   const { project: normalized } = ensurePresentations(project);
   const presentations = (normalized.reportPresentations || []).map((p) =>
     p.id === presentationId ? { ...p, canvasActiveTableId, updatedAt: now() } : p
+  );
+
+  const updated: Project = {
+    ...normalized,
+    reportPresentations: presentations,
+    lastModified: now(),
+  };
+
+  if (normalized.activePresentationId === presentationId) {
+    return syncLegacySlides(updated, presentations.find((p) => p.id === presentationId));
+  }
+
+  return updated;
+};
+
+export const updatePresentationAiSummaryContexts = (
+  project: Project,
+  presentationId: string,
+  aiSummaryContexts: AISummaryContext[]
+): Project => {
+  const { project: normalized } = ensurePresentations(project);
+  const presentations = (normalized.reportPresentations || []).map((p) =>
+    p.id === presentationId ? { ...p, aiSummaryContexts, updatedAt: now() } : p
   );
 
   const updated: Project = {

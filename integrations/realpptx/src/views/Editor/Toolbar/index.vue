@@ -25,7 +25,7 @@ import SlideDesignPanel from './SlideDesignPanel/index.vue'
 import MultiPositionPanel from './MultiPositionPanel.vue'
 import MultiStylePanel from './MultiStylePanel.vue'
 import WidgetPlusPanel from './WidgetPlusPanel.vue'
-import EmptyPanel from './EmptyPanel.vue'
+import AISummaryPanel from './AISummaryPanel.vue'
 import Tabs from '@/components/Tabs.vue'
 
 const mainStore = useMainStore()
@@ -41,7 +41,7 @@ const elementTabsChart = [
 const slideTabs = [
   { label: 'Design', key: ToolbarStates.SLIDE_DESIGN },
   { label: 'Widget+', key: ToolbarStates.WIDGET_PLUS },
-  { label: 'Animation', key: ToolbarStates.SLIDE_RESERVED },
+  { label: 'AI Summary', key: ToolbarStates.AI_SUMMARY },
 ]
 const multiSelectTabs = [
   { label: 'Style (Multi)', key: ToolbarStates.MULTI_STYLE },
@@ -92,7 +92,7 @@ const currentPanelComponent = computed(() => {
     [ToolbarStates.EL_POSITION]: ElementPositionPanel,
     [ToolbarStates.SLIDE_DESIGN]: SlideDesignPanel,
     [ToolbarStates.WIDGET_PLUS]: WidgetPlusPanel,
-    [ToolbarStates.SLIDE_RESERVED]: EmptyPanel,
+    [ToolbarStates.AI_SUMMARY]: AISummaryPanel,
     [ToolbarStates.MULTI_STYLE]: MultiStylePanel,
     [ToolbarStates.MULTI_POSITION]: MultiPositionPanel,
   }

@@ -486,6 +486,11 @@ export interface ReportPresentation {
    */
   canvasTables?: CanvasWidgetTable[];
   canvasActiveTableId?: string;
+
+  /**
+   * Canvas Stars: AI Summary contexts for automation.
+   */
+  aiSummaryContexts?: AISummaryContext[];
 }
 
 export interface CanvasWidgetTable {
@@ -493,6 +498,26 @@ export interface CanvasWidgetTable {
   name: string;
   dataSourceId: string;
   filters?: DashboardFilter[];
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface AISummaryContext {
+  id: string;
+  name: string;
+  dataSourceId: string;
+  provider?: AIProvider;
+  model?: string;
+  temperature?: number;
+  maxTokens?: number;
+  prompt?: string;
+  dateColumn?: string;
+  periodStart?: string;
+  periodEnd?: string;
+  limit?: number;
+  hiddenColumns?: string[];
+  sort?: { column: string; direction: 'asc' | 'desc' } | null;
+  textElementId?: string;
   createdAt: number;
   updatedAt: number;
 }

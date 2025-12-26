@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Plus, Edit3, Trash2, ArrowLeft, Loader2, Save, X, LayoutDashboard, Filter, RefreshCcw } from 'lucide-react';
-import { CanvasWidgetTable, DashboardFilter, DashboardWidget, Project, ProjectDashboard, RawRow, ReportSlide } from '../types';
+import { AISummaryContext, CanvasWidgetTable, DashboardFilter, DashboardWidget, Project, ProjectDashboard, RawRow, ReportSlide } from '../types';
 import { useToast } from '../components/ToastProvider';
 import { useGlobalSettings } from '../components/GlobalSettingsProvider';
 import {
@@ -12,6 +12,7 @@ import {
   updatePresentationSlides,
   updatePresentationCanvasActiveTable,
   updatePresentationCanvasTables,
+  updatePresentationAiSummaryContexts,
 } from '../utils/reportPresentations';
 import { ensureMagicDashboards } from '../utils/dashboards';
 import { saveProject } from '../utils/storage-compat';
@@ -25,6 +26,9 @@ import { getAllDataSourceChunks } from '../utils/storage-v2';
 import { applyTransformation } from '../utils/transform';
 import type { MagicAggregationWorkerSource } from '../hooks/useMagicAggregationWorker';
 import { toDate } from '../utils/widgetData';
+import AISummaryContextModal from '../components/AISummaryContextModal';
+import { generateAIText } from '../utils/ai';
+import { loadFilteredDataSourceRows, rowsToPlainTable } from '../utils/aiSummary';
 
 const hashString = (input: string) => {
   let hash = 5381;
@@ -100,6 +104,14 @@ const ReportBuilder: React.FC<ReportBuilderProps> = ({ project, onUpdateProject 
     const [canvasBuilderColumns, setCanvasBuilderColumns] = useState<string[]>([]);
     const [canvasBuilderWorkerSource, setCanvasBuilderWorkerSource] = useState<MagicAggregationWorkerSource | undefined>(undefined);
     const [canvasBuilderLoading, setCanvasBuilderLoading] = useState(false);
+
+    const [isAiSummaryModalOpen, setAiSummaryModalOpen] = useState(false);
+    const [aiSummaryActiveContextId, setAiSummaryActiveContextId] = useState<string | null>(null);
+    const [aiSummaryRunningContextId, setAiSummaryRunningContextId] = useState<string | null>(null);
+
+    const [isAiSummarySourcePickerOpen, setAiSummarySourcePickerOpen] = useState(false);
+    const [aiSummarySourcePickerSelectedId, setAiSummarySourcePickerSelectedId] = useState<string | null>(null);
+    const aiSummarySourcePickerOnSelectRef = useRef<((sourceId: string) => void) | null>(null);
 
     const [canvasNewFilterCols, setCanvasNewFilterCols] = useState<Record<string, string>>({});
     const canvasPreviewRowsRef = useRef<Map<string, RawRow[]>>(new Map());
@@ -259,13 +271,40 @@ const ReportBuilder: React.FC<ReportBuilderProps> = ({ project, onUpdateProject 
       return canvasTables[0].id;
     }, [canvasTables, editingPresentation?.canvasActiveTableId]);
 
+    const aiSummaryContexts = useMemo(() => {
+      const contexts = (editingPresentation?.aiSummaryContexts || []) as AISummaryContext[];
+      return Array.isArray(contexts) ? contexts : [];
+    }, [editingPresentation?.aiSummaryContexts, editingPresentation?.id]);
+
+    const aiSummaryActiveContext = useMemo(() => {
+      if (!aiSummaryActiveContextId) return null;
+      return aiSummaryContexts.find((c) => c.id === aiSummaryActiveContextId) || null;
+    }, [aiSummaryActiveContextId, aiSummaryContexts]);
+
     const buildCanvasContextPayload = useCallback(
-      (projectInput: Project): { tables: Array<{ id: string; name: string; dataSourceId: string; dataSourceName: string; dataSourceKind: string }>; activeTableId: string | null } => {
+      (projectInput: Project): {
+        tables: Array<{ id: string; name: string; dataSourceId: string; dataSourceName: string; dataSourceKind: string }>;
+        activeTableId: string | null;
+        aiSummaryContexts: Array<{
+          id: string;
+          name: string;
+          dataSourceId: string;
+          dataSourceName: string;
+          dataSourceKind: string;
+          prompt?: string;
+          dateColumn?: string;
+          periodStart?: string;
+          periodEnd?: string;
+          provider?: string;
+          model?: string;
+        }>;
+      } => {
         const presentationId = editingPresentation?.id;
-        if (!presentationId) return { tables: [], activeTableId: null };
+        if (!presentationId) return { tables: [], activeTableId: null, aiSummaryContexts: [] };
 
         const pres = (projectInput.reportPresentations || []).find((p) => p.id === presentationId) as any;
         const rawTables = (pres?.canvasTables || []) as CanvasWidgetTable[];
+        const rawContexts = (pres?.aiSummaryContexts || []) as AISummaryContext[];
         const dsList = ensureDataSources(projectInput).project.dataSources || [];
 
         const tables = (rawTables || []).map((t) => {
@@ -283,7 +322,24 @@ const ReportBuilder: React.FC<ReportBuilderProps> = ({ project, onUpdateProject 
           (typeof pres?.canvasActiveTableId === 'string' && tables.find((t) => t.id === pres.canvasActiveTableId) ? pres.canvasActiveTableId : null) ||
           (tables[0]?.id ?? null);
 
-        return { tables, activeTableId };
+        const aiSummaryContexts = (rawContexts || []).map((c) => {
+          const ds = dsList.find((s) => s.id === c.dataSourceId);
+          return {
+            id: c.id,
+            name: c.name,
+            dataSourceId: c.dataSourceId,
+            dataSourceName: ds?.name || 'Unknown',
+            dataSourceKind: ds?.kind || '',
+            prompt: c.prompt,
+            dateColumn: c.dateColumn,
+            periodStart: c.periodStart,
+            periodEnd: c.periodEnd,
+            provider: c.provider,
+            model: c.model,
+          };
+        });
+
+        return { tables, activeTableId, aiSummaryContexts };
       },
       [editingPresentation?.id]
     );
@@ -310,6 +366,174 @@ const ReportBuilder: React.FC<ReportBuilderProps> = ({ project, onUpdateProject 
         requestCanvasElementsRef.current?.(tableId);
       },
       [editingPresentation, normalizedProject, persistProject, sendCanvasContextToIframe]
+    );
+
+    const saveAiSummaryContext = useCallback(
+      async (next: AISummaryContext) => {
+        if (!editingPresentation) return;
+        const existing = (editingPresentation.aiSummaryContexts || []) as AISummaryContext[];
+        if (!existing.find((c) => c.id === next.id)) return;
+
+        const nowMs = Date.now();
+        const nextContexts = existing.map((c) =>
+          c.id === next.id
+            ? {
+                ...c,
+                ...next,
+                name: next.name?.trim() || c.name,
+                dataSourceId: next.dataSourceId || c.dataSourceId,
+                updatedAt: nowMs,
+              }
+            : c
+        );
+
+        const updatedProject = updatePresentationAiSummaryContexts(normalizedProject, editingPresentation.id, nextContexts);
+        await persistProject(updatedProject);
+        sendCanvasContextToIframe(updatedProject);
+      },
+      [editingPresentation, normalizedProject, persistProject, sendCanvasContextToIframe]
+    );
+
+    const openAiSummaryDataSourcePicker = useCallback(
+      (selectedId: string | null, onSelect: (sourceId: string) => void) => {
+        aiSummarySourcePickerOnSelectRef.current = onSelect;
+        setAiSummarySourcePickerSelectedId(selectedId);
+        setAiSummarySourcePickerOpen(true);
+      },
+      []
+    );
+
+    const runAiSummaryContext = useCallback(
+      async (contextId: string) => {
+        if (!iframeWindow) {
+          showToast('Editor unavailable', 'Unable to communicate with RealPPTX.', 'error');
+          return;
+        }
+        if (!editingPresentation) return;
+        const contexts = (editingPresentation.aiSummaryContexts || []) as AISummaryContext[];
+        const ctx = contexts.find((c) => c.id === contextId);
+        if (!ctx) return;
+
+        if (aiSummaryRunningContextId) {
+          showToast('Analyze running', 'Please wait.', 'info');
+          return;
+        }
+
+        const prompt = String(ctx.prompt || '').trim();
+        if (!prompt) {
+          showToast('Prompt required', 'Prompt is required.', 'warning');
+          return;
+        }
+        if (!ctx.dataSourceId) {
+          showToast('Data source required', 'Data source is required.', 'warning');
+          return;
+        }
+        if (!ctx.dateColumn) {
+          showToast('Date column required', 'Date column is required.', 'warning');
+          return;
+        }
+        if (!ctx.periodStart && !ctx.periodEnd) {
+          showToast('Period required', 'Period is required.', 'warning');
+          return;
+        }
+
+        const src = (projectWithSources.dataSources || []).find((s) => s.id === ctx.dataSourceId);
+        if (!src) {
+          showToast('Invalid data source', 'Data source not found.', 'warning');
+          return;
+        }
+
+        const totalRows = typeof src.rowCount === 'number' ? src.rowCount : src.rows.length;
+        const allColumns =
+          projectWithSources.transformRules && projectWithSources.transformRules.length > 0
+            ? projectWithSources.transformRules.map((r) => r.targetName).filter(Boolean)
+            : src.columns?.length
+              ? src.columns.map((c) => c.key).filter(Boolean)
+              : [];
+
+        const hidden = new Set(Array.isArray(ctx.hiddenColumns) ? ctx.hiddenColumns : []);
+        const visibleColumns = allColumns.filter((c) => !hidden.has(c)).slice(0, 40);
+
+        const limit = typeof ctx.limit === 'number' && ctx.limit > 0 ? Math.floor(ctx.limit) : 200;
+        const aiLimit = Math.min(Math.max(1, limit), 400);
+
+        setAiSummaryRunningContextId(contextId);
+        try {
+          const rows = await loadFilteredDataSourceRows({
+            projectId: projectWithSources.id,
+            dataSourceId: ctx.dataSourceId,
+            totalRows,
+            transformRules: projectWithSources.transformRules || [],
+            dateColumn: ctx.dateColumn,
+            periodStart: ctx.periodStart,
+            periodEnd: ctx.periodEnd,
+            limit: aiLimit,
+            sort: ctx.sort || null,
+          });
+
+          const table = rowsToPlainTable(rows, visibleColumns, aiLimit);
+          if (!table.trim()) {
+            showToast('No data', 'No rows matched the selected period.', 'warning');
+            return;
+          }
+
+          const provider = ctx.provider || globalSettings.ai.provider;
+          const model = ctx.model || globalSettings.ai.model;
+          const settings = {
+            ...globalSettings.ai,
+            provider,
+            model,
+            temperature: typeof ctx.temperature === 'number' ? ctx.temperature : globalSettings.ai.temperature,
+            maxTokens: typeof ctx.maxTokens === 'number' ? ctx.maxTokens : globalSettings.ai.maxTokens,
+          };
+
+          const aiPrompt = [
+            'You are a senior data analyst.',
+            'Use the dataset table to answer the prompt.',
+            '',
+            'Dataset (tab-separated):',
+            table,
+            '',
+            'Prompt:',
+            prompt,
+            '',
+            'Output requirements: professional, concise, slide-ready.',
+          ].join('\n');
+
+          const text = await generateAIText(aiPrompt, settings);
+          if (!text.trim()) {
+            showToast('AI Error', 'Empty response.', 'error');
+            return;
+          }
+
+          iframeWindow.postMessage(
+            {
+              source: 'realdata-host',
+              type: 'ai-summary-create-or-update-text',
+              payload: { contextId: ctx.id, elementId: ctx.textElementId, text },
+            },
+            '*'
+          );
+
+          showToast('Analyzed', ctx.name, 'success');
+        } catch (e) {
+          const msg = e instanceof Error ? e.message : 'AI request failed';
+          showToast('AI Error', msg, 'error');
+        } finally {
+          setAiSummaryRunningContextId(null);
+        }
+      },
+      [
+        aiSummaryRunningContextId,
+        editingPresentation,
+        globalSettings.ai,
+        iframeWindow,
+        projectWithSources.dataSources,
+        projectWithSources.id,
+        projectWithSources.transformRules,
+        rowsToPlainTable,
+        showToast,
+      ]
     );
 
     const ensureCanvasPreviewRows = useCallback(
@@ -967,6 +1191,109 @@ const ReportBuilder: React.FC<ReportBuilderProps> = ({ project, onUpdateProject 
         })();
       }
 
+      if (event.data.type === 'create-ai-summary-context') {
+        const name = String(event.data.payload?.name || '').trim();
+        const dataSourceId = String(event.data.payload?.dataSourceId || '').trim();
+        if (!editingPresentation) return;
+        if (!name || !dataSourceId) {
+          showToast('Invalid context', 'Name and data source are required.', 'warning');
+          return;
+        }
+
+        const dsExists = (projectWithSources.dataSources || []).some((s) => s.id === dataSourceId);
+        if (!dsExists) {
+          showToast('Invalid data source', 'Data source not found.', 'warning');
+          return;
+        }
+
+        const existing = (editingPresentation.aiSummaryContexts || []) as AISummaryContext[];
+        const exists = existing.some((c) => c.name.trim().toLowerCase() === name.toLowerCase());
+        if (exists) {
+          showToast('Duplicate name', 'Context name already exists.', 'warning');
+          return;
+        }
+
+        const nowMs = Date.now();
+        const nextContext: AISummaryContext = {
+          id: crypto.randomUUID(),
+          name,
+          dataSourceId,
+          provider: globalSettings.ai?.provider,
+          model: globalSettings.ai?.model,
+          temperature: globalSettings.ai?.temperature,
+          maxTokens: globalSettings.ai?.maxTokens,
+          prompt: '',
+          dateColumn: undefined,
+          periodStart: undefined,
+          periodEnd: undefined,
+          limit: 200,
+          hiddenColumns: [],
+          sort: null,
+          textElementId: undefined,
+          createdAt: nowMs,
+          updatedAt: nowMs,
+        };
+
+        void (async () => {
+          const nextContexts = [...existing, nextContext];
+          const updatedProject = updatePresentationAiSummaryContexts(normalizedProject, editingPresentation.id, nextContexts);
+          await persistProject(updatedProject);
+          sendCanvasContextToIframe(updatedProject);
+          showToast('Context created', nextContext.name, 'success');
+        })();
+      }
+
+      if (event.data.type === 'delete-ai-summary-context') {
+        const contextId = String(event.data.payload?.contextId || '');
+        if (!editingPresentation || !contextId) return;
+
+        const existing = (editingPresentation.aiSummaryContexts || []) as AISummaryContext[];
+        const nextContexts = existing.filter((c) => c.id !== contextId);
+
+        void (async () => {
+          const updatedProject = updatePresentationAiSummaryContexts(normalizedProject, editingPresentation.id, nextContexts);
+          await persistProject(updatedProject);
+          sendCanvasContextToIframe(updatedProject);
+          showToast('Context deleted', 'Context removed.', 'success');
+          setAiSummaryModalOpen(false);
+          setAiSummaryActiveContextId(null);
+        })();
+      }
+
+      if (event.data.type === 'open-ai-summary-context') {
+        const contextId = String(event.data.payload?.contextId || '');
+        if (!editingPresentation || !contextId) return;
+        const existing = (editingPresentation.aiSummaryContexts || []) as AISummaryContext[];
+        const found = existing.find((c) => c.id === contextId);
+        if (!found) return;
+        setAiSummaryActiveContextId(contextId);
+        setAiSummaryModalOpen(true);
+      }
+
+      if (event.data.type === 'run-ai-summary-context') {
+        const contextId = String(event.data.payload?.contextId || '');
+        if (!contextId) return;
+        void runAiSummaryContext(contextId);
+      }
+
+      if (event.data.type === 'ai-summary-text-linked') {
+        const contextId = String(event.data.payload?.contextId || '');
+        const elementId = String(event.data.payload?.elementId || '');
+        if (!editingPresentation || !contextId || !elementId) return;
+
+        const existing = (editingPresentation.aiSummaryContexts || []) as AISummaryContext[];
+        if (!existing.find((c) => c.id === contextId)) return;
+
+        const nowMs = Date.now();
+        const nextContexts = existing.map((c) => (c.id === contextId ? { ...c, textElementId: elementId, updatedAt: nowMs } : c));
+
+        void (async () => {
+          const updatedProject = updatePresentationAiSummaryContexts(normalizedProject, editingPresentation.id, nextContexts);
+          await persistProject(updatedProject);
+          sendCanvasContextToIframe(updatedProject);
+        })();
+      }
+
       if (event.data.type === 'set-active-canvas-table') {
         const tableId = String(event.data.payload?.tableId || '');
         if (!editingPresentation) return;
@@ -1177,7 +1504,24 @@ const ReportBuilder: React.FC<ReportBuilderProps> = ({ project, onUpdateProject 
       }
 
 	    },
-	    [dashboardsForInsert, editingPresentation, iframeWindow, normalizedProject, pendingSaveIntent, persistProject, persistSlidesFromExport, queueAutosave, refreshCanvasWidgetsFromElements, requestPresentationExport, requestPptxPayload, sendCanvasContextToIframe, showToast]
+	    [
+        dashboardsForInsert,
+        editingPresentation,
+        globalSettings.ai,
+        iframeWindow,
+        normalizedProject,
+        pendingSaveIntent,
+        persistProject,
+        persistSlidesFromExport,
+        projectWithSources.dataSources,
+        queueAutosave,
+        refreshCanvasWidgetsFromElements,
+        requestPresentationExport,
+        requestPptxPayload,
+        runAiSummaryContext,
+        sendCanvasContextToIframe,
+        showToast,
+      ]
 	  );
 
   useEffect(() => {
@@ -1796,6 +2140,54 @@ const ReportBuilder: React.FC<ReportBuilderProps> = ({ project, onUpdateProject 
             onClose={() => {
               setCanvasTablePickerOpen(false);
               setCanvasTablePickerRequestId(null);
+            }}
+          />
+
+          <DataSourcePickerModal
+            isOpen={isAiSummarySourcePickerOpen}
+            title="Select Data Source"
+            ingestionSources={ingestionSources}
+            preparedSources={preparedSources}
+            selectedSourceId={aiSummarySourcePickerSelectedId}
+            onSelect={(src) => {
+              aiSummarySourcePickerOnSelectRef.current?.(src.id);
+              aiSummarySourcePickerOnSelectRef.current = null;
+              setAiSummarySourcePickerOpen(false);
+              setAiSummarySourcePickerSelectedId(null);
+            }}
+            onClose={() => {
+              aiSummarySourcePickerOnSelectRef.current = null;
+              setAiSummarySourcePickerOpen(false);
+              setAiSummarySourcePickerSelectedId(null);
+            }}
+          />
+
+          <AISummaryContextModal
+            isOpen={isAiSummaryModalOpen}
+            context={aiSummaryActiveContext}
+            projectId={projectWithSources.id}
+            dataSources={projectWithSources.dataSources || []}
+            transformRules={projectWithSources.transformRules || []}
+            globalAiSettings={globalSettings.ai}
+            onClose={() => {
+              setAiSummaryModalOpen(false);
+              setAiSummaryActiveContextId(null);
+            }}
+            onPickDataSource={(selectedId, onSelect) => openAiSummaryDataSourcePicker(selectedId, onSelect)}
+            onSave={(next) => void saveAiSummaryContext(next)}
+            onCreateText={(contextId, elementId) => {
+              if (!iframeWindow) return;
+              iframeWindow.postMessage(
+                {
+                  source: 'realdata-host',
+                  type: 'ai-summary-create-or-update-text',
+                  payload: { contextId, elementId, text: 'AI Summary' },
+                },
+                '*'
+              );
+            }}
+            onAnalyze={(contextId) => {
+              void runAiSummaryContext(contextId);
             }}
           />
 
