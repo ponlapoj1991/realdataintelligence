@@ -233,7 +233,6 @@ export default () => {
       const payload = event.data?.payload as
         | {
             elementId?: string
-            updateMode?: 'data' | 'full'
             chart: DashboardChartMessage
             canvas: { tableId: string; widget: any }
           }
@@ -246,7 +245,6 @@ export default () => {
 
       const canvasWidgetId = widget?.id || chart.meta?.widgetId || ''
       const elementId = payload?.elementId
-      const updateMode = payload?.updateMode || 'full'
 
       if (chart.chartType === 'kpi') {
         const escapeHtml = (input: string) =>
@@ -328,21 +326,6 @@ export default () => {
         }
 
         if (elementId) {
-          if (updateMode === 'data') {
-            slidesStore.updateElement({
-              id: elementId,
-              props: {
-                content,
-                name: widget?.title || chart.meta?.widgetTitle,
-                canvasWidgetConfig: widget,
-                canvasWidgetId,
-                canvasTableId: tableId,
-                canvasWidgetKind: 'kpi' as const,
-                dashboardWidgetKind: 'kpi' as const,
-              },
-            })
-            return
-          }
           slidesStore.updateElement({ id: elementId, props: nextProps })
           return
         }

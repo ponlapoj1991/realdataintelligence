@@ -201,6 +201,7 @@ const ReportBuilder: React.FC<ReportBuilderProps> = ({ project, onUpdateProject 
 
   const autosaveTimerRef = useRef<number | null>(null);
   const lastSentLoadRef = useRef<{ presentationId: string; slidesHash: string } | null>(null);
+  const requestCanvasElementsRef = useRef<(() => void) | null>(null);
 
 	  const editingPresentation =
 	    presentations.find((p) => p.id === (selectedPresentationId || normalizedProject.activePresentationId)) ||
@@ -305,6 +306,7 @@ const ReportBuilder: React.FC<ReportBuilderProps> = ({ project, onUpdateProject 
         const updatedProject = updatePresentationCanvasTables(normalizedProject, editingPresentation.id, nextTables);
         await persistProject(updatedProject);
         sendCanvasContextToIframe(updatedProject);
+        requestCanvasElementsRef.current?.();
       },
       [editingPresentation, normalizedProject, persistProject, sendCanvasContextToIframe]
     );
@@ -570,6 +572,78 @@ const ReportBuilder: React.FC<ReportBuilderProps> = ({ project, onUpdateProject 
       );
     }, [iframeWindow, isEditorReady]);
 
+    useEffect(() => {
+      requestCanvasElementsRef.current = requestCanvasElements;
+    }, [requestCanvasElements]);
+
+    const buildKpiUpdatePayload = useCallback((payload: DashboardChartInsertPayload) => {
+      const escapeHtml = (input: string) =>
+        input
+          .replace(/&/g, '&amp;')
+          .replace(/</g, '&lt;')
+          .replace(/>/g, '&gt;')
+          .replace(/\"/g, '&quot;')
+          .replace(/'/g, '&#39;');
+
+      const toNumber = (raw: unknown) => {
+        if (raw === null || raw === undefined) return 0;
+        if (typeof raw === 'number') return Number.isFinite(raw) ? raw : 0;
+        if (typeof raw === 'object' && (raw as any).value !== undefined) {
+          const n = Number((raw as any).value);
+          return Number.isFinite(n) ? n : 0;
+        }
+        const n = Number(raw);
+        return Number.isFinite(n) ? n : 0;
+      };
+
+      const formatKpiValue = (value: number, mode?: 'auto' | 'text' | 'number' | 'compact' | 'accounting') => {
+        if (!Number.isFinite(value)) return '0';
+        switch (mode) {
+          case 'text':
+            return String(value);
+          case 'number':
+            return new Intl.NumberFormat(undefined, { maximumFractionDigits: 0 }).format(value);
+          case 'compact':
+            return new Intl.NumberFormat(undefined, {
+              notation: 'compact',
+              compactDisplay: 'short',
+              maximumFractionDigits: 1,
+            }).format(value);
+          case 'accounting':
+            return new Intl.NumberFormat(undefined, { useGrouping: true, minimumFractionDigits: 0, maximumFractionDigits: 2 }).format(
+              value
+            );
+          case 'auto':
+          default: {
+            const abs = Math.abs(value);
+            if (abs >= 1_000_000) {
+              return new Intl.NumberFormat(undefined, {
+                notation: 'compact',
+                compactDisplay: 'short',
+                maximumFractionDigits: 1,
+              }).format(value);
+            }
+            if (Number.isInteger(value)) {
+              return new Intl.NumberFormat(undefined, { maximumFractionDigits: 0 }).format(value);
+            }
+            return new Intl.NumberFormat(undefined, { useGrouping: true, minimumFractionDigits: 0, maximumFractionDigits: 2 }).format(value);
+          }
+        }
+      };
+
+      const raw = (payload as any).data?.series?.[0]?.[0];
+      const value = toNumber(raw);
+      const valueFormat = (payload as any).options?.dataLabelValueFormat as any;
+      const text = formatKpiValue(value, valueFormat);
+      const themeAccent = (payload as any).theme?.colors?.[0] || (payload as any).theme?.textColor || '#111827';
+      const color = (payload as any).options?.dataLabelColor || themeAccent;
+      const fontFamily = (payload as any).options?.dataLabelFontFamily as string | undefined;
+      const fontWeight = (payload as any).options?.dataLabelFontWeight || 'bold';
+      const safeText = escapeHtml(text);
+      const content = `<p style="text-align:center;"><span style="font-weight:${fontWeight};${fontFamily ? ` font-family:${fontFamily};` : ''}">${safeText}</span></p>`;
+      return { content, color, fontFamily };
+    }, []);
+
     const refreshCanvasWidgetsFromElements = useCallback(
       async (
         elements: Array<{ elementId: string; tableId: string; kind: 'chart' | 'kpi'; widget: DashboardWidget }>
@@ -588,22 +662,40 @@ const ReportBuilder: React.FC<ReportBuilderProps> = ({ project, onUpdateProject 
           const payload = await requestCanvasPptxPayload(table.dataSourceId, el.widget, table.filters || []);
           if (!payload) continue;
 
+          if (payload.chartType === 'kpi' || el.kind === 'kpi') {
+            const kpi = buildKpiUpdatePayload(payload);
+            iframeWindow.postMessage(
+              {
+                source: 'realdata-host',
+                type: 'update-kpi-text',
+                payload: {
+                  elementId: el.elementId,
+                  content: kpi.content,
+                  defaultColor: kpi.color,
+                  ...(kpi.fontFamily ? { defaultFontName: kpi.fontFamily } : {}),
+                },
+              },
+              '*'
+            );
+            continue;
+          }
+
           iframeWindow.postMessage(
             {
               source: 'realdata-host',
-              type: 'upsert-canvas-widget',
+              type: 'update-chart-data',
               payload: {
                 elementId: el.elementId,
-                updateMode: 'data',
-                chart: payload,
-                canvas: { tableId: table.id, widget: el.widget },
+                data: payload.data,
+                options: payload.options,
+                theme: payload.theme,
               },
             },
             '*'
           );
         }
       },
-      [editingPresentation, iframeWindow, requestCanvasPptxPayload]
+      [buildKpiUpdatePayload, editingPresentation, iframeWindow, requestCanvasPptxPayload]
     );
 
     const canvasFiltersHash = useMemo(() => {
