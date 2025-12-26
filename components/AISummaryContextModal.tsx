@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { X, Save, Sparkles, Table2, Calendar, Columns3, PlayCircle, FileText } from 'lucide-react';
-import type { AISummaryContext, AIProvider, AISettings, ColumnConfig, DataSource, RawRow, TransformationRule } from '../types';
+import { AIProvider, type AISummaryContext, type AISettings, type ColumnConfig, type DataSource, type RawRow, type TransformationRule } from '../types';
 import VirtualTable from './VirtualTable';
 import { AiSummarySort, loadFilteredDataSourceRows } from '../utils/aiSummary';
 
@@ -430,4 +430,3 @@ const AISummaryContextModal: React.FC<Props> = ({
 };
 
 export default AISummaryContextModal;
-
