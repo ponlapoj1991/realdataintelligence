@@ -17,6 +17,20 @@ import { useToast } from '../components/ToastProvider';
 import EmptyState from '../components/EmptyState';
 import { useTransformPipelineWorker } from '../hooks/useTransformPipelineWorker';
 
+const BUILD_STRUCTURE_EXTRACTION_METHODS: ReadonlyArray<TransformMethod> = [
+  'copy',
+  'extract_serialize',
+  'date_extract',
+  'date_format',
+];
+
+const normalizeBuildStructureMethod = (method?: TransformMethod): TransformMethod => {
+  if (!method) return 'copy';
+  if (BUILD_STRUCTURE_EXTRACTION_METHODS.includes(method)) return method;
+  if (String(method).startsWith('array_')) return 'extract_serialize';
+  return 'copy';
+};
+
 const safeRender = (val: any) => {
   if (val === null || val === undefined) return '';
   if (typeof val === 'boolean') return val ? 'TRUE' : 'FALSE';
@@ -229,13 +243,16 @@ const BuildStructure: React.FC<BuildStructureProps> = ({ project, onUpdateProjec
   const buildDraftForSource = (sourceId: string, sources: DataSource[], existing?: StructureRule): RuleDraft => {
     const src = sources.find((s) => s.id === sourceId);
     const firstCol = existing?.sourceKey || src?.columns[0]?.key || '';
-    const inferredMethod: TransformMethod = existing?.method ? existing.method : 'copy';
+    const inferredMethod: TransformMethod = normalizeBuildStructureMethod(existing?.method);
+    const shouldReuseParams = existing?.method === inferredMethod;
     return {
       sourceId,
       sourceKey: firstCol,
       method: inferredMethod,
       autoMethod: !existing,
-      params: existing?.params || (inferredMethod === 'date_extract' ? { datePart: 'date_only' } : {}),
+      params:
+        (shouldReuseParams ? existing?.params : undefined) ||
+        (inferredMethod === 'date_extract' ? { datePart: 'date_only' } : inferredMethod === 'date_format' ? { format: 'YYYY-MM-DD' } : {}),
       valueMap: existing?.valueMap || {},
       manualKey: '',
       manualValue: '',
@@ -273,7 +290,7 @@ const BuildStructure: React.FC<BuildStructureProps> = ({ project, onUpdateProjec
             nextMethod = 'date_extract';
             nextParams = { datePart: 'date_only' };
           } else if (analysis.isArrayLikely) {
-            nextMethod = 'array_count';
+            nextMethod = 'extract_serialize';
             nextParams = {};
           } else {
             nextMethod = 'copy';
@@ -1193,14 +1210,6 @@ const BuildStructure: React.FC<BuildStructureProps> = ({ project, onUpdateProjec
                                   ? { datePart: curr.params?.datePart || 'date_only' }
                                   : method === 'date_format'
                                   ? { format: curr.params?.format || 'YYYY-MM-DD' }
-                                  : method === 'array_join'
-                                  ? { delimiter: curr.params?.delimiter || ', ' }
-                                  : method === 'array_extract'
-                                  ? { index: curr.params?.index ?? 0 }
-                                  : method === 'array_extract_by_prefix'
-                                  ? { prefix: curr.params?.prefix || 'A-' }
-                                  : method === 'array_includes'
-                                  ? { keyword: curr.params?.keyword || '' }
                                   : {},
                               valueMap: editingTargetName ? curr.valueMap : {},
                             }));
@@ -1208,92 +1217,12 @@ const BuildStructure: React.FC<BuildStructureProps> = ({ project, onUpdateProjec
                           className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm"
                         >
                           <option value="copy">Direct Copy</option>
-                          <option value="array_count">Count Items</option>
-                          <option value="array_extract">Extract item by index</option>
                           <option value="extract_serialize">Extract Serialize (Recommended)</option>
-                          <option value="array_extract_by_prefix">Extract item by prefix (ทดลอง)</option>
-                          <option value="array_join">Join to String</option>
-                          <option value="array_includes">Check presence (Boolean)</option>
                           <option value="date_extract">Extract Date/Time</option>
-                          <option value="date_format">Date format</option>
+                          <option value="date_format">Date Format</option>
                         </select>
                       </div>
                     </div>
-
-                    {draft.method === 'array_join' && (
-                      <div className="grid grid-cols-2 gap-4 mt-3">
-                        <div className="space-y-2">
-                          <label className="text-sm font-medium text-gray-700">Delimiter</label>
-                          <input
-                            value={draft.params?.delimiter || ', '}
-                            onChange={(e) => updateDraftWithRefresh(draft.sourceId, (curr) => ({
-                              ...curr,
-                              autoMethod: false,
-                              params: { ...curr.params, delimiter: e.target.value },
-                            }))}
-                            className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm"
-                          />
-                        </div>
-                      </div>
-                    )}
-
-                    {draft.method === 'array_extract' && (
-                      <div className="grid grid-cols-2 gap-4 mt-3">
-                        <div className="space-y-2">
-                          <label className="text-sm font-medium text-gray-700">Index</label>
-                          <input
-                            type="number"
-                            value={draft.params?.index ?? 0}
-                            onChange={(e) => updateDraftWithRefresh(draft.sourceId, (curr) => ({
-                              ...curr,
-                              autoMethod: false,
-                              params: { ...curr.params, index: Number(e.target.value) },
-                            }))}
-                            className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm"
-                          />
-                        </div>
-                      </div>
-                    )}
-
-                    {draft.method === 'array_extract_by_prefix' && (
-                      <div className="grid grid-cols-2 gap-4 mt-3">
-                        <div className="space-y-2">
-                          <label className="text-sm font-medium text-gray-700">Prefix</label>
-                          <input
-                            value={draft.params?.prefix ?? 'A-'}
-                            onChange={(e) =>
-                              updateDraftWithRefresh(draft.sourceId, (curr) => ({
-                                ...curr,
-                                autoMethod: false,
-                                params: { ...curr.params, prefix: e.target.value },
-                              }))
-                            }
-                            className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm"
-                            placeholder="เช่น A-"
-                          />
-                          <p className="text-[11px] text-gray-500">
-                            ระบบจะเลือก “ตัวแรก” ที่ขึ้นต้นด้วย prefix นี้ แล้วค่อยเอาไป Map ต่อ
-                          </p>
-                        </div>
-                      </div>
-                    )}
-
-                    {draft.method === 'array_includes' && (
-                      <div className="grid grid-cols-2 gap-4 mt-3">
-                        <div className="space-y-2">
-                          <label className="text-sm font-medium text-gray-700">Keyword</label>
-                          <input
-                            value={draft.params?.keyword || ''}
-                            onChange={(e) => updateDraftWithRefresh(draft.sourceId, (curr) => ({
-                              ...curr,
-                              autoMethod: false,
-                              params: { ...curr.params, keyword: e.target.value },
-                            }))}
-                            className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm"
-                          />
-                        </div>
-                      </div>
-                    )}
 
                     {draft.method === 'date_extract' && (
                       <div className="grid grid-cols-2 gap-4 mt-3">
