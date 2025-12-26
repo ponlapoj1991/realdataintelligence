@@ -12,7 +12,7 @@ const PROVIDERS = [
 
 const MODELS: Record<AIProvider, string[]> = {
   [AIProvider.GEMINI]: ['gemini-2.5-flash', 'gemini-2.5-pro', 'gemini-1.5-flash', 'gemini-1.5-pro'],
-  [AIProvider.OPENAI]: ['gpt-4o', 'gpt-4-turbo', 'gpt-3.5-turbo'],
+  [AIProvider.OPENAI]: ['gpt-4.1', 'gpt-4.1-mini', 'gpt-4o', 'gpt-4o-mini', 'gpt-4-turbo'],
   [AIProvider.CLAUDE]: ['claude-3-5-sonnet-20240620', 'claude-3-opus-20240229', 'claude-3-sonnet-20240229'],
 };
 
@@ -231,7 +231,7 @@ const Settings: React.FC<SettingsProps> = ({ onBack }) => {
                 )}
                 <button 
                     onClick={handleSaveAi}
-                    disabled={isSaving || !aiSettings.apiKey}
+                    disabled={isSaving}
                     className="flex items-center px-6 py-2.5 bg-gray-800 text-white rounded-lg font-medium hover:bg-gray-900 shadow-sm transition-colors disabled:bg-gray-300 disabled:cursor-not-allowed"
                 >
                     {isSaving ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : <Save className="w-4 h-4 mr-2" />}

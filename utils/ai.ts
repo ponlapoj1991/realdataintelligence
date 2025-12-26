@@ -1,6 +1,4 @@
 
-
-import { GoogleGenAI } from "@google/genai";
 import { DashboardWidget, AISettings, AIProvider } from "../types";
 
 export interface DataSummary {
@@ -13,95 +11,62 @@ export interface DataSummary {
 
 // --- FACTORY: Dynamic AI Client Handling ---
 
-const getGeminiResponse = async (apiKey: string, model: string, prompt: string, jsonMode = false) => {
-    const ai = new GoogleGenAI({ apiKey });
-    const config: any = {};
-    if (jsonMode) config.responseMimeType = "application/json";
-    
-    const response = await ai.models.generateContent({
-        model: model,
-        contents: prompt,
-        config: config
-    });
-    return response.text;
-};
+const getDefaultModel = (provider: AIProvider) => {
+  switch (provider) {
+    case AIProvider.OPENAI:
+      return 'gpt-4.1-mini'
+    case AIProvider.GEMINI:
+      return 'gemini-2.5-flash'
+    case AIProvider.CLAUDE:
+      return 'claude-3-5-sonnet-20240620'
+    default:
+      return 'gemini-2.5-flash'
+  }
+}
 
-const getOpenAIResponse = async (apiKey: string, model: string, prompt: string, jsonMode = false) => {
-    // Simple fetch implementation for OpenAI to avoid extra SDK dependency
-    const response = await fetch('https://api.openai.com/v1/chat/completions', {
-        method: 'POST',
-        headers: {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${apiKey}`
-        },
-        body: JSON.stringify({
-            model: model,
-            messages: [{ role: 'user', content: prompt }],
-            response_format: jsonMode ? { type: "json_object" } : undefined
-        })
-    });
+const callAiProxy = async (params: {
+  provider: AIProvider
+  model: string
+  prompt: string
+  jsonMode: boolean
+  temperature: number
+  maxTokens: number
+}) => {
+  const response = await fetch('/api/ai', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(params),
+  })
 
-    if (!response.ok) {
-        const err = await response.json();
-        throw new Error(`OpenAI Error: ${err.error?.message || response.statusText}`);
-    }
+  const payload = await response.json().catch(() => ({} as any))
+  if (!response.ok) {
+    const msg = payload?.error || response.statusText || 'AI request failed'
+    throw new Error(String(msg))
+  }
 
-    const data = await response.json();
-    return data.choices[0].message.content;
-};
-
-const getClaudeResponse = async (apiKey: string, model: string, prompt: string, jsonMode = false) => {
-    // Claude REST API (Note: Browser calls might fail CORS unless proxy is used, but implementing for completeness)
-    const response = await fetch('https://api.anthropic.com/v1/messages', {
-        method: 'POST',
-        headers: {
-            'Content-Type': 'application/json',
-            'x-api-key': apiKey,
-            'anthropic-version': '2023-06-01',
-            'anthropic-dangerous-direct-browser-access': 'true' // Required for browser-side
-        },
-        body: JSON.stringify({
-            model: model,
-            max_tokens: 4000,
-            messages: [{ role: 'user', content: prompt }]
-        })
-    });
-
-    if (!response.ok) {
-        const err = await response.json();
-        throw new Error(`Claude Error: ${err.error?.message || response.statusText}`);
-    }
-
-    const data = await response.json();
-    return data.content[0].text;
-};
+  return String(payload?.text || '')
+}
 
 // Main Dispatcher
 const generateAIContent = async (settings: AISettings | undefined, prompt: string, jsonMode = false): Promise<string | null> => {
-    // Fallback to environment key (Gemini) if no settings provided (backward compatibility/demo mode)
-    const provider = settings?.provider || AIProvider.GEMINI;
-    const apiKey = settings?.apiKey || process.env.API_KEY;
-    const model = settings?.model || 'gemini-2.5-flash';
+  const provider = settings?.provider || AIProvider.GEMINI
+  const model = (settings?.model || getDefaultModel(provider)).trim()
+  const temperature = typeof settings?.temperature === 'number' ? settings.temperature : 0.4
+  const maxTokens = typeof settings?.maxTokens === 'number' ? settings.maxTokens : 1200
 
-    if (!apiKey) {
-        throw new Error("No API Key configured. Please go to Project Settings to set up your AI provider.");
-    }
-
-    try {
-        switch (provider) {
-            case AIProvider.GEMINI:
-                return await getGeminiResponse(apiKey, model, prompt, jsonMode);
-            case AIProvider.OPENAI:
-                return await getOpenAIResponse(apiKey, model, prompt, jsonMode);
-            case AIProvider.CLAUDE:
-                return await getClaudeResponse(apiKey, model, prompt, jsonMode);
-            default:
-                throw new Error("Unsupported AI Provider");
-        }
-    } catch (error) {
-        console.error("AI Generation Error:", error);
-        throw error;
-    }
+  try {
+    return await callAiProxy({
+      provider,
+      model,
+      prompt,
+      jsonMode,
+      temperature,
+      maxTokens,
+    })
+  } catch (error) {
+    console.error('AI Generation Error:', error)
+    throw error
+  }
 };
 
 
@@ -259,22 +224,18 @@ export const askAiAgent = async (
     question: string,
     settings?: AISettings
 ): Promise<string> => {
-    try {
-        const safeContext = contextData.slice(0, 200);
-        
-        const prompt = `
-          Context Data (First 200 rows of selection):
-          ${JSON.stringify(safeContext)}
-          
-          User Question: "${question}"
-          
-          Answer the user's question based strictly on the provided Context Data.
-          Answer in Thai (ภาษาไทย).
-        `;
-    
-        const text = await generateAIContent(settings, prompt);
-        return text || "ไม่สามารถวิเคราะห์ข้อมูลได้";
-    } catch (error: any) {
-        return `เกิดข้อผิดพลาด: ${error.message}`;
-    }
+  const safeContext = contextData.slice(0, 200)
+
+  const prompt = `
+    Context Data (First 200 rows of selection):
+    ${JSON.stringify(safeContext)}
+
+    User Question: "${question}"
+
+    Answer the user's question based strictly on the provided Context Data.
+    Answer in Thai (ภาษาไทย).
+  `
+
+  const text = await generateAIContent(settings, prompt)
+  return text || 'ไม่สามารถวิเคราะห์ข้อมูลได้'
 };

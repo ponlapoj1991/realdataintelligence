@@ -14,6 +14,7 @@ import { processAiAgentAction, askAiAgent } from '../utils/ai';
 import { getDataSourcesByKind } from '../utils/dataSources';
 import TableColumnFilter from '../components/TableColumnFilter';
 import { useToast } from '../components/ToastProvider';
+import { useGlobalSettings } from '../components/GlobalSettingsProvider';
 
 interface AiAgentProps {
   project: Project;
@@ -93,6 +94,7 @@ const AiAgent: React.FC<AiAgentProps> = ({ project, onUpdateProject }) => {
   const [isProcessing, setIsProcessing] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
   const { showToast } = useToast();
+  const { settings: globalSettings } = useGlobalSettings();
 
   // --- Preset State ---
   const [presets, setPresets] = useState<AIPresets>(project.aiPresets || DEFAULT_PRESETS);
@@ -350,14 +352,25 @@ const AiAgent: React.FC<AiAgentProps> = ({ project, onUpdateProject }) => {
 
       if (chatMode === 'ask') {
           setIsProcessing(true);
-          const answer = await askAiAgent(contextData, currentInput, project.aiSettings);
-          setIsProcessing(false);
-          setMessages(prev => [...prev, {
-              id: `a-${Date.now()}`,
-              role: 'assistant',
-              content: answer,
-              timestamp: Date.now()
-          }]);
+          try {
+              const answer = await askAiAgent(contextData, currentInput, globalSettings.ai);
+              setMessages(prev => [...prev, {
+                  id: `a-${Date.now()}`,
+                  role: 'assistant',
+                  content: answer,
+                  timestamp: Date.now()
+              }]);
+          } catch (err: any) {
+              setMessages(prev => [...prev, {
+                  id: `a-${Date.now()}`,
+                  role: 'assistant',
+                  content: `Error: ${err?.message || 'AI request failed'}`,
+                  timestamp: Date.now()
+              }]);
+              showToast('AI Error', err?.message || 'AI request failed', 'error');
+          } finally {
+              setIsProcessing(false);
+          }
       } else {
           // Action Mode
           setPendingActionPrompt(currentInput);
@@ -383,7 +396,7 @@ const AiAgent: React.FC<AiAgentProps> = ({ project, onUpdateProject }) => {
 
       try {
           const sourceData = getSelectedData();
-          const results = await processAiAgentAction(sourceData, pendingActionPrompt, project.aiSettings);
+          const results = await processAiAgentAction(sourceData, pendingActionPrompt, globalSettings.ai);
           
           // Update Grid Data - MAPPING BACK TO ORIGINAL INDEX
           const minR = Math.min(selection.startRow, selection.endRow);
