@@ -65,7 +65,19 @@ const {
   textElementResizeHandlers,
 } = useCommonOperate(scaleWidth, scaleHeight)
 
-const resizeHandlers = props.elementInfo.type === 'text' || props.elementInfo.type === 'table' ? textElementResizeHandlers : _resizeHandlers
+const isKpiText = computed(() => {
+  if (props.elementInfo.type !== 'text') return false
+  const el: any = props.elementInfo as any
+  return props.elementInfo.autoResize === false && (el.dashboardWidgetKind === 'kpi' || el.canvasWidgetKind === 'kpi')
+})
+
+const resizeHandlers = computed(() => {
+  if (props.elementInfo.type === 'text') {
+    return isKpiText.value ? _resizeHandlers.value : textElementResizeHandlers.value
+  }
+  if (props.elementInfo.type === 'table') return textElementResizeHandlers.value
+  return _resizeHandlers.value
+})
 
 const cannotRotate = computed(() => ['chart', 'video', 'audio'].includes(props.elementInfo.type))
 </script>

@@ -76,24 +76,6 @@
     </div>
 
     <div class="right">
-      <!-- Dashboard Chart Menu with Dropdown -->
-      <div class="group-menu-item">
-        <div class="menu-item" v-tooltip="'Dashboard Charts'" @click="requestInsertDashboard">
-          <IconChartHistogram class="icon" />
-        </div>
-        <Popover trigger="click" center v-model:value="dashboardMenuVisible">
-          <template #content>
-            <PopoverMenuItem class="popover-menu-item" @click="requestInsertDashboard(); dashboardMenuVisible = false">
-              <IconChartHistogram class="icon" /> Select Dashboard
-            </PopoverMenuItem>
-            <PopoverMenuItem class="popover-menu-item" @click="requestUpdateCharts(); dashboardMenuVisible = false">
-              <IconRefresh class="icon" /> Update Linked Charts
-            </PopoverMenuItem>
-          </template>
-          <div class="arrow-btn"><IconDown class="arrow" /></div>
-        </Popover>
-      </div>
-
       <!-- Slideshow Menu -->
       <div class="group-menu-item">
         <div class="menu-item" v-tooltip="'Start Slideshow (F5)'" @click="enterScreening()">
@@ -154,7 +136,6 @@ const { importSpecificFile, importPPTXFile, importJSON, exporting } = useImport(
 const { resetSlides } = useSlideHandler()
 
 const mainMenuVisible = ref(false)
-const dashboardMenuVisible = ref(false)
 const hotkeyDrawerVisible = ref(false)
 const editingTitle = ref(false)
 const titleValue = ref('')
@@ -187,58 +168,6 @@ const openMarkupPanel = () => {
 
 const openAIPPTDialog = () => {
   mainStore.setAIPPTDialogState(true)
-}
-
-const requestInsertDashboard = () => {
-  window.parent?.postMessage({ source: 'realpptx', type: 'open-dashboard-insert' }, '*')
-}
-
-// Automation Report: Request update for all linked charts
-const requestUpdateCharts = () => {
-  // Gather all linked charts from all slides
-  const linkedCharts: Array<{ elementId: string; widgetId: string; dashboardId: string; kind?: 'chart' | 'kpi' }> = []
-
-  slidesStore.slides.forEach(slide => {
-    slide.elements.forEach(element => {
-      if (element.type === 'chart' && element.widgetId && element.dashboardId) {
-        linkedCharts.push({
-          elementId: element.id,
-          widgetId: element.widgetId,
-          dashboardId: element.dashboardId,
-          kind: 'chart',
-        })
-      }
-      if (
-        element.type === 'text' &&
-        (element as any).dashboardWidgetKind === 'kpi' &&
-        (element as any).widgetId &&
-        (element as any).dashboardId
-      ) {
-        linkedCharts.push({
-          elementId: element.id,
-          widgetId: (element as any).widgetId,
-          dashboardId: (element as any).dashboardId,
-          kind: 'kpi',
-        })
-      }
-    })
-  })
-
-  if (linkedCharts.length === 0) {
-    // No linked charts found
-    window.parent?.postMessage({
-      source: 'realpptx',
-      type: 'no-linked-charts'
-    }, '*')
-    return
-  }
-
-  // Request Dashboard to send updated data for these charts
-  window.parent?.postMessage({
-    source: 'realpptx',
-    type: 'request-chart-updates',
-    payload: { linkedCharts },
-  }, '*')
 }
 
 const requestHostSave = () => {

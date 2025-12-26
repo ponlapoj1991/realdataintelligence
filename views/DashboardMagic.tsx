@@ -24,7 +24,7 @@ import EmptyState from '../components/EmptyState';
 import ChartBuilder from '../components/ChartBuilder';
 import MagicWidgetRenderer from '../components/MagicWidgetRenderer';
 import DataSourcePickerModal from '../components/DataSourcePickerModal';
-import { Project, ProjectDashboard, DashboardWidget, DashboardFilter, DrillDownState, RawRow, FilterDataType } from '../types';
+import { Project, ProjectDashboard, DashboardWidget, DashboardFilter, DrillDownState, RawRow, FilterDataType, DateFilterOperator } from '../types';
 import {
   ensureMagicDashboards,
   addMagicDashboard,
@@ -43,26 +43,33 @@ import { REALPPTX_CHART_THEME } from '../constants/chartTheme';
 import { exportToExcel } from '../utils/excel';
 import { generatePowerPoint } from '../utils/report';
 import { useMagicAggregationWorker } from '../hooks/useMagicAggregationWorker';
-import { applyWidgetFilters, getTopNOverflowDimensionValues } from '../utils/widgetData';
+import { applyWidgetFilters, getTopNOverflowDimensionValues, toDate } from '../utils/widgetData';
 import { applyTransformation } from '../utils/transform';
 
 // --- Helper Functions (Ported from Analytics.tsx) ---
 const SAMPLE_SIZE = 50;
 
+const normalizeDateOperator = (operator?: DateFilterOperator): DateFilterOperator => {
+  if (operator === 'on' || operator === 'before' || operator === 'after' || operator === 'between') return operator;
+  return 'between';
+};
+
 const toDateValue = (value: any): Date | null => {
-  if (value === null || value === undefined || value === '') return null;
-  if (value instanceof Date) {
-    return isNaN(value.getTime()) ? null : value;
-  }
-  const parsed = Date.parse(value);
-  if (Number.isNaN(parsed)) return null;
-  return new Date(parsed);
+  return toDate(value);
+};
+
+const formatLocalDateInput = (date: Date): string => {
+  const yyyy = date.getFullYear();
+  const mm = String(date.getMonth() + 1).padStart(2, '0');
+  const dd = String(date.getDate()).padStart(2, '0');
+  return `${yyyy}-${mm}-${dd}`;
 };
 
 const normalizeDateInputValue = (value: string): string => {
   const date = toDateValue(value);
   if (!date) return '';
-  return date.toISOString().slice(0, 10);
+  // Use local date parts to avoid timezone shifting (prevents values "drifting" in a loop).
+  return formatLocalDateInput(date);
 };
 
 const normalizeRangeStart = (value?: string) => {
@@ -92,18 +99,24 @@ const inferColumnType = (column: string, rows: RawRow[]): FilterDataType => {
 
   if (samples.length === 0) return 'text';
 
+  const looksLikeDateString = (raw: string) => {
+    const s = raw.trim();
+    if (!s) return false;
+    if (s.length < 6) return false;
+    // Require at least some date-like structure to avoid misclassifying plain numbers/ids.
+    if (!/[-/]/.test(s) && !/^\d{8}$/.test(s)) return false;
+    return !!toDateValue(s);
+  };
+
   const dateLikes = samples.filter((val) => {
     if (val instanceof Date) return !isNaN(val.getTime());
-    if (typeof val === 'string') {
-      const trimmed = val.trim();
-      if (trimmed.length < 6) return false;
-      const containsDateSep = /[-/]/.test(trimmed);
-      const parsed = Date.parse(trimmed);
-      return containsDateSep && !Number.isNaN(parsed);
-    }
+    if (typeof val === 'string') return looksLikeDateString(val);
     return false;
-  });
-  if (dateLikes.length / samples.length >= 0.6) return 'date';
+  }).length;
+
+  const dateRatio = dateLikes / samples.length;
+  if (dateRatio >= 0.6) return 'date';
+  if (dateLikes >= 10 && dateRatio >= 0.4) return 'date';
 
   const numberLikes = samples.filter((val) => {
     if (typeof val === 'number') return true;
@@ -152,11 +165,14 @@ const DashboardMagic: React.FC<DashboardMagicProps> = ({ project, onUpdateProjec
   // --- New States for Filters & Interaction ---
   const [filters, setFilters] = useState<DashboardFilter[]>([]);
   const [isPresentationMode, setIsPresentationMode] = useState(false);
-  const [interactionMode, setInteractionMode] = useState<'drill' | 'filter'>('drill');
-  const [isExporting, setIsExporting] = useState(false);
-  const [isSaving, setIsSaving] = useState(false);
+	  const [interactionMode, setInteractionMode] = useState<'drill' | 'filter'>('drill');
+	  const [isExporting, setIsExporting] = useState(false);
+	  const [isSaving, setIsSaving] = useState(false);
   const [newFilterCol, setNewFilterCol] = useState('');
   const [drillDown, setDrillDown] = useState<DrillDownState | null>(null);
+  const [filterValueOptions, setFilterValueOptions] = useState<Record<string, string[]>>({});
+  const [filterColumnTypeHints, setFilterColumnTypeHints] = useState<Record<string, FilterDataType>>({});
+	  const filterValueLoadingRef = useRef<Set<string>>(new Set());
 
   // Grid State
   const [draggedWidget, setDraggedWidget] = useState<{ id: string; sectionIndex: number; colSpan: number; heightPx: number } | null>(null);
@@ -215,6 +231,23 @@ const DashboardMagic: React.FC<DashboardMagicProps> = ({ project, onUpdateProjec
     setFilters(editingDashboard?.globalFilters || []);
   }, [editingDashboard?.id]);
 
+  const persistProject = useCallback(
+    async (updated: Project) => {
+      onUpdateProject?.(updated);
+      await saveProject(updated);
+    },
+    [onUpdateProject]
+  );
+
+  const persistGlobalFilters = useCallback(
+    async (nextFilters: DashboardFilter[]) => {
+      if (!editingDashboard) return;
+      const updated = updateMagicDashboardGlobalFilters(normalizedProject, editingDashboard.id, nextFilters);
+      await persistProject(updated);
+    },
+    [editingDashboard, normalizedProject, persistProject]
+  );
+
   // --- Data Logic (Moved from Analytics.tsx) ---
   const { rows: baseData, availableColumns, dataSourceId: baseDataSourceId } = useMemo(() => {
     return resolveDashboardBaseData(normalizedProject, editingDashboard ?? null);
@@ -226,11 +259,11 @@ const DashboardMagic: React.FC<DashboardMagicProps> = ({ project, onUpdateProjec
     editingDashboard?.dataSourceId,
   ]);
 
-  const workerSource = useMemo(() => {
-    const resolvedSource =
-      (baseDataSourceId && normalizedProject.dataSources?.find((s) => s.id === baseDataSourceId)) ||
-      (normalizedProject.activeDataSourceId && normalizedProject.dataSources?.find((s) => s.id === normalizedProject.activeDataSourceId)) ||
-      normalizedProject.dataSources?.[0];
+	  const workerSource = useMemo(() => {
+	    const resolvedSource =
+	      (baseDataSourceId && normalizedProject.dataSources?.find((s) => s.id === baseDataSourceId)) ||
+	      (normalizedProject.activeDataSourceId && normalizedProject.dataSources?.find((s) => s.id === normalizedProject.activeDataSourceId)) ||
+	      normalizedProject.dataSources?.[0];
 
     return {
       mode: 'dataSource' as const,
@@ -238,22 +271,147 @@ const DashboardMagic: React.FC<DashboardMagicProps> = ({ project, onUpdateProjec
       dataSourceId: baseDataSourceId || resolvedSource?.id,
       dataVersion: resolvedSource?.updatedAt ?? normalizedProject.lastModified,
       transformRules: normalizedProject.transformRules,
-    };
-  }, [baseDataSourceId, normalizedProject.dataSources, normalizedProject.activeDataSourceId, normalizedProject.id, normalizedProject.lastModified, normalizedProject.transformRules]);
+	    };
+	  }, [baseDataSourceId, normalizedProject.dataSources, normalizedProject.activeDataSourceId, normalizedProject.id, normalizedProject.lastModified, normalizedProject.transformRules]);
+	
+	  const resolvedSourceForMagic = useMemo(() => {
+	    const desiredId = workerSource.dataSourceId;
+	    return (
+	      (desiredId && normalizedProject.dataSources?.find((s) => s.id === desiredId)) ||
+	      (normalizedProject.activeDataSourceId &&
+	        normalizedProject.dataSources?.find((s) => s.id === normalizedProject.activeDataSourceId)) ||
+	      normalizedProject.dataSources?.[0] ||
+	      null
+	    );
+	  }, [workerSource.dataSourceId, normalizedProject.dataSources, normalizedProject.activeDataSourceId]);
+	
+	  const sourceColumnTypeMap = useMemo(() => {
+	    const out: Record<string, FilterDataType> = {};
+	    const cols = resolvedSourceForMagic?.columns || [];
+	    for (const c of cols) {
+	      if (!c?.key) continue;
+	      if (c.type === 'date') out[c.key] = 'date';
+	      else if (c.type === 'number') out[c.key] = 'number';
+	      else out[c.key] = 'text';
+	    }
+	    return out;
+	  }, [resolvedSourceForMagic?.id, resolvedSourceForMagic?.columns]);
 
-  const columnTypeMap = useMemo(() => {
-    const sampleRows = baseData.slice(0, SAMPLE_SIZE);
-    const map: Record<string, FilterDataType> = {};
-    availableColumns.forEach(col => {
-      map[col] = inferColumnType(col, sampleRows);
-    });
-    return map;
-  }, [availableColumns, baseData]);
+	  const columnTypeMap = useMemo(() => {
+	    const targetSampleCount = 800;
+      const sampleRows =
+        baseData.length <= targetSampleCount
+          ? baseData
+          : (() => {
+              const out: RawRow[] = [];
+              const n = baseData.length;
+              const headCount = 200;
+              const tailCount = 200;
+              const strideCount = 400;
+
+              out.push(...baseData.slice(0, Math.min(headCount, n)));
+              if (n > headCount) {
+                out.push(...baseData.slice(Math.max(0, n - tailCount)));
+              }
+
+              const step = Math.max(1, Math.floor(n / Math.max(1, strideCount)));
+              for (let i = 0; i < n && out.length < targetSampleCount; i += step) {
+                out.push(baseData[i]);
+              }
+
+              return out.slice(0, targetSampleCount);
+            })();
+	    const map: Record<string, FilterDataType> = {};
+	    availableColumns.forEach(col => {
+	      const declared = sourceColumnTypeMap[col];
+	      if (declared === 'date' || declared === 'number') {
+	        map[col] = declared;
+	      } else {
+	        // Many ingestion/prep tables store dates as TEXT; infer from actual values for better Magic Filters UX.
+	        map[col] = inferColumnType(col, sampleRows);
+	      }
+	    });
+	    return map;
+	  }, [availableColumns, baseData, sourceColumnTypeMap]);
 
   const getColumnType = useCallback(
-    (column: string): FilterDataType => columnTypeMap[column] || 'text',
-    [columnTypeMap]
+    (column: string): FilterDataType => {
+      const dashId = editingDashboard?.id || 'unknown';
+      const sourceId = workerSource.dataSourceId || 'unknown';
+      const dataVersion = workerSource.dataVersion || 0;
+      const key = `${dashId}:${sourceId}:${dataVersion}:${column}`;
+      return filterColumnTypeHints[key] || columnTypeMap[column] || 'text';
+    },
+    [columnTypeMap, editingDashboard?.id, filterColumnTypeHints, workerSource.dataSourceId, workerSource.dataVersion]
   );
+
+  const filtersRef = useRef<DashboardFilter[]>([]);
+  useEffect(() => {
+    filtersRef.current = filters;
+  }, [filters]);
+
+  const normalizeFiltersForDetectedTypes = useCallback(
+    (input: DashboardFilter[]) => {
+      let changed = false;
+      const next = input.map((f) => {
+        if (!f?.column) return f;
+        const detected = getColumnType(f.column);
+        if (detected !== 'date') return f;
+
+        const normalizedValue = f.value ? normalizeDateInputValue(String(f.value)) : '';
+        const normalizedEndValue = f.endValue ? normalizeDateInputValue(String(f.endValue)) : '';
+        if (f.value && !normalizedValue) return f;
+        if (f.endValue && !normalizedEndValue) return f;
+
+        const nextOperator =
+          f.dataType === 'date' ? normalizeDateOperator(f.operator) : ('between' as DateFilterOperator);
+
+        let out = f;
+        if (out.dataType !== 'date') {
+          out = { ...out, dataType: 'date' };
+          changed = true;
+        }
+        if ((out.operator || '') !== nextOperator) {
+          out = { ...out, operator: nextOperator };
+          changed = true;
+        }
+        if ((out.value || '') !== normalizedValue) {
+          out = { ...out, value: normalizedValue };
+          changed = true;
+        }
+
+        if (nextOperator === 'between') {
+          const endToSet = normalizedEndValue || (normalizedValue ? normalizedValue : '');
+          if ((out.endValue || '') !== endToSet) {
+            out = { ...out, endValue: endToSet };
+            changed = true;
+          }
+        } else {
+          if ((out.endValue || '') !== '') {
+            out = { ...out, endValue: '' };
+            changed = true;
+          }
+        }
+
+        return out;
+      });
+
+      return { next, changed };
+    },
+    [getColumnType]
+  );
+
+  useEffect(() => {
+    if (!editingDashboard) return;
+    const current = filtersRef.current || [];
+    if (current.length === 0) return;
+
+    const { next, changed } = normalizeFiltersForDetectedTypes(current);
+    if (!changed) return;
+
+    setFilters(next);
+    void persistGlobalFilters(next);
+  }, [editingDashboard?.id, normalizeFiltersForDetectedTypes, persistGlobalFilters]);
 
   const matchesFilterCondition = useCallback((row: RawRow, filter: DashboardFilter) => {
     if (!filter.column) return true;
@@ -261,12 +419,30 @@ const DashboardMagic: React.FC<DashboardMagicProps> = ({ project, onUpdateProjec
     if (filter.dataType === 'date') {
       const rowDate = toDateValue(value);
       if (!rowDate) return false;
+      const operator = normalizeDateOperator(filter.operator);
+      if (operator === 'between') {
+        const start = normalizeRangeStart(filter.value);
+        const end = normalizeRangeEnd(filter.endValue);
+        if (start && rowDate < start) return false;
+        if (end && rowDate > end) return false;
+        if (!start && !end) return true;
+        return true;
+      }
+
       const start = normalizeRangeStart(filter.value);
-      const end = normalizeRangeEnd(filter.endValue);
-      if (start && rowDate < start) return false;
-      if (end && rowDate > end) return false;
-      if (!start && !end) return true;
-      return true;
+      const end = normalizeRangeEnd(filter.value);
+      if (!start || !end) return true;
+
+      if (operator === 'on') {
+        return rowDate >= start && rowDate <= end;
+      }
+
+      if (operator === 'before') {
+        return rowDate < start;
+      }
+
+      // after
+      return rowDate > end;
     }
     if (!filter.value) return true;
     return String(value ?? '').toLowerCase() === filter.value.toLowerCase();
@@ -276,8 +452,76 @@ const DashboardMagic: React.FC<DashboardMagicProps> = ({ project, onUpdateProjec
     if (filters.length === 0) return baseData;
     return baseData.filter(row => filters.every(f => matchesFilterCondition(row, f)));
   }, [baseData, filters, matchesFilterCondition]);
-
+	
   const magicAggWorker = useMagicAggregationWorker(workerSource, REALPPTX_CHART_THEME);
+	
+	  const makeFilterValueKey = useCallback(
+	    (col: string) => {
+	      const dashId = editingDashboard?.id || 'unknown';
+	      const sourceId = workerSource.dataSourceId || 'unknown';
+	      const dataVersion = workerSource.dataVersion || 0;
+	      return `${dashId}:${sourceId}:${dataVersion}:${col}`;
+	    },
+	    [editingDashboard?.id, workerSource.dataSourceId, workerSource.dataVersion]
+	  );
+
+    const looksLikeDate = useCallback((raw: string) => {
+      const s = String(raw || '').trim();
+      if (!s) return false;
+      if (s.length < 6) return false;
+      if (!/[-/]/.test(s) && !/^\d{8}$/.test(s)) return false;
+      return !!toDateValue(s);
+    }, []);
+
+    const maybeApplyTypeHintFromOptions = useCallback(
+      (key: string, values: string[]) => {
+        if (!values || values.length === 0) return;
+        if (filterColumnTypeHints[key] === 'date') return;
+
+        const samples = values.slice(0, 80);
+        const dateLikes = samples.filter(looksLikeDate).length;
+        const ratio = dateLikes / samples.length;
+        if (dateLikes >= 12 && ratio >= 0.7) {
+          setFilterColumnTypeHints((prev) => (prev[key] === 'date' ? prev : { ...prev, [key]: 'date' }));
+        }
+      },
+      [filterColumnTypeHints, looksLikeDate]
+    );
+	
+	  const prefetchFilterValues = useCallback(
+	    async (col: string) => {
+	      const key = makeFilterValueKey(col);
+	      if (filterValueOptions[key]) {
+          maybeApplyTypeHintFromOptions(key, filterValueOptions[key]);
+          return;
+        }
+	      if (filterValueLoadingRef.current.has(key)) return;
+	      filterValueLoadingRef.current.add(key);
+	
+	      try {
+	        if (magicAggWorker.isSupported) {
+	          const values = await magicAggWorker.requestColumnOptions({
+	            columnKey: col,
+	            limitRows: 20000,
+	            limitValues: 500,
+	          });
+	          setFilterValueOptions((prev) => ({ ...prev, [key]: values }));
+            maybeApplyTypeHintFromOptions(key, values);
+	          return;
+	        }
+	
+	        const unique = new Set(baseData.map((row) => String((row as any)?.[col] || '')));
+	        const out = Array.from(unique).filter(Boolean).sort().slice(0, 100);
+	        setFilterValueOptions((prev) => ({ ...prev, [key]: out }));
+          maybeApplyTypeHintFromOptions(key, out);
+	      } catch (e) {
+	        console.error('[DashboardMagic] filter values failed:', e);
+	      } finally {
+	        filterValueLoadingRef.current.delete(key);
+	      }
+	    },
+	    [baseData, filterValueOptions, magicAggWorker, makeFilterValueKey, maybeApplyTypeHintFromOptions]
+	  );
 
   const drilldownReqRef = useRef(0);
   const drilldownRowsCacheRef = useRef<Map<string, { version: number; rows: RawRow[] }>>(new Map());
@@ -314,37 +558,22 @@ const DashboardMagic: React.FC<DashboardMagicProps> = ({ project, onUpdateProjec
     [normalizedProject.dataSources, normalizedProject.id, normalizedProject.lastModified, normalizedProject.transformRules]
   );
 
-  const persistProject = useCallback(
-    async (updated: Project) => {
-      onUpdateProject?.(updated);
-      await saveProject(updated);
-    },
-    [onUpdateProject]
-  );
-
-  const persistGlobalFilters = useCallback(
-    async (nextFilters: DashboardFilter[]) => {
-      if (!editingDashboard) return;
-      const updated = updateMagicDashboardGlobalFilters(normalizedProject, editingDashboard.id, nextFilters);
-      await persistProject(updated);
-    },
-    [editingDashboard, normalizedProject, persistProject]
-  );
-
   // --- Filter Actions ---
-  const addFilter = (column: string, value: string = '') => {
-    if (!column) return;
-    const exists = filters.find(f => f.column === column);
-    if (exists) {
-      if (value) updateFilterValue(exists.id, value);
-      return;
-    }
+	  const addFilter = (column: string, value: string = '') => {
+	    if (!column) return;
+	    const exists = filters.find(f => f.column === column);
+	    if (exists) {
+	      if (value) updateFilterValue(exists.id, value);
+	      return;
+	    }
 
     let dataType = getColumnType(column);
     let initialValue = value;
     let endValue: string | undefined;
+    let operator: DateFilterOperator | undefined;
 
     if (dataType === 'date') {
+      operator = 'between';
       if (value) {
         const normalized = normalizeDateInputValue(value);
         if (normalized) {
@@ -363,15 +592,19 @@ const DashboardMagic: React.FC<DashboardMagicProps> = ({ project, onUpdateProjec
       column,
       value: initialValue,
       endValue,
-      dataType
+      dataType,
+      operator,
     };
-    setFilters((prev) => {
-      const next = [...prev, newFilter];
-      void persistGlobalFilters(next);
-      return next;
-    });
-    setNewFilterCol('');
-  };
+	    if (dataType !== 'date') {
+	      void prefetchFilterValues(column);
+	    }
+	    setFilters((prev) => {
+	      const next = [...prev, newFilter];
+	      void persistGlobalFilters(next);
+	      return next;
+	    });
+	    setNewFilterCol('');
+	  };
 
   const removeFilter = (id: string) => {
     setFilters((prev) => {
@@ -381,18 +614,37 @@ const DashboardMagic: React.FC<DashboardMagicProps> = ({ project, onUpdateProjec
     });
   };
 
-  const updateFilterValue = (id: string, val: string, field: 'value' | 'endValue' = 'value') => {
+  const updateFilter = (id: string, patch: Partial<DashboardFilter>) => {
     setFilters((prev) => {
-      const next = prev.map(f => f.id === id ? { ...f, [field]: val } : f);
+      const next = prev.map(f => f.id === id ? { ...f, ...patch } : f);
       void persistGlobalFilters(next);
       return next;
     });
   };
 
-  const getUniqueValues = (col: string) => {
-    const unique = new Set(baseData.map(row => String(row[col] || '')));
-    return Array.from(unique).filter(Boolean).sort().slice(0, 100);
+  const updateFilterValue = (id: string, val: string, field: 'value' | 'endValue' = 'value') => {
+    updateFilter(id, { [field]: val } as Partial<DashboardFilter>);
   };
+
+  const updateDateFilterOperator = (id: string, operator: DateFilterOperator) => {
+    updateFilter(id, {
+      operator,
+      ...(operator === 'between' ? {} : { endValue: '' }),
+    });
+  };
+
+	  useEffect(() => {
+	    for (const f of filters) {
+	      if (!f?.column) continue;
+	      if (f.dataType === 'date') continue;
+	      void prefetchFilterValues(f.column);
+	    }
+	  }, [filters, prefetchFilterValues]);
+	
+	  const getUniqueValues = (col: string) => {
+	    const key = makeFilterValueKey(col);
+	    return filterValueOptions[key] || [];
+	  };
 
   // --- Dashboard Actions ---
   const handleCreateDashboard = async () => {
@@ -1303,6 +1555,16 @@ const DashboardMagic: React.FC<DashboardMagicProps> = ({ project, onUpdateProjec
                   filter.dataType === 'date' ? (
                     <div key={filter.id} className="flex flex-wrap items-center bg-indigo-50 border border-indigo-100 rounded-lg px-3 py-2 animate-in fade-in zoom-in duration-200 gap-2">
                       <span className="text-[11px] font-bold text-indigo-800 uppercase">{filter.column}</span>
+                      <select
+                        className="bg-transparent text-[11px] font-semibold text-indigo-700 border border-indigo-200 rounded px-1.5 py-1 focus:ring-2 focus:ring-indigo-400 outline-none"
+                        value={normalizeDateOperator(filter.operator)}
+                        onChange={(e) => updateDateFilterOperator(filter.id, e.target.value as DateFilterOperator)}
+                      >
+                        <option value="between">Is between</option>
+                        <option value="on">Is on</option>
+                        <option value="before">Before</option>
+                        <option value="after">After</option>
+                      </select>
                       <div className="flex items-center gap-1">
                         <input
                           type="date"
@@ -1310,13 +1572,17 @@ const DashboardMagic: React.FC<DashboardMagicProps> = ({ project, onUpdateProjec
                           onChange={(e) => updateFilterValue(filter.id, e.target.value)}
                           className="text-xs border border-indigo-200 rounded px-2 py-1 bg-white focus:ring-2 focus:ring-indigo-400 outline-none"
                         />
-                        <span className="text-[10px] text-indigo-500">to</span>
-                        <input
-                          type="date"
-                          value={filter.endValue || ''}
-                          onChange={(e) => updateFilterValue(filter.id, e.target.value, 'endValue')}
-                          className="text-xs border border-indigo-200 rounded px-2 py-1 bg-white focus:ring-2 focus:ring-indigo-400 outline-none"
-                        />
+                        {normalizeDateOperator(filter.operator) === 'between' && (
+                          <>
+                            <span className="text-[10px] text-indigo-500">to</span>
+                            <input
+                              type="date"
+                              value={filter.endValue || ''}
+                              onChange={(e) => updateFilterValue(filter.id, e.target.value, 'endValue')}
+                              className="text-xs border border-indigo-200 rounded px-2 py-1 bg-white focus:ring-2 focus:ring-indigo-400 outline-none"
+                            />
+                          </>
+                        )}
                       </div>
                       <button onClick={() => removeFilter(filter.id)} className="text-indigo-400 hover:text-indigo-600">
                         <X className="w-3 h-3" />

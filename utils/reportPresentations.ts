@@ -1,14 +1,38 @@
-import { Project, ReportPresentation, ReportSlide } from '../types';
+import { CanvasWidgetTable, Project, ReportPresentation, ReportSlide } from '../types';
 
 const now = () => Date.now();
 
-const normalizePresentation = (presentation: ReportPresentation): ReportPresentation => ({
+const normalizeCanvasTables = (tables: CanvasWidgetTable[] | undefined): CanvasWidgetTable[] => {
+  const src = Array.isArray(tables) ? tables : [];
+  return src.map((t) => ({
+    ...t,
+    name: t.name?.trim() || 'Untitled Table',
+    dataSourceId: t.dataSourceId,
+    filters: Array.isArray(t.filters) ? t.filters : [],
+    createdAt: t.createdAt || now(),
+    updatedAt: t.updatedAt || now(),
+  }));
+};
+
+const normalizePresentation = (presentation: ReportPresentation): ReportPresentation => {
+  const canvasTables = normalizeCanvasTables(presentation.canvasTables);
+  const canvasActiveTableId =
+    canvasTables.length === 0
+      ? undefined
+      : canvasTables.find((t) => t.id === presentation.canvasActiveTableId)
+        ? presentation.canvasActiveTableId
+        : canvasTables[0].id;
+
+  return {
   ...presentation,
   name: presentation.name?.trim() || 'Untitled Presentation',
   slides: presentation.slides || [],
   createdAt: presentation.createdAt || now(),
   updatedAt: presentation.updatedAt || now(),
-});
+  canvasTables,
+  canvasActiveTableId,
+  };
+};
 
 const createPresentation = (name: string, slides: ReportSlide[] = []): ReportPresentation => ({
   id: crypto.randomUUID(),
@@ -16,6 +40,8 @@ const createPresentation = (name: string, slides: ReportSlide[] = []): ReportPre
   slides,
   createdAt: now(),
   updatedAt: now(),
+  canvasTables: [],
+  canvasActiveTableId: undefined,
 });
 
 const syncLegacySlides = (project: Project, active?: ReportPresentation): Project => {
@@ -123,6 +149,52 @@ export const updatePresentationSlides = (
   const { project: normalized } = ensurePresentations(project);
   const presentations = (normalized.reportPresentations || []).map((p) =>
     p.id === presentationId ? { ...p, slides, updatedAt: now() } : p
+  );
+
+  const updated: Project = {
+    ...normalized,
+    reportPresentations: presentations,
+    lastModified: now(),
+  };
+
+  if (normalized.activePresentationId === presentationId) {
+    return syncLegacySlides(updated, presentations.find((p) => p.id === presentationId));
+  }
+
+  return updated;
+};
+
+export const updatePresentationCanvasTables = (
+  project: Project,
+  presentationId: string,
+  canvasTables: CanvasWidgetTable[]
+): Project => {
+  const { project: normalized } = ensurePresentations(project);
+  const presentations = (normalized.reportPresentations || []).map((p) =>
+    p.id === presentationId ? { ...p, canvasTables, updatedAt: now() } : p
+  );
+
+  const updated: Project = {
+    ...normalized,
+    reportPresentations: presentations,
+    lastModified: now(),
+  };
+
+  if (normalized.activePresentationId === presentationId) {
+    return syncLegacySlides(updated, presentations.find((p) => p.id === presentationId));
+  }
+
+  return updated;
+};
+
+export const updatePresentationCanvasActiveTable = (
+  project: Project,
+  presentationId: string,
+  canvasActiveTableId: string | undefined
+): Project => {
+  const { project: normalized } = ensurePresentations(project);
+  const presentations = (normalized.reportPresentations || []).map((p) =>
+    p.id === presentationId ? { ...p, canvasActiveTableId, updatedAt: now() } : p
   );
 
   const updated: Project = {

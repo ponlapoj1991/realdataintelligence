@@ -14,6 +14,13 @@ type PayloadResponse = {
   payload: MagicChartPayload | null
 }
 
+type ColumnOptionsResponse = {
+  type: 'columnOptions'
+  requestId: string
+  rowsVersion: number
+  values: string[]
+}
+
 type ErrorResponse = {
   type: 'error'
   requestId?: string
@@ -21,7 +28,7 @@ type ErrorResponse = {
   error: string
 }
 
-type WorkerResponse = PayloadResponse | ErrorResponse
+type WorkerResponse = PayloadResponse | ColumnOptionsResponse | ErrorResponse
 
 export interface MagicAggregationWorkerClient {
   isSupported: boolean
@@ -31,6 +38,11 @@ export interface MagicAggregationWorkerClient {
     theme?: ChartTheme
     isEditing?: boolean
   }) => Promise<MagicChartPayload | null>
+  requestColumnOptions: (params: {
+    columnKey: string
+    limitRows: number
+    limitValues: number
+  }) => Promise<string[]>
 }
 
 export function useMagicAggregationWorker(rows: RawRow[], theme?: ChartTheme): MagicAggregationWorkerClient
@@ -42,12 +54,22 @@ export function useMagicAggregationWorker(
   const workerRef = useRef<Worker | null>(null)
   const [ready, setReady] = useState(false)
   const rowsVersionRef = useRef(0)
-  const pendingRef = useRef(
+  const pendingPayloadRef = useRef(
     new Map<
       string,
       {
         rowsVersion: number
         resolve: (payload: MagicChartPayload | null) => void
+        reject: (err: Error) => void
+      }
+    >()
+  )
+  const pendingColumnOptionsRef = useRef(
+    new Map<
+      string,
+      {
+        rowsVersion: number
+        resolve: (values: string[]) => void
         reject: (err: Error) => void
       }
     >()
@@ -71,9 +93,9 @@ export function useMagicAggregationWorker(
       if (!msg || typeof msg !== 'object') return
 
       if (msg.type === 'payload') {
-        const pending = pendingRef.current.get(msg.requestId)
+        const pending = pendingPayloadRef.current.get(msg.requestId)
         if (!pending) return
-        pendingRef.current.delete(msg.requestId)
+        pendingPayloadRef.current.delete(msg.requestId)
         if (pending.rowsVersion !== msg.rowsVersion) {
           // Avoid leaving callers hanging if rows were updated mid-flight
           pending.resolve(null)
@@ -83,13 +105,34 @@ export function useMagicAggregationWorker(
         return
       }
 
+      if (msg.type === 'columnOptions') {
+        const pending = pendingColumnOptionsRef.current.get(msg.requestId)
+        if (!pending) return
+        pendingColumnOptionsRef.current.delete(msg.requestId)
+        if (pending.rowsVersion !== msg.rowsVersion) {
+          pending.resolve([])
+          return
+        }
+        pending.resolve(Array.isArray(msg.values) ? msg.values : [])
+        return
+      }
+
       if (msg.type === 'error') {
         const requestId = msg.requestId
         if (!requestId) return
-        const pending = pendingRef.current.get(requestId)
-        if (!pending) return
-        pendingRef.current.delete(requestId)
-        pending.reject(new Error(msg.error || 'Worker failed'))
+
+        const pendingPayload = pendingPayloadRef.current.get(requestId)
+        if (pendingPayload) {
+          pendingPayloadRef.current.delete(requestId)
+          pendingPayload.reject(new Error(msg.error || 'Worker failed'))
+          return
+        }
+
+        const pendingOpts = pendingColumnOptionsRef.current.get(requestId)
+        if (pendingOpts) {
+          pendingColumnOptionsRef.current.delete(requestId)
+          pendingOpts.reject(new Error(msg.error || 'Worker failed'))
+        }
       }
     }
 
@@ -99,10 +142,14 @@ export function useMagicAggregationWorker(
 
     return () => {
       setReady(false)
-      for (const [, pending] of pendingRef.current) {
+      for (const [, pending] of pendingPayloadRef.current) {
         pending.reject(new Error('Worker terminated'))
       }
-      pendingRef.current.clear()
+      pendingPayloadRef.current.clear()
+      for (const [, pending] of pendingColumnOptionsRef.current) {
+        pending.reject(new Error('Worker terminated'))
+      }
+      pendingColumnOptionsRef.current.clear()
       worker.terminate()
       workerRef.current = null
     }
@@ -148,7 +195,7 @@ export function useMagicAggregationWorker(
       const rowsVersion = rowsVersionRef.current
 
       return new Promise((resolve, reject) => {
-        pendingRef.current.set(requestId, { rowsVersion, resolve, reject })
+        pendingPayloadRef.current.set(requestId, { rowsVersion, resolve, reject })
         workerRef.current!.postMessage({
           type: 'buildPayload',
           requestId,
@@ -163,5 +210,29 @@ export function useMagicAggregationWorker(
     [isSupported, theme]
   )
 
-  return { isSupported, requestPayload }
+  const requestColumnOptions: MagicAggregationWorkerClient['requestColumnOptions'] = useCallback(
+    ({ columnKey, limitRows, limitValues }) => {
+      if (!isSupported || !workerRef.current) {
+        return Promise.resolve([])
+      }
+
+      const requestId = crypto.randomUUID()
+      const rowsVersion = rowsVersionRef.current
+
+      return new Promise((resolve, reject) => {
+        pendingColumnOptionsRef.current.set(requestId, { rowsVersion, resolve, reject })
+        workerRef.current!.postMessage({
+          type: 'columnOptions',
+          requestId,
+          rowsVersion,
+          columnKey,
+          limitRows,
+          limitValues,
+        })
+      })
+    },
+    [isSupported]
+  )
+
+  return { isSupported, requestPayload, requestColumnOptions }
 }

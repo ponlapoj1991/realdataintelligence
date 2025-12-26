@@ -615,17 +615,17 @@ const AiAgent: React.FC<AiAgentProps> = ({ project, onUpdateProject }) => {
                                             column={col}
                                             data={gridData} 
                                             activeFilters={filters[col] || null}
-                                            onApply={(vals) => {
-                                                setFilters((prev) => {
-                                                    const next = { ...prev } as typeof prev;
-                                                    if (!vals || vals.length === 0) {
-                                                        delete (next as any)[col];
-                                                        return next;
-                                                    }
-                                                    (next as any)[col] = vals;
-                                                    return next;
-                                                });
-                                            }}
+	                                            onApply={(vals) => {
+	                                                setFilters((prev) => {
+	                                                    const next = { ...prev } as typeof prev;
+	                                                    if (vals === null) {
+	                                                        delete (next as any)[col];
+	                                                        return next;
+	                                                    }
+	                                                    (next as any)[col] = vals;
+	                                                    return next;
+	                                                });
+	                                            }}
                                             onClose={() => setOpenFilterCol(null)}
                                         />
                                     )}

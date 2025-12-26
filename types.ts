@@ -183,12 +183,15 @@ export type SortOrder =
 
 export type FilterDataType = 'text' | 'number' | 'date';
 
+export type DateFilterOperator = 'between' | 'on' | 'before' | 'after';
+
 export interface DashboardFilter {
   id: string;
   column: string;
   value: string;
   endValue?: string;
   dataType?: FilterDataType;
+  operator?: DateFilterOperator;
 }
 
 // Data Labels Configuration
@@ -474,6 +477,22 @@ export interface ReportPresentation {
   name: string;
   description?: string;
   slides: ReportSlide[];
+  createdAt: number;
+  updatedAt: number;
+
+  /**
+   * Canvas Stars (RealPPTX): Canvas-local widget tables that can create widgets directly on canvas.
+   * These are per-presentation and must not overlap with Dashboard insert widgets.
+   */
+  canvasTables?: CanvasWidgetTable[];
+  canvasActiveTableId?: string;
+}
+
+export interface CanvasWidgetTable {
+  id: string;
+  name: string;
+  dataSourceId: string;
+  filters?: DashboardFilter[];
   createdAt: number;
   updatedAt: number;
 }

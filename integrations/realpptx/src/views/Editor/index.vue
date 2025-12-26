@@ -92,6 +92,7 @@ useHostBridge()
 <style lang="scss" scoped>
 .realpptx-editor {
   height: 100%;
+  --realpptx-toolbar-width: 224px;
 }
 .layout-header {
   height: 40px;
@@ -106,14 +107,15 @@ useHostBridge()
   flex-shrink: 0;
 }
 .layout-content-center {
-  width: calc(100% - 160px - 320px);
+  width: calc(100% - 160px - var(--realpptx-toolbar-width));
 
   .center-top {
     height: 40px;
   }
 }
 .layout-content-right {
-  width: 320px;
+  width: var(--realpptx-toolbar-width);
+  min-width: var(--realpptx-toolbar-width);
   height: 100%;
   border-left: 1px solid #e1e1e1;
 }

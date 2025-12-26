@@ -140,6 +140,12 @@ interface PPTBaseElement {
   widgetId?: string
   dashboardId?: string
   dashboardWidgetKind?: 'kpi'
+
+  // Canvas Stars: Canvas-local widgets (created inside RealPPTX)
+  canvasWidgetId?: string
+  canvasTableId?: string
+  canvasWidgetKind?: 'kpi'
+  canvasWidgetConfig?: any
 }
 
 
@@ -180,6 +186,8 @@ export interface PPTTextElement extends PPTBaseElement {
   defaultFontName: string
   defaultColor: string
   defaultFontSize?: string
+  // Dashboard KPI: lock the maximum font size chosen by user resizing
+  dashboardKpiMaxFontSize?: string
   outline?: PPTElementOutline
   fill?: string
   padding?: number

@@ -21,11 +21,11 @@ import { ElementTypes } from '@/types/slides'
 
 import ElementStylePanel from './ElementStylePanel/index.vue'
 import ElementPositionPanel from './ElementPositionPanel.vue'
-import ElementAnimationPanel from './ElementAnimationPanel.vue'
 import SlideDesignPanel from './SlideDesignPanel/index.vue'
-import SlideAnimationPanel from './SlideAnimationPanel.vue'
 import MultiPositionPanel from './MultiPositionPanel.vue'
 import MultiStylePanel from './MultiStylePanel.vue'
+import WidgetPlusPanel from './WidgetPlusPanel.vue'
+import EmptyPanel from './EmptyPanel.vue'
 import Tabs from '@/components/Tabs.vue'
 
 const mainStore = useMainStore()
@@ -34,15 +34,14 @@ const { activeElementIdList, activeElementList, activeGroupElementId, toolbarSta
 const elementTabs = [
   { label: 'Style', key: ToolbarStates.EL_STYLE },
   { label: 'Position', key: ToolbarStates.EL_POSITION },
-  { label: 'Animation', key: ToolbarStates.EL_ANIMATION },
 ]
 const elementTabsChart = [
   { label: 'Style', key: ToolbarStates.EL_STYLE },
 ]
 const slideTabs = [
   { label: 'Design', key: ToolbarStates.SLIDE_DESIGN },
-  { label: 'Transition', key: ToolbarStates.SLIDE_ANIMATION },
-  { label: 'Animation', key: ToolbarStates.EL_ANIMATION },
+  { label: 'Widget+', key: ToolbarStates.WIDGET_PLUS },
+  { label: 'Animation', key: ToolbarStates.SLIDE_RESERVED },
 ]
 const multiSelectTabs = [
   { label: 'Style (Multi)', key: ToolbarStates.MULTI_STYLE },
@@ -88,12 +87,12 @@ watch(currentTabs, () => {
 })
 
 const currentPanelComponent = computed(() => {
-  const panelMap = {
+  const panelMap: Partial<Record<ToolbarStates, unknown>> = {
     [ToolbarStates.EL_STYLE]: ElementStylePanel,
     [ToolbarStates.EL_POSITION]: ElementPositionPanel,
-    [ToolbarStates.EL_ANIMATION]: ElementAnimationPanel,
     [ToolbarStates.SLIDE_DESIGN]: SlideDesignPanel,
-    [ToolbarStates.SLIDE_ANIMATION]: SlideAnimationPanel,
+    [ToolbarStates.WIDGET_PLUS]: WidgetPlusPanel,
+    [ToolbarStates.SLIDE_RESERVED]: EmptyPanel,
     [ToolbarStates.MULTI_STYLE]: MultiStylePanel,
     [ToolbarStates.MULTI_POSITION]: MultiPositionPanel,
   }

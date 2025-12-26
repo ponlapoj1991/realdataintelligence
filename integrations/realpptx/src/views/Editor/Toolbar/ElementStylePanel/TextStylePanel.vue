@@ -1,5 +1,12 @@
 <template>
   <div class="text-style-panel">
+    <div v-if="isCanvasWidgetKpi" class="canvas-widget">
+      <Button class="full-width" type="primary" @click="requestEditCanvasWidget">
+        Edit Chart
+      </Button>
+      <Divider />
+    </div>
+
     <div class="preset-style">
       <div 
         class="preset-style-item"
@@ -79,7 +86,7 @@
 </template>
 
 <script lang="ts" setup>
-import { ref, watch } from 'vue'
+ import { computed, ref, toRaw, watch } from 'vue'
 import { storeToRefs } from 'pinia'
 import { useMainStore, useSlidesStore } from '@/store'
 import type { PPTTextElement } from '@/types/slides'
@@ -93,6 +100,7 @@ import RichTextBase from '../common/RichTextBase.vue'
 import ColorButton from '@/components/ColorButton.vue'
 import ColorPicker from '@/components/ColorPicker/index.vue'
 import Divider from '@/components/Divider.vue'
+import Button from '@/components/Button.vue'
 import Select from '@/components/Select.vue'
 import Popover from '@/components/Popover.vue'
 
@@ -182,6 +190,34 @@ const updateElement = (props: Partial<PPTTextElement>) => {
   addHistorySnapshot()
 }
 
+const isCanvasWidgetKpi = computed(() => {
+  const el: any = handleElement.value as any
+  return el?.type === 'text' && !!el?.canvasWidgetId && !!el?.canvasTableId && !!el?.canvasWidgetConfig && el?.canvasWidgetKind === 'kpi'
+})
+
+const requestEditCanvasWidget = () => {
+  const el: any = handleElement.value as any
+  if (!el?.id || !el?.canvasTableId || !el?.canvasWidgetConfig) return
+  let safeWidget: any = el.canvasWidgetConfig
+  try {
+    safeWidget = JSON.parse(JSON.stringify(toRaw(el.canvasWidgetConfig)))
+  } catch {
+    safeWidget = toRaw(el.canvasWidgetConfig)
+  }
+  window.parent?.postMessage(
+    {
+      source: 'realpptx',
+      type: 'open-canvas-widget-edit',
+      payload: {
+        elementId: el.id,
+        tableId: el.canvasTableId,
+        widget: safeWidget,
+      },
+    },
+    '*',
+  )
+}
+
 const fill = ref<string>('#000')
 const lineHeight = ref<number>()
 const wordSpace = ref<number>()
@@ -266,5 +302,15 @@ const emitBatchRichTextCommand = (action: RichTextAction[]) => {
   &:nth-child(n+3) {
     margin-top: -1px;
   }
+}
+
+.canvas-widget {
+  margin-bottom: 10px;
+}
+
+.full-width {
+  width: 100%;
+  display: flex;
+  justify-content: center;
 }
 </style>

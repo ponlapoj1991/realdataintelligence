@@ -14,6 +14,7 @@
 
 import JSZip from 'jszip';
 import { saveAs } from 'file-saver';
+import { writeBlobToFileHandle } from './fileSystemAccess';
 import {
   getProjectMetadata,
   saveProjectMetadata,
@@ -59,13 +60,27 @@ export interface ImportProgress {
   message: string;
 }
 
+export const getProjectNameFromBackupFileName = (fileName: string): string => {
+  const name = String(fileName || '').trim();
+  if (!name) return 'Imported Project';
+  return name.replace(/\.zip$/i, '').trim() || 'Imported Project';
+};
+
+const sanitizeFileNamePart = (name: string) => {
+  return name.replace(/[^a-z0-9]/gi, '_');
+};
+
 /**
  * Export a project to a downloadable .zip file
  */
 export const exportProject = async (
   projectId: string,
-  onProgress?: (progress: ExportProgress) => void
-): Promise<void> => {
+  onProgress?: (progress: ExportProgress) => void,
+  opts?: {
+    saveHandle?: any;
+    fallbackFileName?: string;
+  }
+): Promise<{ filename: string; savedVia: 'picker' | 'download' }> => {
   const report = (phase: ExportProgress['phase'], percent: number, message: string) => {
     onProgress?.({ phase, percent, message });
   };
@@ -138,6 +153,9 @@ export const exportProject = async (
 
         for (let i = 0; i < src.chunkCount; i++) {
           const chunkData = await getDataSourceChunk(projectId, src.id, i);
+          if (src.rowCount > 0 && chunkData.length === 0) {
+            throw new Error(`Missing data chunk for ${src.name} (chunk ${i + 1}/${src.chunkCount})`);
+          }
           srcFolder.file(`chunk_${i}.json`, JSON.stringify(chunkData));
 
           written += 1;
@@ -153,6 +171,10 @@ export const exportProject = async (
       const totalChunks = typeof (metadata as any).chunkCount === 'number' ? (metadata as any).chunkCount : 0;
       for (let i = 0; i < totalChunks; i++) {
         const chunkData = await getDataChunk(projectId, i);
+        const rowCount = typeof (metadata as any).rowCount === 'number' ? (metadata as any).rowCount : 0;
+        if (rowCount > 0 && chunkData.length === 0) {
+          throw new Error(`Missing active data chunk (chunk ${i + 1}/${totalChunks})`);
+        }
         dataFolder.file(`chunk_${i}.json`, JSON.stringify(chunkData));
 
         const percent = 30 + Math.round(((i + 1) / Math.max(1, totalChunks)) * 50);
@@ -171,11 +193,20 @@ export const exportProject = async (
 
     report('compressing', 95, 'Preparing download...');
 
-    // Trigger download
-    const filename = `${metadata.name.replace(/[^a-z0-9]/gi, '_')}_backup_${formatDate(new Date())}.zip`;
+    // Trigger download / save to disk
+    const fallback = opts?.fallbackFileName || `${sanitizeFileNamePart(metadata.name)}_backup_${formatDate(new Date())}.zip`;
+    const filename = String(fallback || '').trim() || `${sanitizeFileNamePart(metadata.name)}_backup_${formatDate(new Date())}.zip`;
+
+    if (opts?.saveHandle) {
+      await writeBlobToFileHandle(opts.saveHandle, blob);
+      report('done', 100, 'Export complete!');
+      return { filename: opts.saveHandle?.name || filename, savedVia: 'picker' };
+    }
+
     saveAs(blob, filename);
 
     report('done', 100, 'Export complete!');
+    return { filename, savedVia: 'download' };
   } catch (error) {
     console.error('Export failed:', error);
     throw error;
@@ -232,7 +263,7 @@ export const importProject = async (
 
     // Determine project ID and name
     const projectId = options.newProjectId || `imported_${Date.now()}`;
-    const projectName = options.newProjectName || `${metadata.name} (Imported)`;
+    const projectName = options.newProjectName || getProjectNameFromBackupFileName(file.name);
 
     report('metadata', 30, 'Preparing project...');
 
@@ -260,12 +291,15 @@ export const importProject = async (
       const root = zip.folder('data-sources');
       if (!root) throw new Error('Invalid backup file: missing data-sources folder');
 
-      const totalChunks = sourceEntries.reduce((sum, s) => sum + (s.chunkCount || 0), 0) || 1;
+      const expectedChunks = sourceEntries.reduce((sum, s) => sum + (s.chunkCount || 0), 0);
+      const progressTotal = expectedChunks || 1;
       let processed = 0;
 
       for (const src of sourceEntries) {
         const srcFolder = root.folder(src.id);
-        if (!srcFolder) continue;
+        if (!srcFolder) {
+          throw new Error(`Corrupted backup file: missing data source folder (${src.name})`);
+        }
 
         if (src.id === activeSourceId) {
           activeRowCount = src.rowCount;
@@ -274,7 +308,9 @@ export const importProject = async (
 
         for (let i = 0; i < src.chunkCount; i++) {
           const fileObj = srcFolder.file(`chunk_${i}.json`);
-          if (!fileObj) continue;
+          if (!fileObj) {
+            throw new Error(`Corrupted backup file: missing data chunk (${src.name} chunk ${i + 1}/${src.chunkCount})`);
+          }
           const chunkText = await fileObj.async('string');
           const chunkData: RawRow[] = JSON.parse(chunkText);
 
@@ -284,9 +320,13 @@ export const importProject = async (
           }
 
           processed += 1;
-          const percent = 40 + Math.round((processed / totalChunks) * 45);
-          report('data', percent, `Loading chunk ${processed}/${totalChunks}...`);
+          const percent = 40 + Math.round((processed / progressTotal) * 45);
+          report('data', percent, `Loading chunk ${processed}/${progressTotal}...`);
         }
+      }
+
+      if (expectedChunks > 0 && processed !== expectedChunks) {
+        throw new Error('Corrupted backup file: missing data chunks');
       }
     } else {
       // Legacy v1 backup: data/chunk_*.json -> active project data store
@@ -305,6 +345,10 @@ export const importProject = async (
       chunkFiles.sort((a, b) => a.index - b.index);
       activeChunkCount = chunkFiles.length;
       activeRowCount = typeof manifest.rowCount === 'number' ? manifest.rowCount : 0;
+
+      if (activeRowCount > 0 && activeChunkCount === 0) {
+        throw new Error('Corrupted backup file: missing active data chunks');
+      }
 
       for (let i = 0; i < chunkFiles.length; i++) {
         const { file } = chunkFiles[i];

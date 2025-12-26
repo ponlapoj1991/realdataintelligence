@@ -13,28 +13,28 @@
     </div>
     <div class="configs">
       <div class="row">
-        <div class="title">导出范围：</div>
+        <div class="title">Export Range</div>
         <RadioGroup
           class="config-item"
           v-model:value="rangeType"
         >
-          <RadioButton style="width: 33.33%;" value="all">全部</RadioButton>
-          <RadioButton style="width: 33.33%;" value="current">当前页</RadioButton>
-          <RadioButton style="width: 33.33%;" value="custom">自定义</RadioButton>
+          <RadioButton style="width: 33.33%;" value="all">All</RadioButton>
+          <RadioButton style="width: 33.33%;" value="current">Current</RadioButton>
+          <RadioButton style="width: 33.33%;" value="custom">Custom</RadioButton>
         </RadioGroup>
       </div>
       <div class="row">
-        <div class="title">导出模式：</div>
+        <div class="title">Export Mode</div>
         <RadioGroup
           class="config-item"
           v-model:value="exportMode"
         >
-          <RadioButton style="width: 50%;" value="standard">标准版</RadioButton>
-          <RadioButton style="width: 50%;" value="image">纯图版</RadioButton>
+          <RadioButton style="width: 50%;" value="standard">Standard</RadioButton>
+          <RadioButton style="width: 50%;" value="image">Image</RadioButton>
         </RadioGroup>
       </div>
       <div class="row" v-if="rangeType === 'custom'">
-        <div class="title" :data-range="`（${range[0]} ~ ${range[1]}）`">自定义范围：</div>
+        <div class="title" :data-range="`(${range[0]} ~ ${range[1]})`">Page Range</div>
         <Slider
           class="config-item"
           range
@@ -47,29 +47,29 @@
       
       <template v-if="exportMode === 'standard'">
         <div class="row">
-          <div class="title">忽略音频/视频：</div>
+          <div class="title">Ignore Media</div>
           <div class="config-item">
-            <Switch v-model:value="ignoreMedia" v-tooltip="'导出时默认忽略音视频，若您的幻灯片中存在音视频元素，且希望将其导出到PPTX文件中，可选择关闭【忽略音视频】选项，但要注意这将会大幅增加导出用时。'" />
+            <Switch v-model:value="ignoreMedia" v-tooltip="'May increase export time when disabled.'" />
           </div>
         </div>
         <div class="row">
-          <div class="title">覆盖默认母版：</div>
+          <div class="title">Overwrite Master</div>
           <div class="config-item">
             <Switch v-model:value="masterOverwrite" />
           </div>
         </div>
 
         <div class="tip" v-if="!ignoreMedia">
-          提示：1. 支持导出格式：avi、mp4、mov、wmv、mp3、wav；2. 跨域资源无法导出。
+          Supported: avi, mp4, mov, wmv, mp3, wav. Cross-origin media may fail.
         </div>
       </template>
     </div>
     <div class="btns">
-      <Button class="btn export" type="primary" @click="execExport()"><IconDownload /> 导出 PPTX</Button>
-      <Button class="btn close" @click="emit('close')">关闭</Button>
+      <Button class="btn export" type="primary" @click="execExport()"><IconDownload /> Export PPTX</Button>
+      <Button class="btn close" @click="emit('close')">Close</Button>
     </div>
 
-    <FullscreenSpin :loading="exporting" tip="正在导出..." />
+    <FullscreenSpin :loading="exporting" tip="Exporting..." />
   </div>
 </template>
 
@@ -78,6 +78,7 @@ import { computed, ref, useTemplateRef } from 'vue'
 import { storeToRefs } from 'pinia'
 import { useSlidesStore } from '@/store'
 import useExport from '@/hooks/useExport'
+import { pickSaveFileHandle } from '@/utils/fileSystemAccess'
 
 import ThumbnailSlide from '@/views/components/ThumbnailSlide/index.vue'
 import FullscreenSpin from '@/components/FullscreenSpin.vue'
@@ -91,7 +92,7 @@ const emit = defineEmits<{
   (event: 'close'): void
 }>()
 
-const { slides, currentSlide } = storeToRefs(useSlidesStore())
+const { slides, currentSlide, title } = storeToRefs(useSlidesStore())
 
 const { exportPPTX, exportImagePPTX, exporting } = useExport()
 
@@ -116,13 +117,33 @@ const renderSlides = computed(() => {
   return selectedSlides.value
 })
 
-const execExport = () => {
+const sanitizeFileName = (value: string, ext: string) => {
+  const raw = String(value || '').trim() || 'Canvas'
+  return `${raw.replace(/[\\/:*?"<>|]+/g, '_')}${ext}`
+}
+
+const execExport = async () => {
+  const fileName = sanitizeFileName(title.value, '.pptx')
+  const savePick = await pickSaveFileHandle({
+    suggestedName: fileName,
+    description: 'PowerPoint',
+    mime: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+    extensions: ['.pptx'],
+  })
+  if (savePick.kind === 'cancelled') return
+
   if (exportMode.value === 'standard') {
-    exportPPTX(selectedSlides.value, masterOverwrite.value, ignoreMedia.value)
+    exportPPTX(selectedSlides.value, masterOverwrite.value, ignoreMedia.value, {
+      saveHandle: savePick.kind === 'picked' ? savePick.handle : undefined,
+      fallbackFileName: fileName,
+    })
   } 
   else {
     const slideRefs = imageThumbnailsRef.value!.querySelectorAll('.export-thumbnail')
-    exportImagePPTX(slideRefs)
+    exportImagePPTX(slideRefs, {
+      saveHandle: savePick.kind === 'picked' ? savePick.handle : undefined,
+      fallbackFileName: fileName,
+    })
   }
 }
 </script>

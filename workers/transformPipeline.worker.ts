@@ -432,7 +432,7 @@ type CleanFilterSpec = Array<[string, Set<string>]>
 const stableStringifyFilterEntries = (filters: unknown): string => {
   if (!filters || typeof filters !== 'object') return '{}'
   const entries = Object.entries(filters as Record<string, unknown>)
-    .filter(([, v]) => Array.isArray(v) && (v as unknown[]).length > 0)
+    .filter(([, v]) => Array.isArray(v))
     .map(([k, v]) => {
       const values = (v as unknown[]).map((x) => String(x))
       values.sort()
@@ -444,9 +444,7 @@ const stableStringifyFilterEntries = (filters: unknown): string => {
 
 const compileFilterSpec = (filters: unknown): CleanFilterSpec => {
   if (!filters || typeof filters !== 'object') return []
-  const entries = Object.entries(filters as Record<string, unknown>).filter(([, v]) => Array.isArray(v) && (v as unknown[]).length > 0) as Array<
-    [string, unknown[]]
-  >
+  const entries = Object.entries(filters as Record<string, unknown>).filter(([, v]) => Array.isArray(v)) as Array<[string, unknown[]]>
   entries.sort((a, b) => a[0].localeCompare(b[0]))
   return entries.map(([col, vals]) => [col, new Set(vals.map((v) => String(v)))])
 }
@@ -1057,10 +1055,17 @@ const cleanPreview = async (msg: CleanPreviewMessage): Promise<CleanPreviewRespo
 
   const rows: RawRow[] = []
   const rowIndices: number[] = []
-  const filters = msg.filters && typeof msg.filters === 'object' ? msg.filters : {}
-  const filterEntries = Object.entries(filters).filter(([, v]) => Array.isArray(v) && v.length > 0) as Array<
-    [string, string[]]
-  >
+  const rawFilters = msg.filters && typeof msg.filters === 'object' ? msg.filters : {}
+  const compiledFilters = compileFilterSpec(rawFilters)
+  if (compiledFilters.some(([, allowed]) => allowed.size === 0)) {
+    return {
+      type: 'cleanPreview',
+      requestId: msg.requestId,
+      rows: [],
+      rowIndices: [],
+      totalRows: 0,
+    }
+  }
 
   for (let i = 0; i < chunkCount && rows.length < limit; i++) {
     const chunk = await safeGetSourceChunk({
@@ -1073,18 +1078,7 @@ const cleanPreview = async (msg: CleanPreviewMessage): Promise<CleanPreviewRespo
 
     for (let j = 0; j < chunk.length; j++) {
       const row = chunk[j]
-      if (filterEntries.length) {
-        let ok = true
-        for (const [col, allowed] of filterEntries) {
-          const raw = (row as any)[col]
-          const strVal = raw === null || raw === undefined || raw === '' ? '(Blank)' : String(raw)
-          if (!allowed.includes(strVal)) {
-            ok = false
-            break
-          }
-        }
-        if (!ok) continue
-      }
+      if (!matchesFilters(row, compiledFilters)) continue
       const match =
         !search ||
         Object.values(row).some((v) => String(v ?? '').toLowerCase().includes(search))
@@ -1122,6 +1116,15 @@ const cleanQueryPage = async (msg: CleanQueryPageMessage): Promise<CleanQueryPag
 
   const rawFilters = msg.filters && typeof msg.filters === 'object' ? msg.filters : {}
   const compiledFilters = compileFilterSpec(rawFilters)
+  if (compiledFilters.some(([, allowed]) => allowed.size === 0)) {
+    return {
+      type: 'cleanQueryPage',
+      requestId: msg.requestId,
+      rows: [],
+      rowIndices: [],
+      totalRows: 0,
+    }
+  }
 
   if (!search && compiledFilters.length === 0) {
     const startRow = offset

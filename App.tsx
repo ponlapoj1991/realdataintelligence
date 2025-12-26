@@ -56,10 +56,12 @@ const App: React.FC = () => {
     return (
       <GlobalSettingsProvider>
         <ThemeProvider>
-          <Landing
-            onSelectProject={handleSelectProject}
-            onOpenSettings={() => setCurrentView(AppView.SETTINGS)}
-          />
+          <ToastProvider>
+            <Landing
+              onSelectProject={handleSelectProject}
+              onOpenSettings={() => setCurrentView(AppView.SETTINGS)}
+            />
+          </ToastProvider>
         </ThemeProvider>
       </GlobalSettingsProvider>
     );
@@ -69,7 +71,9 @@ const App: React.FC = () => {
     return (
       <GlobalSettingsProvider>
         <ThemeProvider>
-          <Settings onBack={() => setCurrentView(AppView.LANDING)} />
+          <ToastProvider>
+            <Settings onBack={() => setCurrentView(AppView.LANDING)} />
+          </ToastProvider>
         </ThemeProvider>
       </GlobalSettingsProvider>
     );

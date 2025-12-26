@@ -26,10 +26,13 @@ import EmptyState from '../components/EmptyState';
 import {
   exportProject,
   importProject,
+  getProjectNameFromBackupFileName,
   validateBackupFile,
   type ExportProgress,
   type ImportProgress
 } from '../utils/projectBackup';
+import { useToast } from '../components/ToastProvider';
+import { pickSaveFileHandle } from '../utils/fileSystemAccess';
 
 interface LandingProps {
   onSelectProject: (project: Project) => void;
@@ -37,6 +40,7 @@ interface LandingProps {
 }
 
 const Landing: React.FC<LandingProps> = ({ onSelectProject, onOpenSettings }) => {
+  const { showToast } = useToast();
   const [projects, setProjects] = useState<Project[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isCreating, setIsCreating] = useState(false);
@@ -131,17 +135,36 @@ const Landing: React.FC<LandingProps> = ({ onSelectProject, onOpenSettings }) =>
   };
 
   // Export project to .zip file
-  const handleExport = async (e: React.MouseEvent, projectId: string) => {
+  const handleExport = async (e: React.MouseEvent, project: Project) => {
     e.stopPropagation();
     e.preventDefault();
 
-    setExportingProjectId(projectId);
+    setExportingProjectId(project.id);
     setExportProgress({ phase: 'preparing', percent: 0, message: 'Preparing export...' });
 
     try {
-      await exportProject(projectId, (progress) => {
-        setExportProgress(progress);
+      const suggestedName = `${project.name}.zip`;
+      const savePick = await pickSaveFileHandle({
+        suggestedName,
+        description: 'Project Backup',
+        mime: 'application/zip',
+        extensions: ['.zip'],
       });
+
+      if (savePick.kind === 'cancelled') {
+        setExportingProjectId(null);
+        setExportProgress(null);
+        return;
+      }
+
+      const result = await exportProject(project.id, (progress) => {
+        setExportProgress(progress);
+      }, {
+        saveHandle: savePick.kind === 'picked' ? savePick.handle : undefined,
+        fallbackFileName: suggestedName,
+      });
+
+      showToast('Export complete', result.filename, 'success');
 
       // Show success briefly before closing
       setTimeout(() => {
@@ -150,7 +173,7 @@ const Landing: React.FC<LandingProps> = ({ onSelectProject, onOpenSettings }) =>
       }, 1500);
     } catch (error) {
       console.error('Export failed:', error);
-      alert(`Export failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
+      showToast('Export failed', error instanceof Error ? error.message : 'Unknown error', 'error');
       setExportingProjectId(null);
       setExportProgress(null);
     }
@@ -181,10 +204,11 @@ const Landing: React.FC<LandingProps> = ({ onSelectProject, onOpenSettings }) =>
       }
 
       // Show validation info
+      const zipProjectName = getProjectNameFromBackupFileName(file.name);
       setImportProgress({
         phase: 'validating',
         percent: 15,
-        message: `Found: ${validation.manifest?.projectName} (${validation.manifest?.rowCount} rows)`
+        message: `Found: ${zipProjectName} (${validation.manifest?.rowCount} rows)`
       });
 
       // Proceed with import
@@ -415,7 +439,7 @@ const Landing: React.FC<LandingProps> = ({ onSelectProject, onOpenSettings }) =>
                     {/* Action Buttons: Export and Delete */}
                     <div className="absolute top-2 right-2 z-20 opacity-100 lg:opacity-0 lg:group-hover:opacity-100 transition-all duration-200 flex items-center space-x-1">
                         <button
-                            onClick={(e) => handleExport(e, project.id)}
+                            onClick={(e) => handleExport(e, project)}
                             disabled={exportingProjectId === project.id}
                             className="bg-white/90 backdrop-blur-sm p-2 rounded-full text-gray-400 hover:text-blue-600 hover:bg-blue-50 border border-gray-200 shadow-sm transition-all transform hover:scale-105 disabled:opacity-50 disabled:cursor-not-allowed"
                             title="Export Project"

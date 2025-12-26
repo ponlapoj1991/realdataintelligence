@@ -1,4 +1,4 @@
-import { DashboardWidget, RawRow, DashboardFilter } from '../types';
+import { DashboardWidget, RawRow, DashboardFilter, DateFilterOperator } from '../types';
 
 export interface AggregatedWidgetData {
   data: any[];
@@ -81,6 +81,11 @@ export const normalizeDateEnd = (value?: string | null) => {
   return date;
 };
 
+const normalizeDateOperator = (operator?: DateFilterOperator): DateFilterOperator => {
+  if (operator === 'on' || operator === 'before' || operator === 'after' || operator === 'between') return operator;
+  return 'between';
+};
+
 export const applyWidgetFilters = (rows: RawRow[], filters?: DashboardFilter[]) => {
   if (!filters || filters.length === 0) return rows;
   return rows.filter(row =>
@@ -90,12 +95,23 @@ export const applyWidgetFilters = (rows: RawRow[], filters?: DashboardFilter[]) 
       if (filter.dataType === 'date') {
         const rowDate = toDate(val);
         if (!rowDate) return false;
+        const operator = normalizeDateOperator(filter.operator);
+        if (operator === 'between') {
+          const start = normalizeDateStart(filter.value);
+          const end = normalizeDateEnd(filter.endValue);
+          if (start && rowDate < start) return false;
+          if (end && rowDate > end) return false;
+          if (!start && !end) return true;
+          return true;
+        }
+
         const start = normalizeDateStart(filter.value);
-        const end = normalizeDateEnd(filter.endValue);
-        if (start && rowDate < start) return false;
-        if (end && rowDate > end) return false;
-        if (!start && !end) return true;
-        return true;
+        const end = normalizeDateEnd(filter.value);
+        if (!start || !end) return true;
+
+        if (operator === 'on') return rowDate >= start && rowDate <= end;
+        if (operator === 'before') return rowDate < start;
+        return rowDate > end;
       }
       if (filter.value === undefined || filter.value === '') return true;
       if (val === null || val === undefined) return false;
