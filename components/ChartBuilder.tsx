@@ -414,6 +414,32 @@ const ChartBuilder: React.FC<ChartBuilderProps> = ({
   const transformWorker = useTransformPipelineWorker();
   const [profileRows, setProfileRows] = useState<RawRow[]>([]);
   const profileReqRef = useRef(0);
+  const [fallbackColumnOptions, setFallbackColumnOptions] = useState<Record<string, string[]>>({});
+  const fallbackOptionsReqRef = useRef<Record<string, number>>({});
+
+  const columnOptionsCacheKey = useCallback(
+    (columnKey: string) => {
+      const key = String(columnKey || '').trim();
+      if (!key) return '';
+      if (workerSource?.mode === 'dataSource') {
+        const projectId = workerSource.projectId || 'unknown';
+        const sourceId = workerSource.dataSourceId || 'unknown';
+        const dataVersion = typeof workerSource.dataVersion === 'number' ? workerSource.dataVersion : 0;
+        return `ds:${projectId}:${sourceId}:${dataVersion}:${key}`;
+      }
+      return `rows:${key}`;
+    },
+    [workerSource]
+  );
+
+  const getFallbackOptions = useCallback(
+    (columnKey: string): string[] => {
+      const cacheKey = columnOptionsCacheKey(columnKey);
+      if (!cacheKey) return [];
+      return fallbackColumnOptions[cacheKey] || [];
+    },
+    [columnOptionsCacheKey, fallbackColumnOptions]
+  );
   // UI State
   const [showTypeSelector, setShowTypeSelector] = useState(true); // Show type selector first
   const [activeTab, setActiveTab] = useState<'setup' | 'customize'>('setup');
@@ -702,7 +728,11 @@ const [sortSeriesId, setSortSeriesId] = useState('');
 
   // Get all unique categories from data
   const allCategories = useMemo(() => {
-    if (!dimension || data.length === 0) return [];
+    if (!dimension) return [];
+
+    const rowsForDiscovery = data.length > 0 ? data : profileRows;
+    const fallbackValues = rowsForDiscovery.length === 0 ? getFallbackOptions(dimension) : [];
+    if (rowsForDiscovery.length === 0 && fallbackValues.length === 0) return [];
 
     const isLineFamily = !!type && ['line', 'smooth-line', 'multi-line', 'multi-area', 'area', 'stacked-area', '100-stacked-area'].includes(type);
     const isMultiLine = type === 'multi-line' || type === 'multi-area';
@@ -710,8 +740,8 @@ const [sortSeriesId, setSortSeriesId] = useState('');
     const shouldBucket = isLineFamily && ((Number.isFinite(major) && major > 0) || isMultiLine);
 
     const inferKind = () => {
-      const sample = data
-        .map((row) => row[dimension])
+      const sample = (rowsForDiscovery.length > 0 ? rowsForDiscovery.map((row) => row[dimension]) : fallbackValues)
+        .map((v) => (v === '(Blank)' ? '' : v))
         .filter((v) => v !== null && v !== undefined && v !== '')
         .slice(0, 50);
       if (sample.length < 3) return null;
@@ -748,8 +778,9 @@ const [sortSeriesId, setSortSeriesId] = useState('');
         if (!Number.isFinite(major) || major <= 0) return null;
 
         let minMs = Infinity;
-        for (const row of data) {
-          const d = toDate(row[dimension]);
+        const values = rowsForDiscovery.length > 0 ? rowsForDiscovery.map((row) => row[dimension]) : fallbackValues;
+        for (const raw of values) {
+          const d = toDate(raw === '(Blank)' ? '' : raw);
           if (!d) continue;
           const ms = d.getTime();
           if (ms < minMs) minMs = ms;
@@ -773,8 +804,9 @@ const [sortSeriesId, setSortSeriesId] = useState('');
       }
 
       let min = Infinity;
-      for (const row of data) {
-        const n = Number(String(row[dimension]));
+      const values = rowsForDiscovery.length > 0 ? rowsForDiscovery.map((row) => row[dimension]) : fallbackValues;
+      for (const raw of values) {
+        const n = Number(String(raw === '(Blank)' ? '' : raw));
         if (!Number.isFinite(n)) continue;
         if (n < min) min = n;
       }
@@ -816,14 +848,21 @@ const [sortSeriesId, setSortSeriesId] = useState('');
       }
       tokens.forEach((t) => unique.add(t));
     };
-    data.forEach(row => addTokens(row[dimension]));
+    if (rowsForDiscovery.length > 0) {
+      rowsForDiscovery.forEach((row) => addTokens(row[dimension]));
+    } else {
+      fallbackValues.forEach((v) => addTokens(v === '(Blank)' ? '' : v));
+    }
     return Array.from(unique).sort((a, b) => a.localeCompare(b));
-  }, [dimension, data, groupByString, type, xAxis.major]);
+  }, [dimension, data, profileRows, getFallbackOptions, groupByString, type, xAxis.major]);
 
   const stackKeys = useMemo(() => {
     if (!supports?.stackBy) return [];
     if (!stackBy) return [];
-    if (data.length === 0) return [];
+
+    const rowsForDiscovery = data.length > 0 ? data : profileRows;
+    const fallbackValues = rowsForDiscovery.length === 0 ? getFallbackOptions(stackBy) : [];
+    if (rowsForDiscovery.length === 0 && fallbackValues.length === 0) return [];
     const unique = new Set<string>();
     const addTokens = (raw: any) => {
       if (raw === null || raw === undefined) {
@@ -846,9 +885,13 @@ const [sortSeriesId, setSortSeriesId] = useState('');
       }
       tokens.forEach((t) => unique.add(t));
     };
-    data.forEach((row) => addTokens(row[stackBy]));
+    if (rowsForDiscovery.length > 0) {
+      rowsForDiscovery.forEach((row) => addTokens(row[stackBy]));
+    } else {
+      fallbackValues.forEach((v) => addTokens(v === '(Blank)' ? '' : v));
+    }
     return Array.from(unique).sort((a, b) => a.localeCompare(b));
-  }, [supports?.stackBy, stackBy, data, seriesGroupByString]);
+  }, [supports?.stackBy, stackBy, data, profileRows, getFallbackOptions, seriesGroupByString]);
 
   const seriesCategories = stackKeys;
 
@@ -856,6 +899,9 @@ const [sortSeriesId, setSortSeriesId] = useState('');
     if (type !== 'kpi') return [];
     if (measure !== 'count') return [];
     if (!measureCol) return [];
+    const rowsForDiscovery = data.length > 0 ? data : profileRows;
+    const fallbackValues = rowsForDiscovery.length === 0 ? getFallbackOptions(measureCol) : [];
+    if (rowsForDiscovery.length === 0 && fallbackValues.length === 0) return [];
     const unique = new Set<string>();
     const addTokens = (raw: any) => {
       const s = String(raw ?? '').trim();
@@ -867,9 +913,13 @@ const [sortSeriesId, setSortSeriesId] = useState('');
       const tokens = s.split(/[,\n;|]+/).map((t) => t.trim()).filter(Boolean);
       tokens.forEach((t) => unique.add(t));
     };
-    data.forEach((row) => addTokens(row[measureCol]));
+    if (rowsForDiscovery.length > 0) {
+      rowsForDiscovery.forEach((row) => addTokens(row[measureCol]));
+    } else {
+      fallbackValues.forEach((v) => addTokens(v === '(Blank)' ? '' : v));
+    }
     return Array.from(unique).sort();
-  }, [type, measure, measureCol, data, groupByString]);
+  }, [type, measure, measureCol, data, profileRows, getFallbackOptions, groupByString]);
 
   const prevKpiColRef = useRef<string>('');
   useEffect(() => {
@@ -1202,6 +1252,62 @@ const [sortSeriesId, setSortSeriesId] = useState('');
       }
     })();
   }, [isOpen, data.length, workerSource, transformWorker.isSupported, transformWorker.cleanPreview]);
+
+  useEffect(() => {
+    if (!isOpen) return;
+    if (data.length > 0) return;
+    if (profileRows.length > 0) return;
+    if (workerSource?.mode !== 'dataSource') return;
+    if (!previewWorker.isSupported) return;
+
+    const wanted = new Set<string>();
+    if (dimension) wanted.add(dimension);
+    if (stackBy) wanted.add(stackBy);
+    if (type === 'kpi' && measure === 'count' && measureCol) wanted.add(measureCol);
+
+    if (wanted.size === 0) return;
+
+    const bumpRequest = (cacheKey: string) => {
+      fallbackOptionsReqRef.current[cacheKey] = (fallbackOptionsReqRef.current[cacheKey] || 0) + 1;
+      return fallbackOptionsReqRef.current[cacheKey];
+    };
+
+    wanted.forEach((columnKey) => {
+      const cacheKey = columnOptionsCacheKey(columnKey);
+      if (!cacheKey) return;
+      if (fallbackColumnOptions[cacheKey]) return;
+
+      const requestId = bumpRequest(cacheKey);
+      void (async () => {
+        try {
+          const values = await previewWorker.requestColumnOptions({
+            columnKey,
+            limitRows: 20000,
+            limitValues: 2000,
+          });
+          if ((fallbackOptionsReqRef.current[cacheKey] || 0) !== requestId) return;
+          setFallbackColumnOptions((prev) => (prev[cacheKey] ? prev : { ...prev, [cacheKey]: values }));
+        } catch {
+          if ((fallbackOptionsReqRef.current[cacheKey] || 0) !== requestId) return;
+          setFallbackColumnOptions((prev) => (prev[cacheKey] ? prev : { ...prev, [cacheKey]: [] }));
+        }
+      })();
+    });
+  }, [
+    isOpen,
+    data.length,
+    profileRows.length,
+    workerSource,
+    previewWorker.isSupported,
+    previewWorker.requestColumnOptions,
+    dimension,
+    stackBy,
+    type,
+    measure,
+    measureCol,
+    columnOptionsCacheKey,
+    fallbackColumnOptions,
+  ]);
   const showMajorControl = useMemo(() => {
     if (!type || !dimension) return false;
     const eligibleType =
