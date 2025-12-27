@@ -16,11 +16,11 @@ const getDefaultModel = (provider: AIProvider) => {
     case AIProvider.OPENAI:
       return 'gpt-4.1-mini'
     case AIProvider.GEMINI:
-      return 'gemini-2.5-flash'
+      return 'gemini-1.5-flash'
     case AIProvider.CLAUDE:
       return 'claude-3-5-sonnet-20240620'
     default:
-      return 'gemini-2.5-flash'
+      return 'gemini-1.5-flash'
   }
 }
 

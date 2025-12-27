@@ -5,7 +5,7 @@ import VirtualTable from './VirtualTable';
 import { AiSummarySort, loadFilteredDataSourceRows } from '../utils/aiSummary';
 
 const MODELS: Record<AIProvider, string[]> = {
-  [AIProvider.GEMINI]: ['gemini-2.5-flash', 'gemini-2.5-pro', 'gemini-1.5-flash', 'gemini-1.5-pro'],
+  [AIProvider.GEMINI]: ['gemini-1.5-flash', 'gemini-1.5-pro'],
   [AIProvider.OPENAI]: ['gpt-4.1', 'gpt-4.1-mini', 'gpt-4o', 'gpt-4o-mini', 'gpt-4-turbo'],
   [AIProvider.CLAUDE]: ['claude-3-5-sonnet-20240620', 'claude-3-opus-20240229', 'claude-3-sonnet-20240229'],
 };
@@ -21,7 +21,7 @@ type Props = {
   onPickDataSource: (selectedId: string | null, onSelect: (sourceId: string) => void) => void;
   onSave: (context: AISummaryContext) => void;
   onCreateText: (contextId: string, elementId?: string) => void;
-  onAnalyze: (contextId: string) => void;
+  onAnalyze: (context: AISummaryContext) => void;
 };
 
 const getColumnsForSource = (src: DataSource | undefined | null, transformRules: TransformationRule[]) => {
@@ -137,7 +137,8 @@ const AISummaryContextModal: React.FC<Props> = ({
 
   const provider = (draft?.provider || globalAiSettings.provider) as AIProvider;
   const models = MODELS[provider] || MODELS[AIProvider.GEMINI];
-  const model = (draft?.model || globalAiSettings.model || models[0] || '').trim();
+  const preferredModel = String(draft?.model || globalAiSettings.model || '').trim();
+  const model = (preferredModel && models.includes(preferredModel) ? preferredModel : (models[0] || '')).trim();
 
   if (!isOpen) return null;
   if (!draft) return null;
@@ -156,6 +157,7 @@ const AISummaryContextModal: React.FC<Props> = ({
     };
     onSave(next);
     setDraft(next);
+    return next;
   };
 
   const handlePickDataSource = () => {
@@ -405,8 +407,8 @@ const AISummaryContextModal: React.FC<Props> = ({
                 type="button"
                 disabled={!ready}
                 onClick={() => {
-                  handleSave();
-                  onAnalyze(draft.id);
+                  const next = handleSave();
+                  onAnalyze(next);
                 }}
                 className="inline-flex items-center px-4 py-2 rounded-lg text-sm font-medium text-white disabled:bg-gray-300 bg-indigo-600 hover:bg-indigo-700"
               >

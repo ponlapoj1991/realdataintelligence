@@ -8,7 +8,7 @@ const DEFAULT_SETTINGS: GlobalSettings = {
   ai: {
     provider: AIProvider.GEMINI,
     apiKey: '',
-    model: 'gemini-2.5-flash',
+    model: 'gemini-1.5-flash',
     temperature: 0.7,
     maxTokens: 2000,
   },
@@ -19,8 +19,21 @@ export const loadGlobalSettings = (): GlobalSettings => {
     const stored = localStorage.getItem(STORAGE_KEY);
     if (stored) {
       const parsed = JSON.parse(stored);
-      // Merge with default to ensure new fields are present
-      return { ...DEFAULT_SETTINGS, ...parsed };
+      // Merge with default to ensure new fields are present (including nested objects)
+      const merged: GlobalSettings = {
+        ...DEFAULT_SETTINGS,
+        ...parsed,
+        ai: { ...DEFAULT_SETTINGS.ai, ...(parsed?.ai || {}) },
+        theme: parsed?.theme || DEFAULT_SETTINGS.theme,
+      };
+
+      if (merged.ai.provider === AIProvider.GEMINI) {
+        const model = String(merged.ai.model || '').trim();
+        if (model === 'gemini-2.5-flash') merged.ai.model = 'gemini-1.5-flash';
+        if (model === 'gemini-2.5-pro') merged.ai.model = 'gemini-1.5-pro';
+      }
+
+      return merged;
     }
   } catch (e) {
     console.error('Failed to load global settings', e);

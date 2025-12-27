@@ -403,16 +403,12 @@ const ReportBuilder: React.FC<ReportBuilderProps> = ({ project, onUpdateProject 
       []
     );
 
-    const runAiSummaryContext = useCallback(
-      async (contextId: string) => {
+    const runAiSummaryContextInternal = useCallback(
+      async (ctx: AISummaryContext) => {
         if (!iframeWindow) {
           showToast('Editor unavailable', 'Unable to communicate with RealPPTX.', 'error');
           return;
         }
-        if (!editingPresentation) return;
-        const contexts = (editingPresentation.aiSummaryContexts || []) as AISummaryContext[];
-        const ctx = contexts.find((c) => c.id === contextId);
-        if (!ctx) return;
 
         if (aiSummaryRunningContextId) {
           showToast('Analyze running', 'Please wait.', 'info');
@@ -426,6 +422,10 @@ const ReportBuilder: React.FC<ReportBuilderProps> = ({ project, onUpdateProject 
         }
         if (!ctx.dataSourceId) {
           showToast('Data source required', 'Data source is required.', 'warning');
+          return;
+        }
+        if (!ctx.textElementId) {
+          showToast('Missing text box', 'Context is not linked to a text element.', 'warning');
           return;
         }
         if (!ctx.dateColumn) {
@@ -457,7 +457,7 @@ const ReportBuilder: React.FC<ReportBuilderProps> = ({ project, onUpdateProject 
         const limit = typeof ctx.limit === 'number' && ctx.limit > 0 ? Math.floor(ctx.limit) : 200;
         const aiLimit = Math.min(Math.max(1, limit), 400);
 
-        setAiSummaryRunningContextId(contextId);
+        setAiSummaryRunningContextId(ctx.id);
         try {
           const rows = await loadFilteredDataSourceRows({
             projectId: projectWithSources.id,
@@ -525,7 +525,6 @@ const ReportBuilder: React.FC<ReportBuilderProps> = ({ project, onUpdateProject 
       },
       [
         aiSummaryRunningContextId,
-        editingPresentation,
         globalSettings.ai,
         iframeWindow,
         projectWithSources.dataSources,
@@ -534,6 +533,17 @@ const ReportBuilder: React.FC<ReportBuilderProps> = ({ project, onUpdateProject 
         rowsToPlainTable,
         showToast,
       ]
+    );
+
+    const runAiSummaryContext = useCallback(
+      async (contextId: string) => {
+        if (!editingPresentation) return;
+        const contexts = (editingPresentation.aiSummaryContexts || []) as AISummaryContext[];
+        const ctx = contexts.find((c) => c.id === contextId);
+        if (!ctx) return;
+        await runAiSummaryContextInternal(ctx);
+      },
+      [editingPresentation, runAiSummaryContextInternal]
     );
 
     const ensureCanvasPreviewRows = useCallback(
@@ -2186,8 +2196,8 @@ const ReportBuilder: React.FC<ReportBuilderProps> = ({ project, onUpdateProject 
                 '*'
               );
             }}
-            onAnalyze={(contextId) => {
-              void runAiSummaryContext(contextId);
+            onAnalyze={(ctx) => {
+              void runAiSummaryContextInternal(ctx);
             }}
           />
 

@@ -11,7 +11,7 @@ const PROVIDERS = [
 ];
 
 const MODELS: Record<AIProvider, string[]> = {
-  [AIProvider.GEMINI]: ['gemini-2.5-flash', 'gemini-2.5-pro', 'gemini-1.5-flash', 'gemini-1.5-pro'],
+  [AIProvider.GEMINI]: ['gemini-1.5-flash', 'gemini-1.5-pro'],
   [AIProvider.OPENAI]: ['gpt-4.1', 'gpt-4.1-mini', 'gpt-4o', 'gpt-4o-mini', 'gpt-4-turbo'],
   [AIProvider.CLAUDE]: ['claude-3-5-sonnet-20240620', 'claude-3-opus-20240229', 'claude-3-sonnet-20240229'],
 };
