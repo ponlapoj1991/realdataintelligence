@@ -887,6 +887,13 @@ export default () => {
                 series = data.map(item => item.values.map(v => v.y))
               }
 
+              // Guard: extremely large charts can make import feel stuck.
+              // Limit the in-canvas chart payload size while preserving the visible part of the chart.
+              if (labels.length > 300) {
+                labels = labels.slice(0, 300)
+                series = series.map(row => row.slice(0, 300))
+              }
+
               const options: ChartOptions = {}
   
               let chartType: ChartType = 'bar'
@@ -895,7 +902,8 @@ export default () => {
                 case 'barChart':
                 case 'bar3DChart':
                   chartType = 'bar'
-                  if (el.barDir === 'bar') chartType = 'column'
+                  // OOXML uses barDir="col" for column charts, and barDir="bar" for horizontal bar charts.
+                  if (el.barDir === 'col') chartType = 'column'
                   if (el.grouping === 'stacked' || el.grouping === 'percentStacked') options.stack = true
                   break
                 case 'lineChart':

@@ -551,9 +551,7 @@ export default () => {
     const chartItems: ChartPostprocessItem[] = []
     let chartId = 0
 
-    if (viewportRatio.value === 0.625) pptx.layout = 'LAYOUT_16x10'
-    else if (viewportRatio.value === 0.75) pptx.layout = 'LAYOUT_4x3'
-    else if (viewportRatio.value === 0.70710678) {
+    if (viewportRatio.value === 0.70710678) {
       pptx.defineLayout({ name: 'A3', width: 10, height: 7.0710678 })
       pptx.layout = 'A3'
     }
@@ -561,7 +559,15 @@ export default () => {
       pptx.defineLayout({ name: 'A3_V', width: 10, height: 14.1421356 })
       pptx.layout = 'A3_V'
     }
-    else pptx.layout = 'LAYOUT_16x9'
+    else {
+      // Keep export in the same coordinate system as Canvas Stars:
+      // Canvas uses viewportSize as a 10-inch wide virtual page (see ratioPx2Inch/ratioPx2Pt).
+      // Using the default PowerPoint widescreen (13.333in) causes visual scaling mismatches.
+      const widthInch = 10
+      const heightInch = Number((widthInch * viewportRatio.value).toFixed(6))
+      pptx.defineLayout({ name: 'REAL_CANVAS', width: widthInch, height: heightInch })
+      pptx.layout = 'REAL_CANVAS'
+    }
 
     if (masterOverwrite) {
       const { color: bgColor, alpha: bgAlpha } = formatColor(theme.value.backgroundColor)
@@ -636,8 +642,8 @@ export default () => {
             color: '000000',
             valign: toPptxVAlign(el.valign),
             margin: (el.padding ?? 10) / ratioPx2Pt.value,
-            paraSpaceBefore: 5 / ratioPx2Pt.value,
-            lineSpacingMultiple: 1.5 / 1.25,
+            paraSpaceBefore: 0,
+            lineSpacingMultiple: 1,
             autoFit: el.dashboardWidgetKind === 'kpi' ? false : true,
           }
 
@@ -652,7 +658,7 @@ export default () => {
           }
           if (el.lineHeight) {
             const lh = toFiniteNumber(el.lineHeight)
-            if (lh !== null) options.lineSpacingMultiple = clampNumber(lh / 1.25, 0.5, 10)
+            if (lh !== null) options.lineSpacingMultiple = clampNumber(lh, 0.5, 10)
           }
           if (el.fill) {
             const c = formatColor(el.fill)

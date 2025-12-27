@@ -11,7 +11,7 @@ export const parseFontSizePx = (value: unknown, fallbackPx = 16) => {
 }
 
 export const formatFontSizePx = (px: number) => {
-  const rounded = Math.round(px * 10) / 10
+  const rounded = Math.round(px * 100) / 100
   const text = Number.isInteger(rounded) ? String(rounded) : String(rounded).replace(/0+$/, '').replace(/\.$/, '')
   return `${text}px`
 }
@@ -90,8 +90,18 @@ const PPT_FONT_SIZE_STEPS_PT = [
 ]
 
 export const nextPptFontSizePt = (currentPt: number, direction: 'up' | 'down') => {
-  const cur = clamp(Number.isFinite(currentPt) ? currentPt : 12, 1, 2000)
+  const curRaw = clamp(Number.isFinite(currentPt) ? currentPt : 12, 1, 2000)
   const eps = 1e-6
+
+  // Snap to nearest known PPT step if we're close, to avoid getting stuck due to px rounding drift.
+  const SNAP_TOLERANCE = 0.08
+  let cur = curRaw
+  for (const n of PPT_FONT_SIZE_STEPS_PT) {
+    if (Math.abs(n - curRaw) <= SNAP_TOLERANCE) {
+      cur = n
+      break
+    }
+  }
 
   if (direction === 'up') {
     const next = PPT_FONT_SIZE_STEPS_PT.find((n) => n > cur + eps)
