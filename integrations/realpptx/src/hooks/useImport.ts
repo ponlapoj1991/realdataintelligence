@@ -519,9 +519,29 @@ export default () => {
           }
           console.log('[PPTX Import Debug] Element types in slide:', typeCounts)
 
+          // DEBUG: Log elements with undefined type that might be charts
+          for (const e of sortedElements) {
+            if (!e.type || e.type === 'undefined') {
+              console.log('[PPTX Import Debug] Undefined type element:', {
+                hasChartType: !!(e as any).chartType,
+                chartType: (e as any).chartType,
+                hasData: !!(e as any).data,
+                keys: Object.keys(e).slice(0, 20),
+              })
+            }
+          }
+
           for (const el of sortedElements) {
+            // Detect chart from properties even if type is undefined
+            // pptxtojson may return undefined type for charts created by pptxgenjs
+            const elAny = el as any
+            const isChartByProperties = !el.type && elAny.chartType && elAny.data
+            if (isChartByProperties) {
+              console.log('[PPTX Import Debug] Detected chart by properties:', elAny.chartType)
+            }
+
             // DEBUG: Log chart elements specifically
-            if (el.type === 'chart') {
+            if (el.type === 'chart' || isChartByProperties) {
               console.log('[PPTX Import Debug] Chart element found:', {
                 chartType: (el as any).chartType,
                 hasData: !!(el as any).data,
@@ -887,11 +907,11 @@ export default () => {
                 cellMinHeight,
               })
             }
-            else if (el.type === 'chart') {
+            else if (el.type === 'chart' || isChartByProperties) {
               // Validate chart data before processing
-              const chartData = el.data
+              const chartData = elAny.data
               if (!chartData || !Array.isArray(chartData) || chartData.length === 0) {
-                console.warn('Chart import skipped: invalid or empty chart data', el.chartType)
+                console.warn('Chart import skipped: invalid or empty chart data', elAny.chartType)
                 continue
               }
 
@@ -900,7 +920,7 @@ export default () => {
               let series: number[][] = []
 
               try {
-                if (el.chartType === 'scatterChart' || el.chartType === 'bubbleChart') {
+                if (elAny.chartType === 'scatterChart' || elAny.chartType === 'bubbleChart') {
                   const firstRow = chartData[0]
                   if (!firstRow || !Array.isArray(firstRow)) {
                     console.warn('Chart import skipped: scatter/bubble chart has invalid first row')
@@ -914,7 +934,7 @@ export default () => {
                   const data = chartData as ChartItem[]
                   const firstItem = data[0]
                   if (!firstItem || !firstItem.xlabels || !firstItem.values) {
-                    console.warn('Chart import skipped: chart data structure invalid', el.chartType)
+                    console.warn('Chart import skipped: chart data structure invalid', elAny.chartType)
                     continue
                   }
                   labels = Object.values(firstItem.xlabels)
@@ -930,12 +950,12 @@ export default () => {
 
                 // Ensure we have valid data
                 if (labels.length === 0 || series.length === 0) {
-                  console.warn('Chart import skipped: no valid labels or series', el.chartType)
+                  console.warn('Chart import skipped: no valid labels or series', elAny.chartType)
                   continue
                 }
               }
               catch (chartParseErr) {
-                console.warn('Chart import skipped: parsing error', el.chartType, chartParseErr)
+                console.warn('Chart import skipped: parsing error', elAny.chartType, chartParseErr)
                 continue
               }
 
@@ -950,22 +970,22 @@ export default () => {
 
               let chartType: ChartType = 'bar'
 
-              switch (el.chartType) {
+              switch (elAny.chartType) {
                 case 'barChart':
                 case 'bar3DChart':
                   chartType = 'bar'
                   // OOXML uses barDir="col" for column charts, and barDir="bar" for horizontal bar charts.
-                  if (el.barDir === 'col') chartType = 'column'
-                  if (el.grouping === 'stacked' || el.grouping === 'percentStacked') options.stack = true
+                  if (elAny.barDir === 'col') chartType = 'column'
+                  if (elAny.grouping === 'stacked' || elAny.grouping === 'percentStacked') options.stack = true
                   break
                 case 'lineChart':
                 case 'line3DChart':
-                  if (el.grouping === 'stacked' || el.grouping === 'percentStacked') options.stack = true
+                  if (elAny.grouping === 'stacked' || elAny.grouping === 'percentStacked') options.stack = true
                   chartType = 'line'
                   break
                 case 'areaChart':
                 case 'area3DChart':
-                  if (el.grouping === 'stacked' || el.grouping === 'percentStacked') options.stack = true
+                  if (elAny.grouping === 'stacked' || elAny.grouping === 'percentStacked') options.stack = true
                   chartType = 'area'
                   break
                 case 'scatterChart':
@@ -989,12 +1009,12 @@ export default () => {
                 type: 'chart',
                 id: nanoid(10),
                 chartType: chartType,
-                width: el.width,
-                height: el.height,
-                left: el.left,
-                top: el.top,
+                width: elAny.width,
+                height: elAny.height,
+                left: elAny.left,
+                top: elAny.top,
                 rotate: 0,
-                themeColors: (el.colors && el.colors.length ? el.colors : theme.value.themeColors).map(c => resolveColor(c, pptxThemeColors, c)),
+                themeColors: (elAny.colors && elAny.colors.length ? elAny.colors : theme.value.themeColors).map((c: string) => resolveColor(c, pptxThemeColors, c)),
                 textColor: theme.value.fontColor,
                 data: {
                   labels,
