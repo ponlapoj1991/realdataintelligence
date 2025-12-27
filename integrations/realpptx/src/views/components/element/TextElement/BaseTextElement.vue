@@ -30,7 +30,7 @@
           lineHeight: elementInfo.lineHeight,
           letterSpacing: (elementInfo.wordSpace || 0) + 'px',
           color: elementInfo.defaultColor,
-          fontFamily: elementInfo.defaultFontName,
+          fontFamily: effectiveFontName,
           writingMode: elementInfo.vertical ? 'vertical-rl' : 'horizontal-tb',
         }"
       >
@@ -55,7 +55,9 @@
 
 <script lang="ts" setup>
 import { computed } from 'vue'
+import { storeToRefs } from 'pinia'
 import type { PPTTextElement } from '@/types/slides'
+import { useSlidesStore } from '@/store'
 import ElementOutline from '@/views/components/element/ElementOutline.vue'
 
 import useElementShadow from '@/views/components/element/hooks/useElementShadow'
@@ -64,6 +66,12 @@ const props = defineProps<{
   elementInfo: PPTTextElement
   target?: string
 }>()
+
+const { theme } = storeToRefs(useSlidesStore())
+
+const effectiveFontName = computed(() => {
+  return props.elementInfo.defaultFontName || theme.value.fontName || 'Tahoma'
+})
 
 const shadow = computed(() => props.elementInfo.shadow)
 const { shadowStyle } = useElementShadow(shadow)

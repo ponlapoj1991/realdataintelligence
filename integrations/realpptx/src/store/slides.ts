@@ -35,7 +35,7 @@ export const useSlidesStore = defineStore('slides', {
     theme: {
       themeColors: ['#5b9bd5', '#ed7d31', '#a5a5a5', '#ffc000', '#4472c4', '#70ad47'],
       fontColor: '#333',
-      fontName: '',
+      fontName: 'Tahoma',
       backgroundColor: '#fff',
       shadow: {
         h: 3,

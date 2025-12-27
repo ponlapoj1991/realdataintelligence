@@ -32,7 +32,7 @@
           lineHeight: elementInfo.lineHeight,
           letterSpacing: (elementInfo.wordSpace || 0) + 'px',
           color: elementInfo.defaultColor,
-          fontFamily: elementInfo.defaultFontName,
+          fontFamily: effectiveFontName,
           writingMode: elementInfo.vertical ? 'vertical-rl' : 'horizontal-tb',
         }"
         v-contextmenu="contextmenus"
@@ -48,7 +48,7 @@
           class="text"
           :elementId="elementInfo.id"
           :defaultColor="elementInfo.defaultColor"
-          :defaultFontName="elementInfo.defaultFontName"
+          :defaultFontName="effectiveFontName"
           :editable="!elementInfo.lock"
           :value="elementInfo.content"
           :style="{
@@ -89,6 +89,10 @@ const props = defineProps<{
 const mainStore = useMainStore()
 const slidesStore = useSlidesStore()
 const { handleElementId, isScaling } = storeToRefs(mainStore)
+
+const effectiveFontName = computed(() => {
+  return props.elementInfo.defaultFontName || slidesStore.theme.fontName || 'Tahoma'
+})
 
 const { addHistorySnapshot } = useHistorySnapshot()
 

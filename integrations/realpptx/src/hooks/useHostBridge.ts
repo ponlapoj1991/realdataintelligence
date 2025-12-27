@@ -39,6 +39,16 @@ const escapeHtml = (input: string) =>
     .replace(/\"/g, '&quot;')
     .replace(/'/g, '&#39;')
 
+const extractFirstTextFromHtml = (html: string) => {
+  try {
+    const doc = new DOMParser().parseFromString(String(html || ''), 'text/html')
+    const text = (doc.body.textContent || '').replace(/\u00a0/g, ' ').trim()
+    return text
+  } catch {
+    return String(html || '').replace(/<[^>]*>/g, '').trim()
+  }
+}
+
 const extractTextStyles = (html: string): { pStyle: string; spanStyle: string } => {
   try {
     const doc = new DOMParser().parseFromString(String(html || ''), 'text/html')
@@ -81,6 +91,16 @@ export default () => {
   const lastSlidesHash = ref<string>('')
   const lastStateHash = ref<string>('')
   const autosaveDirty = ref(false)
+
+  const findTextElementById = (id: string) => {
+    if (!id) return null
+    for (const slide of slidesStore.slides || []) {
+      const els = Array.isArray((slide as any)?.elements) ? ((slide as any).elements as any[]) : []
+      const found = els.find((el) => el?.id === id)
+      if (found && found.type === 'text') return found as any
+    }
+    return null
+  }
 
   const isInteracting = computed(() => {
     return (
@@ -534,6 +554,21 @@ export default () => {
       } | undefined
 
       if (payload?.elementId && typeof payload.content === 'string') {
+        const existing = findTextElementById(payload.elementId)
+        if (existing) {
+          const text = extractFirstTextFromHtml(payload.content)
+          const styles = extractTextStyles(existing.content || '')
+          const content = buildTextHtml(text, styles)
+          slidesStore.updateElement({
+            id: payload.elementId,
+            props: {
+              content,
+              dashboardWidgetKind: 'kpi' as const,
+            } as any,
+          })
+          return
+        }
+
         slidesStore.updateElement({
           id: payload.elementId,
           props: {
@@ -553,18 +588,8 @@ export default () => {
       const text = String(payload?.text || '')
       if (!contextId) return
 
-      const findTextElement = (id: string) => {
-        if (!id) return null
-        for (const slide of slidesStore.slides || []) {
-          const els = Array.isArray((slide as any)?.elements) ? ((slide as any).elements as any[]) : []
-          const found = els.find((el) => el?.id === id)
-          if (found && found.type === 'text') return found as any
-        }
-        return null
-      }
-
       let nextElementId = elementId
-      const existing = findTextElement(elementId)
+      const existing = findTextElementById(elementId)
 
       if (existing) {
         const styles = extractTextStyles(existing.content || '')

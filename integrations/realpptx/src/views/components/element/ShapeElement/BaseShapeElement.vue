@@ -19,7 +19,7 @@
           filter: shadowStyle ? `drop-shadow(${shadowStyle})` : '',
           transform: flipStyle,
           color: text.defaultColor,
-          fontFamily: text.defaultFontName,
+          fontFamily: text.defaultFontName || theme.fontName || 'Tahoma',
         }"
       >
         <svg 

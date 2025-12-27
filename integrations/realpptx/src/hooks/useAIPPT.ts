@@ -116,7 +116,7 @@ export default () => {
   
     const defaultInfo = {
       fontSize: 16,
-      fontFamily: 'Microsoft Yahei',
+      fontFamily: 'Tahoma',
     }
   
     const fontSizeMatch = htmlString.match(fontSizeRegex)

@@ -177,13 +177,25 @@ export function addChartElementToSlide(params: {
   const pxToPt = (px: number) => px / ratioPx2Pt
 
   const opt = (el.options || {}) as any
-  const fontFace =
+  const fontFaceRaw =
     opt.legendFontFamily ||
     opt.dataLabelFontFamily ||
     opt.axisLabelFontFamilyX ||
     opt.axisLabelFontFamilyYLeft ||
     opt.axisLabelFontFamilyYRight ||
-    'Arial'
+    'Tahoma'
+
+  const fontFace = (() => {
+    const raw = String(fontFaceRaw || '').trim()
+    const first = raw.split(',')[0]?.trim() || ''
+    const cleaned = first.replace(/^['"]+|['"]+$/g, '').replace(/['"]/g, '').trim()
+    const lower = cleaned.toLowerCase()
+    if (!cleaned) return 'Tahoma'
+    if (lower === 'tahoma') return 'Tahoma'
+    if (lower === 'arial') return 'Arial'
+    if (lower === 'prompt') return 'Prompt'
+    return 'Tahoma'
+  })()
 
   const catAxisTextColor = toPptxHex(opt.axisLabelColorX || el.options?.axisLabelColor || el.textColor || '#000000')
   const valAxisTextColor = toPptxHex(opt.axisLabelColorYLeft || el.options?.axisLabelColor || el.textColor || '#000000')

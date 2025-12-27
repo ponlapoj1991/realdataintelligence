@@ -1,6 +1,6 @@
 import { ref } from 'vue'
 import { storeToRefs } from 'pinia'
-import { parse, type Shape, type Element, type ChartItem, type BaseElement } from 'pptxtojson'
+import type { Shape, Element, ChartItem, BaseElement } from 'pptxtojson'
 import { nanoid } from 'nanoid'
 import tinycolor from 'tinycolor2'
 import { useSlidesStore } from '@/store'
@@ -164,6 +164,12 @@ const buildOutline = (value: { borderWidth?: unknown; borderColor?: unknown; bor
   }
 }
 
+const CANVAS_ALLOWED_FONTS = new Map<string, string>([
+  ['tahoma', 'Tahoma'],
+  ['arial', 'Arial'],
+  ['prompt', 'Prompt'],
+])
+
 const sanitizeFontFamily = (value: string, fallback: string) => {
   const raw = value.trim()
   if (!raw) return fallback
@@ -177,7 +183,7 @@ const sanitizeFontFamily = (value: string, fallback: string) => {
   if (!cleaned) return fallback
   if (lower.startsWith('+')) return fallback
   if (['inherit', 'initial', 'unset', 'sans-serif', 'serif', 'monospace', 'system-ui'].includes(lower)) return fallback
-  return cleaned
+  return CANVAS_ALLOWED_FONTS.get(lower) || fallback
 }
 
 const extractTextDefaults = (html: string) => {
@@ -212,6 +218,46 @@ export default () => {
   const { isEmptySlide } = useSlideHandler()
 
   const exporting = ref(false)
+
+  const parsePptx = async (buffer: ArrayBuffer) => {
+    const parseWithWorker = () =>
+      new Promise<any>((resolve, reject) => {
+        const worker = new Worker(new URL('../workers/pptxParse.worker.ts', import.meta.url), { type: 'module' })
+        const timeoutId = window.setTimeout(() => {
+          worker.terminate()
+          reject(new Error('PPTX parse timeout'))
+        }, 120000)
+
+        worker.onmessage = (event: MessageEvent) => {
+          window.clearTimeout(timeoutId)
+          const payload = event.data as { ok?: boolean; json?: any; error?: string } | undefined
+          worker.terminate()
+          if (payload?.ok && payload && 'json' in payload) resolve((payload as any).json)
+          else reject(new Error(payload?.error || 'PPTX parse failed'))
+        }
+        worker.onerror = (err) => {
+          window.clearTimeout(timeoutId)
+          worker.terminate()
+          reject(err)
+        }
+
+        try {
+          const workerBuffer = buffer.slice(0)
+          worker.postMessage({ type: 'parse-pptx', buffer: workerBuffer }, [workerBuffer])
+        } catch (err) {
+          window.clearTimeout(timeoutId)
+          worker.terminate()
+          reject(err)
+        }
+      })
+
+    try {
+      return await parseWithWorker()
+    } catch (err) {
+      const mod = await import('pptxtojson')
+      return await mod.parse(buffer)
+    }
+  }
 
   // 导入JSON文件
   const importJSON = (files: FileList | File[], cover = false) => {
@@ -439,7 +485,7 @@ export default () => {
     reader.onload = async e => {
       let json = null
       try {
-        json = await parse(e.target!.result as ArrayBuffer)
+        json = await parsePptx(e.target!.result as ArrayBuffer)
       }
       catch {
         exporting.value = false
@@ -464,7 +510,7 @@ export default () => {
       }
       else slidesStore.setViewportSize(width * ratio)
 
-      const pptxThemeColors = (json.themeColors || []).map(c => normalizeColorInput(c) || c)
+      const pptxThemeColors = (json.themeColors || []).map((c: any) => normalizeColorInput(c) || c)
       slidesStore.setTheme({ themeColors: pptxThemeColors })
 
       const slides: Slide[] = []
@@ -485,7 +531,7 @@ export default () => {
             type: 'gradient',
             gradient: {
               type: value.path === 'line' ? 'linear' : 'radial',
-              colors: value.colors.map(item => ({
+              colors: value.colors.map((item: any) => ({
                 ...item,
                 pos: parseInt(item.pos),
                 color: resolveColor(item.color, pptxThemeColors, '#000000'),
@@ -531,7 +577,7 @@ export default () => {
 
               const content = normalizeFontSizeToPx(el.content, ratio)
               const defaults = extractTextDefaults(content)
-              const fallbackFontName = theme.value.fontName || 'Arial'
+              const fallbackFontName = theme.value.fontName || 'Tahoma'
               const fallbackColor = theme.value.fontColor || '#333'
 
                const textEl: PPTTextElement = {
@@ -678,7 +724,7 @@ export default () => {
 
                 const textContent = normalizeFontSizeToPx(el.content, ratio)
                 const textDefaults = extractTextDefaults(textContent)
-                const fallbackFontName = theme.value.fontName || 'Arial'
+                const fallbackFontName = theme.value.fontName || 'Tahoma'
                 const fallbackColor = theme.value.fontColor || '#333'
                 
                  const element: PPTShapeElement = {
@@ -772,7 +818,7 @@ export default () => {
               const row = el.data.length
               const col = el.data[0].length
   
-              const fallbackFontName = theme.value.fontName || 'Arial'
+              const fallbackFontName = theme.value.fontName || 'Tahoma'
               const fallbackColor = theme.value.fontColor || '#333'
               const scaledRowHeights = Array.isArray(el.rowHeights)
                 ? el.rowHeights.map(item => {
