@@ -512,7 +512,23 @@ export default () => {
         const parseElements = (elements: Element[]) => {
           const sortedElements = elements.sort((a, b) => a.order - b.order)
 
+          // DEBUG: Log all element types to understand what pptxtojson returns
+          const typeCounts: Record<string, number> = {}
+          for (const e of sortedElements) {
+            typeCounts[e.type] = (typeCounts[e.type] || 0) + 1
+          }
+          console.log('[PPTX Import Debug] Element types in slide:', typeCounts)
+
           for (const el of sortedElements) {
+            // DEBUG: Log chart elements specifically
+            if (el.type === 'chart') {
+              console.log('[PPTX Import Debug] Chart element found:', {
+                chartType: (el as any).chartType,
+                hasData: !!(el as any).data,
+                dataLength: Array.isArray((el as any).data) ? (el as any).data.length : 'not array',
+                dataStructure: (el as any).data ? JSON.stringify((el as any).data).slice(0, 500) : 'null',
+              })
+            }
             const originWidth = el.width || 1
             const originHeight = el.height || 1
             const originLeft = el.left
