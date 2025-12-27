@@ -521,7 +521,7 @@ export default () => {
 
           // DEBUG: Log elements with undefined type that might be charts
           for (const e of sortedElements) {
-            if (!e.type || e.type === 'undefined') {
+            if (!e.type) {
               console.log('[PPTX Import Debug] Undefined type element:', {
                 hasChartType: !!(e as any).chartType,
                 chartType: (e as any).chartType,
