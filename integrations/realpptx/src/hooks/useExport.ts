@@ -306,7 +306,7 @@ export default () => {
           const options: pptxgen.TextPropsOptions = {}
 
           if (styleObj['font-size']) {
-            const fs = toFiniteNumber(parseInt(styleObj['font-size']))
+            const fs = toFiniteNumber(parseFloat(styleObj['font-size']))
             if (fs !== null && fs > 0) options.fontSize = fs / ratioPx2Pt.value
           }
           if (styleObj['color']) {
@@ -926,7 +926,7 @@ export default () => {
                 align: toPptxHAlign(cell.style?.align || 'left'),
                 valign: toPptxVAlign('middle'),
                 fontFace: sanitizeFontFace(cell.style?.fontname || 'Arial'),
-                fontSize: (toFiniteNumber(cell.style?.fontsize ? parseInt(cell.style?.fontsize) : 14) ?? 14) / ratioPx2Pt.value,
+                fontSize: (toFiniteNumber(cell.style?.fontsize ? parseFloat(cell.style?.fontsize) : 14) ?? 14) / ratioPx2Pt.value,
               }
               if (theme && themeColor) {
                 let c: FormatColor

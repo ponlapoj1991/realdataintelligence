@@ -22,6 +22,7 @@ import { indentCommand, textIndentCommand } from '@/utils/prosemirror/commands/s
 import { toggleList } from '@/utils/prosemirror/commands/toggleList'
 import { setListStyle } from '@/utils/prosemirror/commands/setListStyle'
 import { replaceText } from '@/utils/prosemirror/commands/replaceText'
+import { normalizeFontSizePx, nextPptFontSizePx } from '@/utils/fontSize'
 import type { TextFormatPainterKeys } from '@/types/edit'
 import message from '@/utils/message'
 import { KEYS } from '@/configs/hotkey'
@@ -142,27 +143,25 @@ const execCommand = ({ target, action }: RichTextCommand) => {
       }
     }
     else if (item.command === 'fontsize' && item.value) {
-      const mark = editorView.state.schema.marks.fontsize.create({ fontsize: item.value })
+      const fontsize = normalizeFontSizePx(item.value, getFontsize(editorView))
+      const mark = editorView.state.schema.marks.fontsize.create({ fontsize })
       autoSelectAll(editorView)
       addMark(editorView, mark)
-      setListStyle(editorView, { key: 'fontsize', value: item.value })
+      setListStyle(editorView, { key: 'fontsize', value: fontsize })
     }
     else if (item.command === 'fontsize-add') {
-      const step = item.value ? +item.value : 2
       autoSelectAll(editorView)
-      const fontsize = getFontsize(editorView) + step + 'px'
+      const fontsize = normalizeFontSizePx(nextPptFontSizePx(getFontsize(editorView), 'up'))
       const mark = editorView.state.schema.marks.fontsize.create({ fontsize })
       addMark(editorView, mark)
       setListStyle(editorView, { key: 'fontsize', value: fontsize })
     }
     else if (item.command === 'fontsize-reduce') {
-      const step = item.value ? +item.value : 2
       autoSelectAll(editorView)
-      let fontsize = getFontsize(editorView) - step
-      if (fontsize < 12) fontsize = 12
-      const mark = editorView.state.schema.marks.fontsize.create({ fontsize: fontsize + 'px' })
+      const fontsize = normalizeFontSizePx(nextPptFontSizePx(getFontsize(editorView), 'down'))
+      const mark = editorView.state.schema.marks.fontsize.create({ fontsize })
       addMark(editorView, mark)
-      setListStyle(editorView, { key: 'fontsize', value: fontsize + 'px' })
+      setListStyle(editorView, { key: 'fontsize', value: fontsize })
     }
     else if (item.command === 'color' && item.value) {
       const mark = editorView.state.schema.marks.forecolor.create({ color: item.value })

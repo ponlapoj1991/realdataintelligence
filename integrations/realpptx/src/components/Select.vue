@@ -22,7 +22,14 @@
   >
     <template #content>
       <template v-if="search">
-        <Input ref="searchInputRef" simple :placeholder="searchLabel" v-model:value="searchKey" :style="{ width: width + 2 + 'px' }" />
+        <Input
+          ref="searchInputRef"
+          simple
+          :placeholder="searchLabel"
+          v-model:value="searchKey"
+          :style="{ width: width + 2 + 'px' }"
+          @enter="handleCustomEnter"
+        />
         <Divider :margin="0" />
       </template>
       <div class="options" ref="optionsRef" :style="{ width: width + 2 + 'px' }">
@@ -67,11 +74,13 @@ const props = withDefaults(defineProps<{
   autofocus?: boolean
   search?: boolean
   searchLabel?: string
+  allowCustom?: boolean
 }>(), {
   disabled: false,
   autofocus: false,
   search: false,
   searchLabel: '搜索',
+  allowCustom: false,
 })
 
 const emit = defineEmits<{
@@ -112,6 +121,15 @@ watch(popoverVisible, () => {
 onBeforeUnmount(() => {
   searchKey.value = ''
 })
+
+const handleCustomEnter = () => {
+  if (!props.search || !props.allowCustom) return
+  const raw = searchKey.value.trim()
+  if (!raw) return
+  emit('update:value', raw)
+  popoverVisible.value = false
+  searchKey.value = ''
+}
 
 const updateWidth = () => {
   if (!selectRef.value) return

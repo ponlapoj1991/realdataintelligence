@@ -19,6 +19,7 @@
         :value="textAttrs.fontsize"
         search
         searchLabel="搜索字号"
+        allowCustom
         autofocus
         @update:value="value => updateTextAttrs({ fontsize: value as string })"
         :options="fontSizeOptions.map(item => ({
@@ -178,6 +179,7 @@ import { nanoid } from 'nanoid'
 import { useMainStore, useSlidesStore } from '@/store'
 import type { PPTTableElement, TableCell, TableCellStyle, TableTheme, TextAlign } from '@/types/slides'
 import { FONTS } from '@/configs/font'
+import { FONT_SIZE_OPTIONS, normalizeFontSizePx } from '@/utils/fontSize'
 import useHistorySnapshot from '@/hooks/useHistorySnapshot'
 
 import ElementOutline from '../common/ElementOutline.vue'
@@ -200,9 +202,7 @@ const slidesStore = useSlidesStore()
 const { handleElement, handleElementId, selectedTableCells: selectedCells } = storeToRefs(useMainStore())
 const themeColor = computed(() => slidesStore.theme.themeColors[0])
 
-const fontSizeOptions = [
-  '12px', '14px', '16px', '18px', '20px', '22px', '24px', '28px', '32px',
-]
+const fontSizeOptions = FONT_SIZE_OPTIONS
 
 const textAttrs = ref({
   bold: false,
@@ -293,6 +293,10 @@ const updateElement = (props: Partial<PPTTableElement>) => {
 // 设置单元格内容文本样式
 const updateTextAttrs = (textAttrProp: Partial<TableCellStyle>) => {
   const _handleElement = handleElement.value as PPTTableElement
+  const nextTextAttrProp: Partial<TableCellStyle> = { ...textAttrProp }
+  if (typeof nextTextAttrProp.fontsize === 'string' && nextTextAttrProp.fontsize.trim()) {
+    nextTextAttrProp.fontsize = normalizeFontSizePx(nextTextAttrProp.fontsize, 12)
+  }
 
   const data: TableCell[][] = JSON.parse(JSON.stringify(_handleElement.data))
 
@@ -300,7 +304,7 @@ const updateTextAttrs = (textAttrProp: Partial<TableCellStyle>) => {
     for (let j = 0; j < data[i].length; j++) {
       if (!selectedCells.value.length || selectedCells.value.includes(`${i}_${j}`)) {
         const style = data[i][j].style || {}
-        data[i][j].style = { ...style, ...textAttrProp }
+        data[i][j].style = { ...style, ...nextTextAttrProp }
       }
     }
   }

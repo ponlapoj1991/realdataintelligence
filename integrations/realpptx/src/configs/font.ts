@@ -1,5 +1,8 @@
 export const FONTS = [
   { label: '默认字体', value: '' },
+  { label: 'Arial', value: 'Arial' },
+  { label: 'Tahoma', value: 'Tahoma' },
+  { label: 'Prompt', value: 'Prompt' },
   { label: '思源黑体', value: 'SourceHanSans' },
   { label: '思源宋体', value: 'SourceHanSerif' },
   { label: '方正黑体', value: 'FangZhengHeiTi' },

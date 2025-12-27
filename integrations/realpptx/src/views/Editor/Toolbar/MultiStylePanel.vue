@@ -70,6 +70,7 @@
         :value="richTextAttrs.fontsize"
         search
         searchLabel="搜索字号"
+        allowCustom
         autofocus
         @update:value="value => updateFontStyle('fontsize', value as string)"
         :options="fontSizeOptions.map(item => ({
@@ -108,14 +109,14 @@
         class="font-size-btn"
         style="width: 20%;"
         v-tooltip="'增大字号'"
-        @click="updateFontStyle('fontsize-add', '2')"
+        @click="updateFontStyle('fontsize-add')"
       ><IconFontSize />+</Button>
       <Button
         last
         class="font-size-btn"
         style="width: 20%;"
         v-tooltip="'减小字号'"
-        @click="updateFontStyle('fontsize-reduce', '2')"
+        @click="updateFontStyle('fontsize-reduce')"
       ><IconFontSize />-</Button>
     </ButtonGroup>
     <RadioGroup 
@@ -139,6 +140,7 @@ import { useMainStore, useSlidesStore } from '@/store'
 import type { LineStyleType, PPTElement, PPTElementOutline, TableCell } from '@/types/slides'
 import emitter, { EmitterEvents } from '@/utils/emitter'
 import { FONTS } from '@/configs/font'
+import { FONT_SIZE_OPTIONS, nextPptFontSizePx, normalizeFontSizePx, parseFontSizePx } from '@/utils/fontSize'
 import useHistorySnapshot from '@/hooks/useHistorySnapshot'
 
 import SVGLine from './common/SVGLine.vue'
@@ -167,11 +169,7 @@ const updateElement = (id: string, props: Partial<PPTElement>) => {
 }
 
 const lineStyleOptions = ref<LineStyleType[]>(['solid', 'dashed', 'dotted'])
-const fontSizeOptions = [
-  '12px', '14px', '16px', '18px', '20px', '22px', '24px', '28px', '32px',
-  '36px', '40px', '44px', '48px', '54px', '60px', '66px', '72px', '76px',
-  '80px', '88px', '96px', '104px', '112px', '120px',
-]
+const fontSizeOptions = FONT_SIZE_OPTIONS
 
 const fill = ref('#fff')
 const outline = ref<PPTElementOutline>({
@@ -227,16 +225,28 @@ const updateOutline = (outlineProps: Partial<PPTElementOutline>) => {
 }
 
 // 修改文字样式
-const updateFontStyle = (command: string, value: string) => {
+const updateFontStyle = (command: string, value: string = '') => {
   for (const el of activeElementList.value) {
     if (el.type === 'text' || (el.type === 'shape' && el.text?.content)) {
-      emitter.emit(EmitterEvents.RICH_TEXT_COMMAND, { target: el.id, action: { command, value } })
+      const nextValue = command === 'fontsize' ? normalizeFontSizePx(value, parseFontSizePx(richTextAttrs.value.fontsize, 16)) : value
+      emitter.emit(EmitterEvents.RICH_TEXT_COMMAND, { target: el.id, action: { command, value: nextValue } })
     }
     if (el.type === 'table') {
       const data: TableCell[][] = JSON.parse(JSON.stringify(el.data))
       for (let i = 0; i < data.length; i++) {
         for (let j = 0; j < data[i].length; j++) {
           const style = data[i][j].style || {}
+          if (command === 'fontsize') {
+            const current = parseFontSizePx(style.fontsize, 12)
+            data[i][j].style = { ...style, fontsize: normalizeFontSizePx(value, current) }
+            continue
+          }
+          if (command === 'fontsize-add' || command === 'fontsize-reduce') {
+            const current = parseFontSizePx(style.fontsize, 12)
+            const next = nextPptFontSizePx(current, command === 'fontsize-add' ? 'up' : 'down')
+            data[i][j].style = { ...style, fontsize: normalizeFontSizePx(next, current) }
+            continue
+          }
           data[i][j].style = { ...style, [command]: value }
         }
       }
