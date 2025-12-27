@@ -569,7 +569,24 @@ export default () => {
       if (existing) {
         const styles = extractTextStyles(existing.content || '')
         const content = buildTextHtml(text, styles)
-        slidesStore.updateElement({ id: existing.id, props: { content } as any })
+        const nextProps: any = { content }
+
+        const isKpiText =
+          existing.autoResize === false &&
+          (existing.dashboardWidgetKind === 'kpi' || existing.canvasWidgetKind === 'kpi')
+
+        const isAiSummaryBox = typeof existing.name === 'string' && existing.name.startsWith('AI Summary')
+        const isLegacyAiSummaryBox = isAiSummaryBox && !isKpiText && (existing.autoResize === false || existing.padding === 0)
+
+        if (isLegacyAiSummaryBox) {
+          nextProps.autoResize = true
+          nextProps.padding = 10
+          if (existing.lineHeight === 1) nextProps.lineHeight = 1.3
+          if (existing.paragraphSpace === 0) nextProps.paragraphSpace = 6
+          if (existing.valign && existing.valign !== 'top') nextProps.valign = 'top'
+        }
+
+        slidesStore.updateElement({ id: existing.id, props: nextProps })
         nextElementId = existing.id
       } else {
         const slideW = slidesStore.viewportSize
