@@ -114,48 +114,53 @@ watch(isScaling, () => {
 
   if (!isScaling.value) {
     if (!props.elementInfo.vertical && realHeightCache.value !== -1) {
-      slidesStore.updateElement({
-        id: props.elementInfo.id,
-        props: { height: realHeightCache.value },
-      })
+      if (realHeightCache.value > props.elementInfo.height) {
+        slidesStore.updateElement({
+          id: props.elementInfo.id,
+          props: { height: realHeightCache.value },
+        })
+      }
       realHeightCache.value = -1
     }
     if (props.elementInfo.vertical && realWidthCache.value !== -1) {
-      slidesStore.updateElement({
-        id: props.elementInfo.id,
-        props: { width: realWidthCache.value },
-      })
+      if (realWidthCache.value > props.elementInfo.width) {
+        slidesStore.updateElement({
+          id: props.elementInfo.id,
+          props: { width: realWidthCache.value },
+        })
+      }
       realWidthCache.value = -1
     }
   }
 })
+
+const roundPx = (value: number) => Math.round(value * 10) / 10
 
 const updateTextElementHeight = (entries: ResizeObserverEntry[]) => {
   if (props.elementInfo.autoResize === false) return
   const contentRect = entries[0].contentRect
   if (!elementRef.value) return
 
-  const padding = props.elementInfo.padding ?? 10
-  const realHeight = contentRect.height + padding * 2
-  const realWidth = contentRect.width + padding * 2
+  const realHeight = roundPx(contentRect.height)
+  const realWidth = roundPx(contentRect.width)
 
-  if (!props.elementInfo.vertical && props.elementInfo.height !== realHeight) {
+  if (!props.elementInfo.vertical && realHeight > props.elementInfo.height) {
     if (!isScaling.value) {
       slidesStore.updateElement({
         id: props.elementInfo.id,
         props: { height: realHeight },
       })
     }
-    else realHeightCache.value = realHeight
+    else realHeightCache.value = Math.max(realHeightCache.value, realHeight)
   }
-  if (props.elementInfo.vertical && props.elementInfo.width !== realWidth) {
+  if (props.elementInfo.vertical && realWidth > props.elementInfo.width) {
     if (!isScaling.value) {
       slidesStore.updateElement({
         id: props.elementInfo.id,
         props: { width: realWidth },
       })
     }
-    else realWidthCache.value = realWidth
+    else realWidthCache.value = Math.max(realWidthCache.value, realWidth)
   }
 }
 const resizeObserver = new ResizeObserver(updateTextElementHeight)
@@ -218,8 +223,6 @@ const parsePx = (value?: string) => {
   const n = Number(String(value || '').replace('px', '').trim())
   return Number.isFinite(n) ? n : null
 }
-
-const roundPx = (value: number) => Math.round(value * 10) / 10
 
 const computeKpiAutoFontPx = () => {
   const padding = props.elementInfo.padding ?? 0

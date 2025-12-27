@@ -591,8 +591,8 @@ export default () => {
         slidesStore.updateElement({
           id,
           props: {
-            autoResize: false,
-            padding: 0,
+            autoResize: true,
+            padding: 10,
             lineHeight: 1.3,
             paragraphSpace: 6,
             valign: 'top',

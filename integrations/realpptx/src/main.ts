@@ -2,6 +2,8 @@ import { createApp } from 'vue'
 import { createPinia } from 'pinia'
 import App from './App.vue'
 
+import '@fontsource/prompt/400.css'
+import '@fontsource/prompt/700.css'
 import 'prosemirror-view/style/prosemirror.css'
 import 'animate.css'
 import '@/assets/styles/prosemirror.scss'

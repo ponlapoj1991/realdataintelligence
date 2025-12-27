@@ -237,7 +237,8 @@ export type TextAttrs = ReturnType<typeof getTextAttrs>
 export const getFontsize = (view: EditorView) => {
   const marks = getMarkAttrs(view)
   const fontsize = getAttrValue(marks, 'fontsize', 'fontsize') || _defaultAttrs.fontsize
-  return parseInt(fontsize)
+  const n = Number(String(fontsize).replace('px', '').trim())
+  return Number.isFinite(n) ? n : 16
 }
 
 export const defaultRichTextAttrs: TextAttrs = {
