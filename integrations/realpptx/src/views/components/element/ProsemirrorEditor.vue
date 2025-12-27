@@ -11,7 +11,7 @@
 import { computed, onMounted, onUnmounted, useTemplateRef, watch } from 'vue'
 import { debounce } from 'lodash'
 import { storeToRefs } from 'pinia'
-import { useKeyboardStore, useMainStore } from '@/store'
+import { useKeyboardStore, useMainStore, useSlidesStore } from '@/store'
 import type { EditorView } from 'prosemirror-view'
 import { toggleMark, wrapIn, lift } from 'prosemirror-commands'
 import { initProsemirrorEditor, createDocument } from '@/utils/prosemirror'
@@ -22,7 +22,7 @@ import { indentCommand, textIndentCommand } from '@/utils/prosemirror/commands/s
 import { toggleList } from '@/utils/prosemirror/commands/toggleList'
 import { setListStyle } from '@/utils/prosemirror/commands/setListStyle'
 import { replaceText } from '@/utils/prosemirror/commands/replaceText'
-import { normalizeFontSizePx, nextPptFontSizePx } from '@/utils/fontSize'
+import { nextPptFontSizePt, normalizeFontSizePx, pxToPt, ptToPxString } from '@/utils/fontSize'
 import type { TextFormatPainterKeys } from '@/types/edit'
 import message from '@/utils/message'
 import { KEYS } from '@/configs/hotkey'
@@ -49,6 +49,7 @@ const emit = defineEmits<{
 const mainStore = useMainStore()
 const { handleElementId, textFormatPainter, richTextAttrs, activeElementIdList } = storeToRefs(mainStore)
 const { ctrlOrShiftKeyActive } = storeToRefs(useKeyboardStore())
+const { viewportSize } = storeToRefs(useSlidesStore())
 
 const editorViewRef = useTemplateRef<HTMLElement>('editorViewRef')
 let editorView: EditorView
@@ -151,14 +152,20 @@ const execCommand = ({ target, action }: RichTextCommand) => {
     }
     else if (item.command === 'fontsize-add') {
       autoSelectAll(editorView)
-      const fontsize = normalizeFontSizePx(nextPptFontSizePx(getFontsize(editorView), 'up'))
+      const currentPx = getFontsize(editorView)
+      const currentPt = pxToPt(currentPx, viewportSize.value)
+      const nextPt = nextPptFontSizePt(currentPt, 'up')
+      const fontsize = ptToPxString(nextPt, viewportSize.value, currentPt)
       const mark = editorView.state.schema.marks.fontsize.create({ fontsize })
       addMark(editorView, mark)
       setListStyle(editorView, { key: 'fontsize', value: fontsize })
     }
     else if (item.command === 'fontsize-reduce') {
       autoSelectAll(editorView)
-      const fontsize = normalizeFontSizePx(nextPptFontSizePx(getFontsize(editorView), 'down'))
+      const currentPx = getFontsize(editorView)
+      const currentPt = pxToPt(currentPx, viewportSize.value)
+      const nextPt = nextPptFontSizePt(currentPt, 'down')
+      const fontsize = ptToPxString(nextPt, viewportSize.value, currentPt)
       const mark = editorView.state.schema.marks.fontsize.create({ fontsize })
       addMark(editorView, mark)
       setListStyle(editorView, { key: 'fontsize', value: fontsize })
@@ -273,6 +280,7 @@ const execCommand = ({ target, action }: RichTextCommand) => {
 
   editorView.focus()
   handleInput()
+  handleInput.flush()
   handleClick()
 }
 

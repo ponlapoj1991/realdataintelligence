@@ -67,12 +67,12 @@
       </Select>
       <Select
         style="width: 40%;"
-        :value="richTextAttrs.fontsize"
+        :value="fontSizePtValue"
         search
         searchLabel="搜索字号"
         allowCustom
         autofocus
-        @update:value="value => updateFontStyle('fontsize', value as string)"
+        @update:value="value => updateFontStyle('fontsize', toPxFontSize(value))"
         :options="fontSizeOptions.map(item => ({
           label: item, value: item
         }))"
@@ -134,13 +134,13 @@
 </template>
 
 <script lang="ts" setup>
-import { ref } from 'vue'
+import { computed, ref } from 'vue'
 import { storeToRefs } from 'pinia'
 import { useMainStore, useSlidesStore } from '@/store'
 import type { LineStyleType, PPTElement, PPTElementOutline, TableCell } from '@/types/slides'
 import emitter, { EmitterEvents } from '@/utils/emitter'
 import { FONTS } from '@/configs/font'
-import { FONT_SIZE_OPTIONS, nextPptFontSizePx, normalizeFontSizePx, parseFontSizePx } from '@/utils/fontSize'
+import { FONT_SIZE_OPTIONS_PT, formatFontSizePt, nextPptFontSizePt, normalizeFontSizePx, parseFontSizePx, pxToPt, ptToPxString } from '@/utils/fontSize'
 import useHistorySnapshot from '@/hooks/useHistorySnapshot'
 
 import SVGLine from './common/SVGLine.vue'
@@ -159,6 +159,7 @@ import SelectCustom from '@/components/SelectCustom.vue'
 import Popover from '@/components/Popover.vue'
 
 const slidesStore = useSlidesStore()
+const { viewportSize } = storeToRefs(slidesStore)
 const { richTextAttrs, activeElementList } = storeToRefs(useMainStore())
 
 const { addHistorySnapshot } = useHistorySnapshot()
@@ -169,7 +170,15 @@ const updateElement = (id: string, props: Partial<PPTElement>) => {
 }
 
 const lineStyleOptions = ref<LineStyleType[]>(['solid', 'dashed', 'dotted'])
-const fontSizeOptions = FONT_SIZE_OPTIONS
+const fontSizeOptions = FONT_SIZE_OPTIONS_PT
+
+const currentFontSizePt = computed(() => {
+  const currentPx = parseFontSizePx(richTextAttrs.value.fontsize, 16)
+  return pxToPt(currentPx, viewportSize.value)
+})
+const fontSizePtValue = computed(() => formatFontSizePt(currentFontSizePt.value))
+
+const toPxFontSize = (value: unknown) => ptToPxString(value, viewportSize.value, currentFontSizePt.value)
 
 const fill = ref('#fff')
 const outline = ref<PPTElementOutline>({
@@ -243,8 +252,9 @@ const updateFontStyle = (command: string, value: string = '') => {
           }
           if (command === 'fontsize-add' || command === 'fontsize-reduce') {
             const current = parseFontSizePx(style.fontsize, 12)
-            const next = nextPptFontSizePx(current, command === 'fontsize-add' ? 'up' : 'down')
-            data[i][j].style = { ...style, fontsize: normalizeFontSizePx(next, current) }
+            const currentPt = pxToPt(current, viewportSize.value)
+            const nextPt = nextPptFontSizePt(currentPt, command === 'fontsize-add' ? 'up' : 'down')
+            data[i][j].style = { ...style, fontsize: ptToPxString(nextPt, viewportSize.value, currentPt) }
             continue
           }
           data[i][j].style = { ...style, [command]: value }

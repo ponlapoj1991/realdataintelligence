@@ -16,12 +16,12 @@
       </Select>
       <Select
         style="width: 50%;"
-        :value="textAttrs.fontsize"
+        :value="fontSizePtValue"
         search
         searchLabel="搜索字号"
         allowCustom
         autofocus
-        @update:value="value => updateTextAttrs({ fontsize: value as string })"
+        @update:value="value => updateFontSizePt(value)"
         :options="fontSizeOptions.map(item => ({
           label: item, value: item
         }))"
@@ -179,7 +179,7 @@ import { nanoid } from 'nanoid'
 import { useMainStore, useSlidesStore } from '@/store'
 import type { PPTTableElement, TableCell, TableCellStyle, TableTheme, TextAlign } from '@/types/slides'
 import { FONTS } from '@/configs/font'
-import { FONT_SIZE_OPTIONS, normalizeFontSizePx } from '@/utils/fontSize'
+import { FONT_SIZE_OPTIONS_PT, formatFontSizePt, normalizeFontSizePx, parseFontSizePx, pxToPt, ptToPxString } from '@/utils/fontSize'
 import useHistorySnapshot from '@/hooks/useHistorySnapshot'
 
 import ElementOutline from '../common/ElementOutline.vue'
@@ -201,8 +201,9 @@ import Popover from '@/components/Popover.vue'
 const slidesStore = useSlidesStore()
 const { handleElement, handleElementId, selectedTableCells: selectedCells } = storeToRefs(useMainStore())
 const themeColor = computed(() => slidesStore.theme.themeColors[0])
+const viewportSize = computed(() => slidesStore.viewportSize)
 
-const fontSizeOptions = FONT_SIZE_OPTIONS
+const fontSizeOptions = FONT_SIZE_OPTIONS_PT
 
 const textAttrs = ref({
   bold: false,
@@ -215,6 +216,16 @@ const textAttrs = ref({
   fontname: '',
   align: 'left',
 })
+
+const currentFontSizePt = computed(() => {
+  const currentPx = parseFontSizePx(textAttrs.value.fontsize, 12)
+  return pxToPt(currentPx, viewportSize.value)
+})
+const fontSizePtValue = computed(() => formatFontSizePt(currentFontSizePt.value))
+
+const updateFontSizePt = (value: unknown) => {
+  updateTextAttrs({ fontsize: ptToPxString(value, viewportSize.value, currentFontSizePt.value) })
+}
 
 const theme = ref<TableTheme>()
 const hasTheme = ref(false)

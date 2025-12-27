@@ -16,12 +16,12 @@
       </Select>
       <Select
         style="width: 40%;"
-        :value="richTextAttrs.fontsize"
+        :value="fontSizePtValue"
         search
         searchLabel="搜索字号"
         allowCustom
         autofocus
-        @update:value="value => emitRichTextCommand('fontsize', value as string)"
+        @update:value="value => emitFontSizePt(value as any)"
         :options="fontSizeOptions.map(item => ({
           label: item, value: item
         }))"
@@ -259,13 +259,13 @@
 </template>
 
 <script lang="ts" setup>
-import { ref, watch } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { storeToRefs } from 'pinia'
 import api from '@/services'
-import { useMainStore } from '@/store'
+import { useMainStore, useSlidesStore } from '@/store'
 import emitter, { EmitterEvents } from '@/utils/emitter'
 import { FONTS } from '@/configs/font'
-import { FONT_SIZE_OPTIONS } from '@/utils/fontSize'
+import { FONT_SIZE_OPTIONS_PT, formatFontSizePt, parseFontSizePx, pxToPt, ptToPxString } from '@/utils/fontSize'
 import useTextFormatPainter from '@/hooks/useTextFormatPainter'
 import message from '@/utils/message'
 import { htmlToText } from '@/utils/common'
@@ -284,14 +284,28 @@ import RadioButton from '@/components/RadioButton.vue'
 import RadioGroup from '@/components/RadioGroup.vue'
 import PopoverMenuItem from '@/components/PopoverMenuItem.vue'
 
+const slidesStore = useSlidesStore()
+const { viewportSize } = storeToRefs(slidesStore)
+
 const { handleElement, handleElementId, richTextAttrs, textFormatPainter } = storeToRefs(useMainStore())
 
 const { toggleTextFormatPainter } = useTextFormatPainter()
 
-const fontSizeOptions = FONT_SIZE_OPTIONS
+const fontSizeOptions = FONT_SIZE_OPTIONS_PT
+
+const currentFontSizePt = computed(() => {
+  const currentPx = parseFontSizePx(richTextAttrs.value.fontsize, 16)
+  return pxToPt(currentPx, viewportSize.value)
+})
+
+const fontSizePtValue = computed(() => formatFontSizePt(currentFontSizePt.value))
 
 const emitRichTextCommand = (command: string, value?: string) => {
   emitter.emit(EmitterEvents.RICH_TEXT_COMMAND, { action: { command, value } })
+}
+
+const emitFontSizePt = (value: string | number) => {
+  emitRichTextCommand('fontsize', ptToPxString(value, viewportSize.value, currentFontSizePt.value))
 }
 
 const bulletListPanelVisible = ref(false)
