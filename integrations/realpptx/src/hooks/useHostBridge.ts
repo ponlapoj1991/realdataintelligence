@@ -290,14 +290,6 @@ export default () => {
       const elementId = payload?.elementId
 
       if (chart.chartType === 'kpi') {
-        const escapeHtml = (input: string) =>
-          input
-            .replace(/&/g, '&amp;')
-            .replace(/</g, '&lt;')
-            .replace(/>/g, '&gt;')
-            .replace(/\"/g, '&quot;')
-            .replace(/'/g, '&#39;')
-
         const toNumber = (raw: unknown) => {
           if (raw === null || raw === undefined) return 0
           if (typeof raw === 'number') return Number.isFinite(raw) ? raw : 0
@@ -337,19 +329,40 @@ export default () => {
           }
         }
 
+        const findExistingElement = (id: string) => {
+          if (!id) return null
+          for (const slide of slidesStore.slides || []) {
+            const els = Array.isArray((slide as any)?.elements) ? ((slide as any).elements as any[]) : []
+            const found = els.find((el) => el?.id === id)
+            if (found && found.type === 'text') return found as any
+          }
+          return null
+        }
+
+        const existingEl = elementId ? findExistingElement(elementId) : null
+
         const raw = chart.data?.series?.[0]?.[0]
         const value = toNumber(raw)
         const valueFormat = chart.options?.dataLabelValueFormat
         const text = formatKpiValue(value, valueFormat)
-        const fontSize = typeof chart.options?.dataLabelFontSize === 'number' ? chart.options.dataLabelFontSize : 72
         const fontWeight = chart.options?.dataLabelFontWeight || 'bold'
         const fontFamily = chart.options?.dataLabelFontFamily
 
+        const preservedFontSize = existingEl?.defaultFontSize
+        const preservedFontName = existingEl?.defaultFontName
+        const preservedColor = existingEl?.defaultColor
+
+        const fontSize = typeof chart.options?.dataLabelFontSize === 'number'
+          ? chart.options.dataLabelFontSize
+          : (preservedFontSize ? parseInt(preservedFontSize) : 72)
+
         const themeAccent = chart.theme?.colors?.[0] || chart.theme?.textColor || '#111827'
-        const color = chart.options?.dataLabelColor || themeAccent
+        const color = chart.options?.dataLabelColor || preservedColor || themeAccent
+
+        const effectiveFontFamily = fontFamily || preservedFontName || ''
 
         const safeText = escapeHtml(text)
-        const content = `<p style="text-align:center;"><span style="font-weight:${fontWeight};${fontFamily ? ` font-family:${fontFamily};` : ''}">${safeText}</span></p>`
+        const content = `<p style="text-align:center;"><span style="font-weight:${fontWeight};${effectiveFontFamily ? ` font-family:${effectiveFontFamily};` : ''}">${safeText}</span></p>`
 
         const nextProps: any = {
           content,
@@ -359,7 +372,8 @@ export default () => {
           paragraphSpace: 0,
           valign: 'middle',
           defaultColor: color,
-          ...(fontFamily ? { defaultFontName: fontFamily } : {}),
+          defaultFontSize: `${fontSize}px`,
+          ...(effectiveFontFamily ? { defaultFontName: effectiveFontFamily } : {}),
           name: widget?.title || chart.meta?.widgetTitle,
           canvasWidgetId,
           canvasTableId: tableId,
@@ -570,6 +584,10 @@ export default () => {
         const styles = extractTextStyles(existing.content || '')
         const content = buildTextHtml(text, styles)
         const nextProps: any = { content }
+
+        if (existing.defaultFontSize) nextProps.defaultFontSize = existing.defaultFontSize
+        if (existing.defaultFontName) nextProps.defaultFontName = existing.defaultFontName
+        if (existing.defaultColor) nextProps.defaultColor = existing.defaultColor
 
         const isKpiText =
           existing.autoResize === false &&

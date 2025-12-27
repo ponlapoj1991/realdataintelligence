@@ -182,7 +182,7 @@ export default () => {
       .replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F]/g, '')
   }
 
-  const sanitizeFontFace = (value: unknown, fallback = 'Arial') => {
+  const sanitizeFontFace = (value: unknown, fallback = 'Tahoma') => {
     const raw = sanitizePptxText(value).trim()
     if (!raw) return fallback
 
@@ -638,7 +638,7 @@ export default () => {
             w: el.width / ratioPx2Inch.value,
             h: el.height / ratioPx2Inch.value,
             fontSize: defaultFontSize / ratioPx2Pt.value,
-            fontFace: 'Arial',
+            fontFace: 'Tahoma',
             color: '000000',
             valign: toPptxVAlign(el.valign),
             margin: (el.padding ?? 10) / ratioPx2Pt.value,
@@ -812,7 +812,7 @@ export default () => {
               w: el.width / ratioPx2Inch.value,
               h: el.height / ratioPx2Inch.value,
               fontSize: defaultFontSize / ratioPx2Pt.value,
-              fontFace: 'Arial',
+              fontFace: 'Tahoma',
               color: '000000',
               paraSpaceBefore: 5 / ratioPx2Pt.value,
               valign: toPptxVAlign(el.text.align),
@@ -931,7 +931,7 @@ export default () => {
                 underline: { style: cell.style?.underline ? 'sng' : 'none' },
                 align: toPptxHAlign(cell.style?.align || 'left'),
                 valign: toPptxVAlign('middle'),
-                fontFace: sanitizeFontFace(cell.style?.fontname || 'Arial'),
+                fontFace: sanitizeFontFace(cell.style?.fontname || 'Tahoma'),
                 fontSize: (toFiniteNumber(cell.style?.fontsize ? parseFloat(cell.style?.fontsize) : 14) ?? 14) / ratioPx2Pt.value,
               }
               if (theme && themeColor) {

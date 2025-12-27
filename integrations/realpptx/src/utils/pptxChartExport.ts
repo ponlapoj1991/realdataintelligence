@@ -183,7 +183,7 @@ export function addChartElementToSlide(params: {
     opt.axisLabelFontFamilyX ||
     opt.axisLabelFontFamilyYLeft ||
     opt.axisLabelFontFamilyYRight ||
-    'Arial'
+    'Tahoma'
 
   const catAxisTextColor = toPptxHex(opt.axisLabelColorX || el.options?.axisLabelColor || el.textColor || '#000000')
   const valAxisTextColor = toPptxHex(opt.axisLabelColorYLeft || el.options?.axisLabelColor || el.textColor || '#000000')

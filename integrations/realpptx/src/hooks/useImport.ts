@@ -467,7 +467,8 @@ export default () => {
       const pptxThemeColors = (json.themeColors || []).map(c => normalizeColorInput(c) || c)
       slidesStore.setTheme({ themeColors: pptxThemeColors })
 
-      const slides: Slide[] = []
+      let slides: Slide[] = []
+      try {
       for (const item of json.slides) {
         const { type, value } = item.fill
         let background: SlideBackground
@@ -531,7 +532,7 @@ export default () => {
 
               const content = normalizeFontSizeToPx(el.content, ratio)
               const defaults = extractTextDefaults(content)
-              const fallbackFontName = theme.value.fontName || 'Arial'
+              const fallbackFontName = theme.value.fontName || 'Tahoma'
               const fallbackColor = theme.value.fontColor || '#333'
 
                const textEl: PPTTextElement = {
@@ -678,7 +679,7 @@ export default () => {
 
                 const textContent = normalizeFontSizeToPx(el.content, ratio)
                 const textDefaults = extractTextDefaults(textContent)
-                const fallbackFontName = theme.value.fontName || 'Arial'
+                const fallbackFontName = theme.value.fontName || 'Tahoma'
                 const fallbackColor = theme.value.fontColor || '#333'
                 
                  const element: PPTShapeElement = {
@@ -772,7 +773,7 @@ export default () => {
               const row = el.data.length
               const col = el.data[0].length
   
-              const fallbackFontName = theme.value.fontName || 'Arial'
+              const fallbackFontName = theme.value.fontName || 'Tahoma'
               const fallbackColor = theme.value.fontColor || '#333'
               const scaledRowHeights = Array.isArray(el.rowHeights)
                 ? el.rowHeights.map(item => {
@@ -989,6 +990,13 @@ export default () => {
         }
         parseElements([...item.elements, ...item.layoutElements])
         slides.push(slide)
+      }
+      }
+      catch (parseErr) {
+        console.error('PPTX parse error:', parseErr)
+        exporting.value = false
+        message.error('Failed to parse PPTX file')
+        return
       }
 
       if (cover) {

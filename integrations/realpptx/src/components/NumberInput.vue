@@ -170,7 +170,7 @@ const handleFocus = (e: Event) => {
     line-height: 30px;
     outline: 0;
     border: 0;
-    font-family: -apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,'Helvetica Neue',Arial,'Noto Sans',sans-serif,'Apple Color Emoji','Segoe UI Emoji','Segoe UI Symbol','Noto Color Emoji';
+    font-family: Tahoma, Arial, sans-serif;
 
     &::placeholder {
       color: #bfbfbf;
