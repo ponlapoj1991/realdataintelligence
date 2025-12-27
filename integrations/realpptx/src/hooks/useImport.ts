@@ -872,20 +872,55 @@ export default () => {
               })
             }
             else if (el.type === 'chart') {
-              let labels: string[]
-              let legends: string[]
-              let series: number[][]
-  
-              if (el.chartType === 'scatterChart' || el.chartType === 'bubbleChart') {
-                labels = el.data[0].map((item, index) => `坐标${index + 1}`)
-                legends = ['X', 'Y']
-                series = el.data
+              // Validate chart data before processing
+              const chartData = el.data
+              if (!chartData || !Array.isArray(chartData) || chartData.length === 0) {
+                console.warn('Chart import skipped: invalid or empty chart data', el.chartType)
+                continue
               }
-              else {
-                const data = el.data as ChartItem[]
-                labels = Object.values(data[0].xlabels)
-                legends = data.map(item => item.key)
-                series = data.map(item => item.values.map(v => v.y))
+
+              let labels: string[] = []
+              let legends: string[] = []
+              let series: number[][] = []
+
+              try {
+                if (el.chartType === 'scatterChart' || el.chartType === 'bubbleChart') {
+                  const firstRow = chartData[0]
+                  if (!firstRow || !Array.isArray(firstRow)) {
+                    console.warn('Chart import skipped: scatter/bubble chart has invalid first row')
+                    continue
+                  }
+                  labels = firstRow.map((_, index) => `坐标${index + 1}`)
+                  legends = ['X', 'Y']
+                  series = chartData as number[][]
+                }
+                else {
+                  const data = chartData as ChartItem[]
+                  const firstItem = data[0]
+                  if (!firstItem || !firstItem.xlabels || !firstItem.values) {
+                    console.warn('Chart import skipped: chart data structure invalid', el.chartType)
+                    continue
+                  }
+                  labels = Object.values(firstItem.xlabels)
+                  legends = data.map(item => item.key || '')
+                  series = data.map(item => {
+                    if (!item.values || !Array.isArray(item.values)) return []
+                    return item.values.map(v => {
+                      const num = typeof v?.y === 'number' ? v.y : Number(v?.y)
+                      return Number.isFinite(num) ? num : 0
+                    })
+                  })
+                }
+
+                // Ensure we have valid data
+                if (labels.length === 0 || series.length === 0) {
+                  console.warn('Chart import skipped: no valid labels or series', el.chartType)
+                  continue
+                }
+              }
+              catch (chartParseErr) {
+                console.warn('Chart import skipped: parsing error', el.chartType, chartParseErr)
+                continue
               }
 
               // Guard: extremely large charts can make import feel stuck.
@@ -896,7 +931,7 @@ export default () => {
               }
 
               const options: ChartOptions = {}
-  
+
               let chartType: ChartType = 'bar'
 
               switch (el.chartType) {
@@ -933,7 +968,7 @@ export default () => {
                   break
                 default:
               }
-  
+
               slide.elements.push({
                 type: 'chart',
                 id: nanoid(10),
@@ -943,7 +978,7 @@ export default () => {
                 left: el.left,
                 top: el.top,
                 rotate: 0,
-                themeColors: (el.colors.length ? el.colors : theme.value.themeColors).map(c => resolveColor(c, pptxThemeColors, c)),
+                themeColors: (el.colors && el.colors.length ? el.colors : theme.value.themeColors).map(c => resolveColor(c, pptxThemeColors, c)),
                 textColor: theme.value.fontColor,
                 data: {
                   labels,
